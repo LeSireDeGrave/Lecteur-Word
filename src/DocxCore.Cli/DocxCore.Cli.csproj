@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><AssemblyName>docx-core</AssemblyName></PropertyGroup><ItemGroup><ProjectReference Include="../DocxCore/DocxCore.csproj"/></ItemGroup></Project>

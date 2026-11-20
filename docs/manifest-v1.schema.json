@@ -1,0 +1,491 @@
+{
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "engineVersion": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/coverage"
+    },
+    "inspectionComplete": {
+      "type": "boolean"
+    },
+    "importReady": {
+      "const": false
+    },
+    "pagination": {
+      "const": "notTested"
+    },
+    "sourceSha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "budgets": {
+      "$ref": "#/$defs/budgets"
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/part"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relationship"
+      }
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/media"
+      }
+    },
+    "styles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/style"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "engineVersion",
+    "format",
+    "status",
+    "inspectionComplete",
+    "importReady",
+    "pagination",
+    "sourceSha256",
+    "budgets",
+    "parts",
+    "nodes",
+    "relationships",
+    "media",
+    "styles",
+    "diagnostics"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lecteur-word:manifest:1",
+  "$defs": {
+    "source": {
+      "type": "object",
+      "properties": {
+        "partUri": {
+          "type": "string",
+          "pattern": "^/",
+          "maxLength": 513
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      },
+      "required": [
+        "partUri",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "coverage": {
+      "enum": [
+        "read",
+        "inventoriedOnly",
+        "notRepresented",
+        "refused",
+        "notTested"
+      ]
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "maxZipBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxEntries": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxExpandedBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxPartBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxMediaBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxMedia": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxImagePixels": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxExpansionRatio": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxDepth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxNodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttributesPerNode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxValueChars": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAllocatedBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxWorkingSetBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxDurationMilliseconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "maxZipBytes",
+        "maxEntries",
+        "maxExpandedBytes",
+        "maxPartBytes",
+        "maxMediaBytes",
+        "maxMedia",
+        "maxImagePixels",
+        "maxExpansionRatio",
+        "maxDepth",
+        "maxNodes",
+        "maxAttributesPerNode",
+        "maxValueChars",
+        "maxAllocatedBytes",
+        "maxWorkingSetBytes",
+        "maxOutputBytes",
+        "maxDurationMilliseconds"
+      ],
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^n[0-9]{6,10}$"
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "enum": [
+            "unchanged",
+            "inserted",
+            "deleted"
+          ]
+        },
+        "fieldRole": {
+          "enum": [
+            "none",
+            "instruction",
+            "result"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "parentId",
+        "source",
+        "name",
+        "kind",
+        "coverage",
+        "attributes",
+        "text",
+        "revision",
+        "fieldRole"
+      ],
+      "additionalProperties": false
+    },
+    "part": {
+      "type": "object",
+      "properties": {
+        "partUri": {
+          "type": "string"
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "partUri",
+        "contentType",
+        "sha256",
+        "bytes",
+        "coverage",
+        "nodeCount"
+      ],
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "properties": {
+        "sourcePart": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "Internal",
+            "External"
+          ]
+        },
+        "resolvedPart": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sourcePart",
+        "id",
+        "type",
+        "target",
+        "mode",
+        "resolvedPart"
+      ],
+      "additionalProperties": false
+    },
+    "media": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^sha256-[0-9a-f]{64}$"
+        },
+        "partUri": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "partUri",
+        "sha256",
+        "bytes",
+        "contentType",
+        "coverage",
+        "width",
+        "height"
+      ],
+      "additionalProperties": false
+    },
+    "style": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "styleId": {
+          "type": "string"
+        },
+        "ancestors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        }
+      },
+      "required": [
+        "nodeId",
+        "styleId",
+        "ancestors",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "coverage",
+        "source",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "title": "Lecteur Word inspection manifest v1"
+}

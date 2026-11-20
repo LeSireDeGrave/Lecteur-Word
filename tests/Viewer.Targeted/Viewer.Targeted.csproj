@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup><ItemGroup><ProjectReference Include="../../src/LecteurWord/LecteurWord.csproj"/><PackageReference Include="Avalonia.Headless" Version="[12.1.6]"/><Compile Include="../DocxCore.Targeted/Fixtures.cs" Link="Fixtures.cs"/></ItemGroup></Project>

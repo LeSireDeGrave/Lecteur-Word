@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DocxCore/DocxCore.csproj" />
+    <Project Path="src/DocxCore.Cli/DocxCore.Cli.csproj" />
+    <Project Path="src/DocxFlow/DocxFlow.csproj" />
+    <Project Path="src/LecteurWord/LecteurWord.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DocxCore.Targeted/DocxCore.Targeted.csproj" />
+    <Project Path="tests/Viewer.Targeted/Viewer.Targeted.csproj" />
+  </Folder>
+</Solution>

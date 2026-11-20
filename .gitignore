@@ -1,0 +1,126 @@
+# Compilations C#/.NET, Avalonia, Rust et publications locales
+**/[Bb]in/
+**/[Oo]bj/
+**/target/
+/.local/
+/[Aa]rtifacts/
+/[Oo]ut/
+/[Dd]ist/
+/[Pp]ublish/
+/[Pp]ackages/
+/.nuget/
+*.dll
+*.exe
+*.pdb
+*.so
+*.so.*
+*.dylib
+*.app
+*.AppImage
+*.deb
+*.rpm
+*.nupkg
+*.snupkg
+*.msi
+*.msix
+*.appx
+
+# IDE et état personnel
+/.vs/
+/.vscode/
+/.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+*.csproj.user
+*.avalonia-build-tasks
+**/.avalonia-build-tasks/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Identifiants, configuration privée et espaces d'agents
+.env
+.env.*
+!.env.example
+/.aws/
+/.codex/
+/.agents/
+*.pem
+*.key
+*.pfx
+*.p12
+*.snk
+
+# Rapports, résultats de tests, couverture et caches
+**/[Tt]est[Rr]esults/
+**/coverage/
+**/coverage.*
+**/BenchmarkDotNet.Artifacts/
+**/.pytest_cache/
+**/__pycache__/
+*.py[cod]
+*.trx
+*.log
+*.dmp
+*.dump
+*.tmp
+*.temp
+/[Rr]eports/
+/[Cc]aptures/
+/[Ss]creenshots/
+/[Cc]orpus/
+/[Tt]est[Dd]ata/
+
+# Documents et archives de recette : les générateurs synthétiques restent du code
+*.doc
+*.docx
+*.docm
+*.dotx
+*.dotm
+*.odt
+*.pdf
+*.epub
+*.nova
+*.rtf
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Images privées ou générées ; seule la référence UX demandée est retenue
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.tif
+*.tiff
+!docs/maquettes/lecteur-word-maquette-clair-sombre.png
+
+# Polices binaires : seule la ressource source, inchangée et licenciée, est nécessaire
+*.ttf
+*.otf
+!src/DocxFlow/Fonts/DejaVuSerif.ttf
+
+# Scripts historiques de session : leurs rapports et références restent locaux
+/tools/verify-workspace.py
+/tools/write-final-report.py
+# Documents Word privés de travail : ne jamais publier ce répertoire.
+/exemples/
+
+# Variantes sources de la police de composition, avec la même licence DejaVu
+!src/DocxFlow/Fonts/DejaVuSerif-Bold.ttf
+!src/DocxFlow/Fonts/DejaVuSerif-Italic.ttf
+!src/DocxFlow/Fonts/DejaVuSerif-BoldItalic.ttf
+
+# Identité visuelle fournie et autorisée par le propriétaire pour l'application.
+/docs/maquettes/LecteurWord.ico
+!src/LecteurWord/Assets/lecteur-word.png
+!src/LecteurWord/Assets/lecteur-word-logo.png

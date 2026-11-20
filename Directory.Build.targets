@@ -1,0 +1,47 @@
+<Project>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'LecteurWord'">
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)src/LecteurWord/Notices/*.txt" LogicalName="LecteurWord.Notices.%(Filename)%(Extension)"/>
+  </ItemGroup>
+  <!-- Only the viewer embeds a fresh build reference. Git is optional and never used at runtime. -->
+  <Target Name="EmbedLecteurWordBuildReference" BeforeTargets="GetAssemblyAttributes"
+          Condition="'$(MSBuildProjectName)' == 'LecteurWord' and '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <EnableBuildGitMetadata Condition="'$(EnableBuildGitMetadata)' == ''">true</EnableBuildGitMetadata>
+      <BuildGitExecutable Condition="'$(BuildGitExecutable)' == ''">git</BuildGitExecutable>
+      <_LecteurWordBuildUtc>$([System.DateTime]::UtcNow.ToString('O'))</_LecteurWordBuildUtc>
+      <_LecteurWordCommit>unavailable</_LecteurWordCommit>
+      <_LecteurWordDirty>unavailable</_LecteurWordDirty>
+      <_LecteurWordTarget>$(RuntimeIdentifier)</_LecteurWordTarget>
+      <_LecteurWordTarget Condition="'$(_LecteurWordTarget)' == ''">$(NETCoreSdkRuntimeIdentifier) (portable)</_LecteurWordTarget>
+    </PropertyGroup>
+    <Exec Condition="'$(EnableBuildGitMetadata)' == 'true'"
+          Command="&quot;$(BuildGitExecutable)&quot; -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --verify HEAD"
+          IgnoreExitCode="true" ConsoleToMSBuild="true" StandardOutputImportance="Low" StandardErrorImportance="Low"
+          EnvironmentVariables="GIT_OPTIONAL_LOCKS=0">
+      <Output TaskParameter="ExitCode" PropertyName="_LecteurWordCommitExit"/>
+      <Output TaskParameter="ConsoleOutput" ItemName="_LecteurWordCommitOutput"/>
+    </Exec>
+    <Exec Condition="'$(EnableBuildGitMetadata)' == 'true'"
+          Command="&quot;$(BuildGitExecutable)&quot; -C &quot;$(MSBuildProjectDirectory)&quot; status --porcelain=v1 --untracked-files=normal"
+          IgnoreExitCode="true" ConsoleToMSBuild="true" StandardOutputImportance="Low" StandardErrorImportance="Low"
+          EnvironmentVariables="GIT_OPTIONAL_LOCKS=0">
+      <Output TaskParameter="ExitCode" PropertyName="_LecteurWordStatusExit"/>
+      <Output TaskParameter="ConsoleOutput" ItemName="_LecteurWordStatusOutput"/>
+    </Exec>
+    <PropertyGroup Condition="'$(_LecteurWordCommitExit)' == '0'">
+      <_LecteurWordCandidate>@(_LecteurWordCommitOutput)</_LecteurWordCandidate>
+      <_LecteurWordCommit Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(_LecteurWordCandidate)', '\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z'))">$(_LecteurWordCandidate)</_LecteurWordCommit>
+    </PropertyGroup>
+    <PropertyGroup>
+      <_LecteurWordDirty Condition="'$(_LecteurWordStatusExit)' == '0'">false</_LecteurWordDirty>
+      <_LecteurWordDirty Condition="'$(_LecteurWordStatusExit)' == '0' and @(_LecteurWordStatusOutput->Count()) &gt; 0">true</_LecteurWordDirty>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyMetadata Include="LecteurWord.Build.Version" Value="$(Version)"/>
+      <AssemblyMetadata Include="LecteurWord.Build.Utc" Value="$(_LecteurWordBuildUtc)"/>
+      <AssemblyMetadata Include="LecteurWord.Build.Commit" Value="$(_LecteurWordCommit)"/>
+      <AssemblyMetadata Include="LecteurWord.Build.Dirty" Value="$(_LecteurWordDirty)"/>
+      <AssemblyMetadata Include="LecteurWord.Build.Target" Value="$(_LecteurWordTarget)"/>
+    </ItemGroup>
+  </Target>
+</Project>
