@@ -150,7 +150,7 @@ static class PageCorpusCases
     {
         var sources=Manifest("LECTEUR_WORD_QA_CORPUS_MANIFEST");
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).UseSkia().WithInterFont().SetupWithoutStarting();
-        var w=new ReaderWindow{PreferNativePages=true};w.Show();
+        var w=new ReaderWindow();w.Show();
         var rows=new List<object>();
         try
         {

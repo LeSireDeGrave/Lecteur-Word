@@ -23,7 +23,7 @@ public sealed partial class ReaderWindow
         var layout=snapshot?.ReadingGrids.GetValueOrDefault(block.Id);
         var scene=snapshot?.ReadingTables.GetValueOrDefault(block.Id);
         var table=new ScrollViewer{Name="ReadingTable",Tag=block.Id,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility=ScrollBarVisibility.Disabled,IsScrollChainingEnabled=true};
+            VerticalScrollBarVisibility=ScrollBarVisibility.Disabled,IsScrollChainingEnabled=true,Background=ReaderPalette.ReadingPaper};
         var content=scene is null?ReadingTableGrid(block,layout,scale):ReadingTableScene(block,scene,scale);
         var position=new Border{Child=content,HorizontalAlignment=layout?.Alignment switch
         {
@@ -130,7 +130,8 @@ public sealed partial class ReaderWindow
                 foreach(var child in cell.Children)group.Children.Add(RenderReadingBlock(child,inCell:true));
             else group.Children.Add(RenderReadingBlock(cell,inCell:true));
             var target=ReadingCell(cell,group,aliases.GetValueOrDefault(cell.Id)??[]);
-            if(resolved is not null)
+            var (across,down)=spans.GetValueOrDefault(cell.Id,(span,1));
+            if(resolved is not null&&layout is not null)
             {
                 var m=resolved.Margins;
                 target.Padding=new Thickness(m.Left*scale,m.Top*scale,m.Right*scale,m.Bottom*scale);
@@ -140,15 +141,25 @@ public sealed partial class ReaderWindow
                     "center"=>VerticalAlignment.Center,"bottom"=>VerticalAlignment.Bottom,_=>VerticalAlignment.Top
                 };
             }
-            var (across,down)=spans.GetValueOrDefault(cell.Id,(span,1));
             Grid.SetRow(target,row);Grid.SetColumn(target,column);
             Grid.SetColumnSpan(target,across);Grid.SetRowSpan(target,down);
             grid.Children.Add(target);
+            if(resolved is null||layout is null)continue;
+            var borders=Composer.EffectiveBorders(layout,resolved with{ColumnSpan=across,RowSpan=down});
+            var edges=new[]{borders.Top,borders.Right,borders.Bottom,borders.Left};
+            if(edges.Any(b=>b is {Width:>0})&&edges.All(b=>b is null||b.Color.Length==6&&b.Color.All(Uri.IsHexDigit)&&
+                b.Style is "single" or "dashed" or "dotted" or "double"))
+            {
+                var overlay=new CellBorderPicture(borders,(float)scale){IsHitTestVisible=false};
+                Grid.SetRow(overlay,row);Grid.SetColumn(overlay,column);
+                Grid.SetColumnSpan(overlay,across);Grid.SetRowSpan(overlay,down);
+                grid.Children.Add(overlay);
+            }
         }
         return grid;
     }
 
-    Border ReadingCell(ReadableBlock source,Control? content,IReadOnlyList<string> aliases)
+    TableCellTarget ReadingCell(ReadableBlock source,Control? content,IReadOnlyList<string> aliases)
     {
         var target=new TableCellTarget(source.Id,aliases){Child=content};
         AutomationProperties.SetName(target,T("Cellule de tableau","Table cell")+" · "+BlockText(source));
@@ -177,6 +188,16 @@ public sealed partial class ReaderWindow
             Name="ReadingCell";Tag=id;Focusable=true;IsTabStop=false;Background=Brushes.Transparent;
         }
         internal bool Contains(string id)=>Tag as string==id||aliases.Contains(id,StringComparer.Ordinal);
+    }
+
+    sealed class CellBorderPicture(CellBorders borders,float scale) : Control
+    {
+        public override void Render(DrawingContext context)
+        {
+            if(Bounds.Width<=0||Bounds.Height<=0)return;
+            context.Custom(new PictureDraw(new Rect(Bounds.Size),
+                Composer.RecordCellBorders((float)Bounds.Width/scale,(float)Bounds.Height/scale,borders),scale));
+        }
     }
 
     sealed class TablePicture(ComposedPage table,double scale) : Control

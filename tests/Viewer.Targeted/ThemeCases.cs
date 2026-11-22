@@ -65,7 +65,8 @@ static class ThemeCases
             AboutCases.Complete(window.OpenDocumentAsync(sample));Layout();
             var composition=window.CurrentComposition;
             Check(composition is {Available:true,Pages.Count:1} &&
-                composition.Pages[0].Lines.SelectMany(l=>l.Fragments).Any(f=>f.Style.Color=="B00020"),
+                composition.Pages[0].Lines.Any(l=>l.Fragments.Any(f=>f.Style.Color=="B00020")||
+                    l.Native?.Parts.Any(p=>p.Fragment?.Style.Color=="B00020")==true),
                 "La couleur source n’a pas été composée.");
             var raster=Composer.PagePng(composition!.Pages[0]);
             var displayed=Control<Image>(window,"CalculatedPage").Source;

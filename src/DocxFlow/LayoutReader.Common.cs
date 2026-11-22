@@ -6,7 +6,8 @@ public static partial class LayoutReader
 {
     sealed partial class Reader
     {
-        string ReadColor(InventoryNode n,string fallback="val",string themeKey="themeColor",string tintKey="themeTint",string shadeKey="themeShade")
+        string ReadColor(InventoryNode n,string fallback="val",string themeKey="themeColor",string tintKey="themeTint",string shadeKey="themeShade",
+            string automatic="000000")
         {
             string color=A(n,fallback),theme=A(n,themeKey);
             if(tableCascade is null&&(A(n,"themeTint").Length>0||A(n,"themeShade").Length>0))Issue("LAYOUT_COLOR_TRANSFORM_UNQUALIFIED",n,"Transformation de couleur de thème hors profil.");
@@ -30,7 +31,7 @@ public static partial class LayoutReader
                     else color=transformed;
                 }
             }
-            return color=="auto"?"000000":color;
+            return color=="auto"?automatic:color;
         }
         bool EmptyNoteDependency(Relationship relation)
         {

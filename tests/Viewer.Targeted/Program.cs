@@ -52,6 +52,8 @@ try
         case "page-corpus": PageCorpusCases.Run(root);break;
         case "page-corpus-gui": PageCorpusCases.Gui(root);break;
         case "table-page-audit": TableAuditCases.Run(root);break;
+        case "render-quality": RenderQualityCases.Model(root);break;
+        case "render-quality-native": Assert(NativeCases.Run(root,renderQuality:true)==0,"Contrôle X11 du rendu utilisateur échoué");break;
         case "table-reading-corpus": TableReadingCases.Corpus();break;
         case "table-reading-native": Assert(NativeCases.Run(root,tables:true)==0,"Contrôle X11 des tableaux échoué");break;
         case "table-page-widths": TablePageCases.Widths(root);break;

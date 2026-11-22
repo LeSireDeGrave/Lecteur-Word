@@ -50,7 +50,7 @@ public static partial class LayoutReader
                     Issue("LAYOUT_TAB_LEADER_UNQUALIFIED",c,"Points de suite non qualifiés.");
                 if(align=="clear")tabs.Remove(pos);
                 else if(align=="num"||semantic is not null&&align=="list")tabs[pos]=new(pos,"numbering");
-                else if(align is "left" or "right" or "center" or "decimal")tabs[pos]=new(pos,align);
+                else if(align is "left" or "right" or "center" or "decimal")tabs[pos]=new(pos,align){Leader=A(c,"leader")};
                 else Issue("LAYOUT_TAB_ALIGNMENT_UNQUALIFIED",c,"Alignement de tabulation non qualifié : "+align);
             }
             return p with{Tabs=tabs.Values.OrderBy(t=>t.Position).ToArray()};

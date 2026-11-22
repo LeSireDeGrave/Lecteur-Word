@@ -55,9 +55,12 @@ public static partial class LayoutReader
         {
             if(tableCascade is null)WAttributes(n,"fill","color","val");
             else WAttributes(n,"fill","color","val","themeColor","themeTint","themeShade","themeFill","themeFillTint","themeFillShade");
-            if(A(n,"val") is not ("" or "clear" or "solid"))Issue("LAYOUT_SHADING_UNQUALIFIED",n,"Motif de trame hors profil.");
-            bool solid=A(n,"val")=="solid";
-            string fill=tableCascade is null?A(n,solid?"color":"fill"):solid?ReadColor(n,"color"):ReadColor(n,"fill","themeFill","themeFillTint","themeFillShade");
+            string pattern=A(n,"val");
+            if(pattern=="nil")return null;
+            if(pattern is not ("" or "clear" or "solid"))Issue("LAYOUT_SHADING_UNQUALIFIED",n,"Motif de trame hors profil.");
+            bool solid=pattern=="solid";
+            string fill=tableCascade is null?A(n,solid?"color":"fill"):solid?ReadColor(n,"color"):
+                ReadColor(n,"fill","themeFill","themeFillTint","themeFillShade",automatic:"");
             if(solid&&fill is "" or "auto")fill="000000";
             if(fill is "" or "auto")return null;
             if(fill.Length!=6||!fill.All(Uri.IsHexDigit)){Issue("LAYOUT_SHADING_UNQUALIFIED",n,"Couleur de fond hors profil.");return null;}
@@ -121,6 +124,8 @@ public static partial class LayoutReader
                     else if(Is(c,"tblCellMar"))margins=Margins(c,margins);
                     else if(Is(c,"shd"))tableFill=Fill(c);
                     else if(Is(c,"tblLayout")){WAttributes(c,"type");if(A(c,"type") is not ("fixed" or "autofit"))Issue("LAYOUT_TABLE_AUTOFIT_UNQUALIFIED",c,"Mode de disposition de tableau inconnu.");}
+                    else if(tableCascade is not null&&Is(c,"tblCellSpacing")&&A(c,"type")=="dxa"&&A(c,"w")=="0")
+                        WAttributes(c,"type","w");
                     else if(Is(c,"tblStyle")){WAttributes(c,"val");}
                     else if(Is(c,"tblLook")){WAttributes(c,"val","firstRow","lastRow","firstColumn","lastColumn","noHBand","noVBand");if(tableCascade is null)Issue("LAYOUT_TABLE_LOOK",c,"Sélection des régions conservée ; styles conditionnels actifs refusés séparément.",false);}
                     else if(tableCascade is not null&&(Is(c,"tblStyleRowBandSize")||Is(c,"tblStyleColBandSize")||Is(c,"tblCaption")||Is(c,"tblDescription")))WAttributes(c,"val");

@@ -23,11 +23,11 @@ public sealed class ReadablePresentation
     {
         if(block.Kind=="note"&&Notes.TryGetValue(block.Id,out var note)&&note.Verified)return "";
         if(FieldDetailNodes.Contains(block.Id))return "";
-        if(block.Kind=="field")return Fields.ContainsKey(block.Id)?string.Concat(block.Children.Select(TextFor)):"";
+        if(block.Kind=="field")return Fields.GetValueOrDefault(block.Id) is {Matched:true}?string.Concat(block.Children.Select(TextFor)):"";
         string own=block.Children.Count==0?block.Text:block.Kind is "paragraph" or "heading" or "run" or "link"?"":block.Text;
         return own+string.Concat(block.Children.Select(TextFor));
     }
-    static readonly HashSet<string> KnownFields=new(StringComparer.OrdinalIgnoreCase){"PAGE","NUMPAGES","SECTION","SECTIONPAGES","DATE","TIME","CREATEDATE","SAVEDATE","PRINTDATE","AUTHOR","TITLE","SUBJECT","KEYWORDS","FILENAME","DOCPROPERTY","REF","PAGEREF","HYPERLINK","STYLEREF","SEQ","TOC","NUMWORDS","NUMCHARS"};
+    static readonly HashSet<string> KnownFields=new(StringComparer.OrdinalIgnoreCase){"PAGE","NUMPAGES","SECTION","SECTIONPAGES","DATE","TIME","CREATEDATE","SAVEDATE","PRINTDATE","AUTHOR","TITLE","SUBJECT","KEYWORDS","FILENAME","DOCPROPERTY","REF","PAGEREF","HYPERLINK","STYLEREF","SEQ","TOC","TC","NUMWORDS","NUMCHARS"};
     public static IEnumerable<ReadableBlock> Walk(IEnumerable<ReadableBlock> blocks)
     {foreach(var b in blocks){yield return b;foreach(var c in Walk(b.Children))yield return c;}}
 
@@ -50,7 +50,6 @@ public sealed class ReadablePresentation
         static bool Is(InventoryNode n,string local)=>n.Name=="{"+W+"}"+local;
         static string Attr(InventoryNode n,string local)=>n.Attributes.GetValueOrDefault("{"+W+"}"+local)??"";
         InventoryNode? Parent(InventoryNode n)=>n.ParentId is {} id?nodes.GetValueOrDefault(id):null;
-        IEnumerable<InventoryNode> Tree(InventoryNode n){Check();yield return n;foreach(var child in index.Children(n))foreach(var d in Tree(child))yield return d;}
         void Issue(string code,SourceLocation source,string message)=>issues.Add(new(code,source,message,false));
         public ReadablePresentation Build()
         {
@@ -78,59 +77,113 @@ public sealed class ReadablePresentation
                 if(!index.IsUnderInactiveBranch(root))ScanFields(root);
             return new(){BodyBlocks=body,Notes=notes,Fields=fields,FieldDetailNodes=details,Sections=Sections(body),Issues=issues};
         }
-        sealed class Field(InventoryNode begin)
+        sealed class Field(InventoryNode begin,bool simple)
         {
-            public InventoryNode Begin=begin;public StringBuilder Code=new(),Value=new();public List<string> DetailIds=[];
-            public bool Separated,HasValue,Unsafe;
+            internal InventoryNode Begin {get;}=begin;
+            internal bool Simple {get;}=simple;
+            internal StringBuilder Code {get;}=new();
+            internal StringBuilder Value {get;}=new();
+            internal List<string> ResultNodes {get;}=[];
+            internal bool Separated {get;set;}
+            internal bool Unsafe {get;set;}=begin.Revision!="unchanged";
+            internal bool InResult=>Simple||Separated;
         }
         void ScanFields(InventoryNode root)
         {
             var stack=new Stack<Field>();
-            foreach(var n in Tree(root))
+            bool stopped=false;
+            void Visit(InventoryNode n)
             {
                 Check();
-                if(Is(n,"fldSimple"))
+                if(stopped)return;
+                bool simple=Is(n,"fldSimple");
+                bool boundary=Is(n,"fldChar");
+                string kind=boundary?Attr(n,"fldCharType"):"";
+                if(simple||kind=="begin")
                 {
-                    var text=Tree(n).Where(t=>Is(t,"t")).ToArray();
-                    string value=string.Concat(text.SelectMany(t=>index.Children(t).Where(c=>c.Kind=="textValue")).Select(c=>c.Text));
-                    AddField(n,Attr(n,"instr"),value,text.Length>0,n.Revision=="unchanged",[]);
-                }
-                if(Is(n,"fldChar"))
-                {
-                    string type=Attr(n,"fldCharType");
-                    if(type=="begin")
+                    if(stack.Count>=32||fields.Count>=2048)
                     {
-                        if(stack.Count>=32||fields.Count>=2048){Issue("READ_FIELD_LIMIT",n.Source,"Analyse contextuelle des champs limitée ; codes et contenu conservés avec repères.");return;}
-                        var f=new Field(n){Unsafe=n.Revision!="unchanged"};f.DetailIds.Add(n.Id);stack.Push(f);
+                        Issue("READ_FIELD_LIMIT",n.Source,"Analyse contextuelle des champs limitée ; inventaire conservé.");
+                        stopped=true;
+                        return;
                     }
-                    else if(stack.TryPeek(out var f))
+                    var frame=new Field(n,simple);
+                    if(simple&&stack.Any(f=>!f.InResult))details.Add(n.Id);
+                    stack.Push(frame);
+                    if(simple)
                     {
-                        f.DetailIds.Add(n.Id);
-                        if(n.Revision!="unchanged")f.Unsafe=true;
-                        if(type=="separate"&&!f.Separated)f.Separated=true;
-                        else if(type=="end"){stack.Pop();AddField(f.Begin,f.Code.ToString(),f.Value.ToString(),f.HasValue,f.Separated&&!f.Unsafe,f.DetailIds);}
-                        else f.Unsafe=true;
+                        frame.Code.Append(Attr(n,"instr"));
+                        foreach(var child in index.Children(n))Visit(child);
+                        while(!ReferenceEquals(stack.Peek(),frame))Finish(stack.Pop(),false);
+                        Finish(stack.Pop(),true);
                     }
-                    continue;
+                    else details.Add(n.Id);
+                    return;
                 }
-                if(stack.Count==0)continue;
-                foreach(var f in stack)
+                if(boundary)
                 {
-                    if(n.Revision!="unchanged")f.Unsafe=true;
-                    if(Is(n,"instrText")&&!f.Separated){f.DetailIds.Add(n.Id);f.Code.Append(string.Concat(index.Children(n).Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
-                    if(Is(n,"t")&&f.Separated){f.HasValue=true;f.Value.Append(string.Concat(index.Children(n).Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
-                    if(Is(n,"tab")&&f.Separated)f.Value.Append('\t');
-                    if(Is(n,"br")&&f.Separated)f.Value.Append('\n');
+                    details.Add(n.Id);
+                    if(!stack.TryPeek(out var active)||active.Simple)
+                        Issue("READ_FIELD_STRUCTURE_UNVERIFIED",n.Source,"Marqueur de champ sans ouverture complexe correspondante.");
+                    else
+                    {
+                        active.Unsafe|=n.Revision!="unchanged";
+                        if(kind=="end")Finish(stack.Pop(),true);
+                        else if(kind=="separate"&&!active.Separated)active.Separated=true;
+                        else active.Unsafe=true;
+                    }
+                    return;
                 }
+                if(Is(n,"instrText")||Is(n,"delInstrText"))
+                {
+                    details.Add(n.Id);
+                    if(stack.TryPeek(out var active)&&!active.InResult)
+                        active.Code.Append(RawText(n));
+                    return;
+                }
+                if(stack.Count>0)
+                {
+                    foreach(var frame in stack)frame.Unsafe|=n.Revision!="unchanged";
+                    bool text=Is(n,"t")||Is(n,"delText");
+                    bool tab=Is(n,"tab"),lineBreak=Is(n,"br")||Is(n,"cr");
+                    if(text||tab||lineBreak||n.Kind is "drawing" or "noteReference"||Is(n,"sym"))
+                    {
+                        if(stack.Any(f=>!f.InResult))details.Add(n.Id);
+                        foreach(var frame in stack)
+                        {
+                            if(!frame.InResult)break;
+                            frame.ResultNodes.Add(n.Id);
+                            if(text)frame.Value.Append(RawText(n));
+                            else if(tab)frame.Value.Append('\t');
+                            else if(lineBreak)frame.Value.Append('\n');
+                        }
+                    }
+                }
+                if(SemanticIndex.IsAlternative(n))
+                {
+                    if(index.SelectedBranch(n) is {} selected)Visit(selected);
+                }
+                else foreach(var child in index.Children(n))Visit(child);
             }
-            foreach(var f in stack)AddField(f.Begin,f.Code.ToString(),f.Value.ToString(),f.HasValue,false,[]);
-        }
-        void AddField(InventoryNode n,string code,string value,bool hasValue,bool matched,IReadOnlyList<string> ids)
-        {
-            string name=code.TrimStart().Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant()??"";
-            fields[n.Id]=new(n.Id,name,code,KnownFields.Contains(name),matched,hasValue,value,n.Source);
-            if(matched)foreach(var id in ids)details.Add(id);
-            if(!matched)Issue("READ_FIELD_STRUCTURE_UNVERIFIED",n.Source,"Champ incomplet ou suivi de révision : structure conservée, résultat non qualifié.");
+
+            Visit(root);
+            while(stack.TryPop(out var frame))Finish(frame,false);
+
+            string RawText(InventoryNode n)=>string.Concat(index.Children(n).Where(c=>c.Kind=="textValue").Select(c=>c.Text));
+            void Finish(Field frame,bool closed)
+            {
+                string code=frame.Code.ToString();
+                string name=code.TrimStart().Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant()??"";
+                bool matched=closed&&!frame.Unsafe&&name.Length>0;
+                string value=frame.Value.ToString();
+                bool hasValue=matched&&name!="TC"&&!string.IsNullOrWhiteSpace(value);
+                fields[frame.Begin.Id]=new(frame.Begin.Id,name,code,KnownFields.Contains(name),matched,hasValue,value,frame.Begin.Source);
+                if(name=="TC"||!matched)
+                    foreach(var id in frame.ResultNodes)details.Add(id);
+                if(!matched)Issue("READ_FIELD_STRUCTURE_UNVERIFIED",frame.Begin.Source,"Champ incomplet ou suivi de révision : structure conservée, résultat non qualifié.");
+                else if(name!="TC"&&!hasValue)
+                    Issue("READ_FIELD_RESULT_MISSING",frame.Begin.Source,"Champ "+name+" sans résultat enregistré utilisable.");
+            }
         }
         IReadOnlyList<ReadableSection> Sections(IReadOnlyList<ReadableBlock> body)
         {

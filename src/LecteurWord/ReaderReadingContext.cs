@@ -96,12 +96,4 @@ public sealed partial class ReaderWindow
         var card=ContextCard(new ScrollViewer{Content=content,MaxHeight=520,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});
             readingFlyout?.Hide();readingFlyout=new Flyout{Content=card,Placement=PlacementMode.Right};ActiveReadingContext=card;readingFlyout.ShowAt(anchor);
     }
-    Button FieldMarker(ReadableBlock block,ReadableFieldValue field)
-    {
-        var button=LocalMarker(block);
-        button.Content=field.Matched&&field.Known&&field.HasStoredValue?"ƒ":field.HasStoredValue?"ƒ?":"ƒ∅";
-        string message=field.Known?(field.HasStoredValue?T("Valeur enregistrée, non recalculée","Stored value, not recalculated"):T("Aucune valeur enregistrée","No stored value")):T("Champ non pris en charge · valeur enregistrée si disponible","Unsupported field · stored value if available");
-        ToolTip.SetTip(button,(field.Name.Length>0?field.Name+" · ":"")+message);AutomationProperties.SetName(button,message);
-        return button;
-    }
 }

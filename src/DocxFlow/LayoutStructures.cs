@@ -2,7 +2,10 @@ using System.Text.Json.Serialization;
 using LecteurWord.DocxCore;
 namespace LecteurWord.Flow;
 
-public sealed record TabStop(float Position,string Alignment);
+public sealed record TabStop(float Position,string Alignment)
+{
+    internal string Leader {get;init;}="";
+}
 public sealed record ListLabel(string NumId,int Level,string Text,string Alignment,string Suffix,SourceLocation Source,LayoutStyle Style)
 {
     internal SemanticNumbering? Numbering {get;init;}

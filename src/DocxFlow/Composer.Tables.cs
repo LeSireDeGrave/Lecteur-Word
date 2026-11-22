@@ -45,7 +45,7 @@ public static partial class Composer
         if(headers<table.Table.Rows.Count){var first=table.Groups.First(g=>g.First>=headers);height+=table.Heights.Skip(first.First).Take(first.Last-first.First+1).Sum();}
         return height;
     }
-    static CellBorders EffectiveBorders(LayoutTable table,LayoutCell cell)
+    internal static CellBorders EffectiveBorders(LayoutTable table,LayoutCell cell)
     {
         var b=cell.Borders;
         return new(b.Top??(cell.Row==0?table.Borders.Top:b.InsideH??table.Borders.InsideH),
@@ -111,21 +111,35 @@ public static partial class Composer
     static void DrawCellBorders(SKCanvas canvas,ComposedPage page)
     {
         using var paint=new SKPaint{IsAntialias=true,Style=SKPaintStyle.Stroke};
-        foreach(var c in page.DisplayCells)
+        foreach(var cell in page.DisplayCells)
+            DrawCellEdges(canvas,paint,cell.X,cell.Y,cell.Width,cell.Height,cell.Borders);
+    }
+
+    internal static SKPicture RecordCellBorders(float width,float height,CellBorders borders)
+    {
+        using var recorder=new SKPictureRecorder();
+        using var paint=new SKPaint{IsAntialias=true,Style=SKPaintStyle.Stroke};
+        DrawCellEdges(recorder.BeginRecording(SKRect.Create(width,height)),paint,0,0,width,height,borders);
+        return recorder.EndRecording();
+    }
+
+    static void DrawCellEdges(SKCanvas canvas,SKPaint paint,float x,float y,float width,float height,CellBorders borders)
+    {
+        void Line(LayoutBorder? border,float x1,float y1,float x2,float y2)
         {
-            void Line(LayoutBorder? border,float x1,float y1,float x2,float y2)
+            if(border is not {Width:>0})return;paint.Color=SKColor.Parse("#"+border.Color);paint.StrokeWidth=border.Width;
+            using var effect=border.Style is "dotted" or "dashed"?SKPathEffect.CreateDash(border.Style=="dotted"?[border.Width,border.Width*2]:[border.Width*4,border.Width*2],0):null;paint.PathEffect=effect;
+            if(border.Style=="double")
             {
-                if(border is not {Width:>0})return;paint.Color=SKColor.Parse("#"+border.Color);paint.StrokeWidth=border.Width;
-                using var effect=border.Style is "dotted" or "dashed"?SKPathEffect.CreateDash(border.Style=="dotted"?[border.Width,border.Width*2]:[border.Width*4,border.Width*2],0):null;paint.PathEffect=effect;
-                if(border.Style=="double")
-                {
-                    paint.StrokeWidth=border.Width/3;float dx=y1==y2?0:border.Width/3,dy=y1==y2?border.Width/3:0;
-                    canvas.DrawLine(x1-dx,y1-dy,x2-dx,y2-dy,paint);canvas.DrawLine(x1+dx,y1+dy,x2+dx,y2+dy,paint);
-                }
-                else canvas.DrawLine(x1,y1,x2,y2,paint);
-                paint.PathEffect=null;
+                paint.StrokeWidth=border.Width/3;float dx=y1==y2?0:border.Width/3,dy=y1==y2?border.Width/3:0;
+                canvas.DrawLine(x1-dx,y1-dy,x2-dx,y2-dy,paint);canvas.DrawLine(x1+dx,y1+dy,x2+dx,y2+dy,paint);
             }
-            Line(c.Borders.Top,c.X,c.Y,c.X+c.Width,c.Y);Line(c.Borders.Bottom,c.X,c.Y+c.Height,c.X+c.Width,c.Y+c.Height);Line(c.Borders.Left,c.X,c.Y,c.X,c.Y+c.Height);Line(c.Borders.Right,c.X+c.Width,c.Y,c.X+c.Width,c.Y+c.Height);
+            else canvas.DrawLine(x1,y1,x2,y2,paint);
+            paint.PathEffect=null;
         }
+        Line(borders.Top,x,y,x+width,y);
+        Line(borders.Bottom,x,y+height,x+width,y+height);
+        Line(borders.Left,x,y,x,y+height);
+        Line(borders.Right,x+width,y,x+width,y+height);
     }
 }

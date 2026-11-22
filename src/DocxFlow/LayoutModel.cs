@@ -180,6 +180,10 @@ public static partial class LayoutReader
                 else if(Is(n,"rStyle")){WAttributes(n,"val");}
                 else if(Is(n,"noProof")){WAttributes(n,"val");Issue("LAYOUT_PROOFING_METADATA",n,"Option de correction orthographique conservée ; aucun effet sur la composition.",false);}
                 else if(Is(n,"spacing")&&A(n,"val")=="0"){WAttributes(n,"val");}
+                else if(semantic is not null&&Is(n,"strike")&&A(n,"val") is "0" or "false" or "off")
+                    WAttributes(n,"val");
+                else if(semantic is not null&&Is(n,"shd")&&A(n,"val")=="clear"&&A(n,"fill")=="auto"&&A(n,"themeFill").Length==0)
+                    WAttributes(n,"val","fill","color");
                 else if(Is(n,"bCs")||Is(n,"iCs")||Is(n,"szCs"))
                 {
                     WAttributes(n,"val");style=Is(n,"szCs")?style with{ComplexSize=Number(n,"val",style.Size,6,72,2)}:Is(n,"bCs")?style with{ComplexBold=Toggle(n)}:style with{ComplexItalic=Toggle(n)};
@@ -210,6 +214,7 @@ public static partial class LayoutReader
                 else if(Is(n,"keepNext")){WAttributes(n,"val");p=p with{KeepNext=Toggle(n)};}
                 else if(Is(n,"keepLines")){WAttributes(n,"val");p=p with{KeepLines=Toggle(n)};}
                 else if(Is(n,"widowControl")){WAttributes(n,"val");p=p with{Widow=Toggle(n)};}
+                else if(semantic is not null&&Is(n,"suppressAutoHyphens"))WAttributes(n,"val");
                 else if(Is(n,"pageBreakBefore")){WAttributes(n,"val");p=p with{PageBreakBefore=Toggle(n)};}
                 else if(Is(n,"outlineLvl")){WAttributes(n,"val");int level=(int)Number(n,"val",9,0,9);p=p with{Heading=level==9?0:level+1};}
                 else if(Is(n,"pStyle")){WAttributes(n,"val");}

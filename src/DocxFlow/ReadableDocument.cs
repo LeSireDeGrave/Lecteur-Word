@@ -132,7 +132,12 @@ public static class ReadableReader
             }
             Issue("READ_APPROXIMATE", body, "Lecture simplifiée continue : aucune pagination, fidélité Word ou qualification d’export déduite.");
             Check();var document=new ReadableDocument(input.Manifest.SourceSha256 ?? "", true, blocks, issues, outline, bookmarks) { Resources = checkedImages };
-            return document with {Presentation=ReadablePresentation.Create(input,document,index,token)};
+            var presentation=ReadablePresentation.Create(input,document,index,token);
+            var headings=ReadablePresentation.Walk(presentation.BodyBlocks).Where(b=>b.Kind=="heading")
+                .DistinctBy(b=>b.Source).ToDictionary(b=>b.Source,b=>presentation.TextFor(b).Trim());
+            return document with {Presentation=presentation,Outline=[..outline
+                .Where(o=>headings.TryGetValue(o.Source,out var title)&&title.Length>0)
+                .DistinctBy(o=>o.Source).Select(o=>o with {Label=headings[o.Source]})]};
         }
         ReadableBlock Make(InventoryNode n, string kind, string text, IReadOnlyList<ReadableBlock> nested, TextStyle style)
         {

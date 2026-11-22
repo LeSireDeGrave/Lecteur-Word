@@ -21,9 +21,10 @@ static class NativeCases
     public static bool Compatibility;
     public static bool Opus;
     public static bool Tables;
-    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false,bool compatibility=false,bool opus=false,bool tables=false)
+    public static bool RenderQuality;
+    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false,bool compatibility=false,bool opus=false,bool tables=false,bool renderQuality=false)
     {
-        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;Compatibility=compatibility;Opus=opus;Tables=tables;
+        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;Compatibility=compatibility;Opus=opus;Tables=tables;RenderQuality=renderQuality;
         return AppBuilder.Configure<NativeQaApp>().UsePlatformDetect().UseSkia().WithInterFont().StartWithClassicDesktopLifetime([]);
     }
     public static void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
@@ -49,6 +50,7 @@ sealed class NativeQaApp:Application
     }
     static async Task Qualify(ReaderWindow window)
     {
+        if(NativeCases.RenderQuality){await RenderQualityCases.Native(window);return;}
         if(NativeCases.Tables){await TableReadingCases.Native(window);return;}
         if(NativeCases.Opus){await OpusUxCases.Native(window,NativeCases.Output);return;}
         if(NativeCases.Compatibility){await CompatibilityCases.Native(window,NativeCases.Output);return;}

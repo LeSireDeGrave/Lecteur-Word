@@ -145,7 +145,7 @@ static partial class PageCases
 
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false})
             .UseSkia().WithInterFont().SetupWithoutStarting();
-        var window=new ReaderWindow{PreferNativePages=true};
+        var window=new ReaderWindow();
         window.Show();
         try
         {

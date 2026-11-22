@@ -191,7 +191,7 @@ static partial class PageCases
     internal static void Gui(string root)
     {
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).UseSkia().WithInterFont().SetupWithoutStarting();
-        var w=new ReaderWindow{PreferNativePages=true};
+        var w=new ReaderWindow();
         w.Show();
         try
         {

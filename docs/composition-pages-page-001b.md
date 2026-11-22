@@ -42,7 +42,7 @@ Une ligne non placée a une entrée `PagePlacementGap` avec ancre, intervalle de
 
 ## Avalonia et qualification
 
-Le choix expérimental `LECTEUR_WORD_PAGE_PROFILE=native` active la proposition native au prochain lancement. Le parcours courant reste le profil précédent. Même en mode expérimental, Avalonia adopte uniquement un résultat `Complete`. Si la proposition est partielle, le lecteur conserve le chemin précédemment qualifié ou utilise la lecture simplifiée. Le panneau Diagnostics peut montrer les plages sans position, et l’inventaire conserve les notes et objets.
+À l’ouverture d’un DOCX lisible, Avalonia essaie automatiquement la composition native. Un résultat `Complete` donne accès aux pages. Si la proposition est partielle, le lecteur utilise le profil de pagination précédent quand il aboutit, ou la lecture continue. Les tableaux dont le placement est résolu peuvent être dessinés dans ce flux. Le panneau Diagnostics indique les plages sans position de page. L’inventaire conserve les notes, les champs et les objets.
 
 Les actions de navigation, miniatures, zoom, règle et marques utilisent les pages calculées. La vue native relie la recherche à des rectangles de clusters dans la page trouvée. Le clic dans le texte sélectionne le cluster visible et conserve ses étendues OOXML. Le surlignage et les marques forment des calques. L’adoption d’une nouvelle ouverture écarte le bail précédent. Un changement de région demande une recomposition sur l’instantané, suivie par la publication d’une nouvelle génération complète.
 

@@ -159,7 +159,20 @@ internal sealed partial class TypographySession : IDisposable
     ImmutableArray<TextToken> CollectTokens()
     {
         var result = ImmutableArray.CreateBuilder<TextToken>();
-        var stored = model.Fields.SelectMany(f=>f.StoredResultIds).ToHashSet(StringComparer.Ordinal);
+        var visibleFields=new HashSet<string>(StringComparer.Ordinal);
+        var stored=new HashSet<string>(StringComparer.Ordinal);
+        var operands=new HashSet<string>(StringComparer.Ordinal);
+        var fields=model.Fields.ToDictionary(f=>f.Id,StringComparer.Ordinal);
+        foreach(var field in model.Fields)
+        {
+            Check();
+            bool visible=field.StructureVerified&&field.Command!="TC"&&
+                (field.ParentFieldId is not {} id||visibleFields.Contains(id)&&fields.TryGetValue(id,out var parent)&&
+                    (parent.InstructionAttribute is not null||parent.SeparatorId is {} separator&&
+                        model.Element(separator).Order<model.Element(field.Id).Order));
+            if(visible)visibleFields.Add(field.Id);
+            (visible?stored:operands).UnionWith(field.StoredResultIds);
+        }
         long chars=0;
         foreach (var e in model.Elements)
         {
@@ -181,7 +194,7 @@ internal sealed partial class TypographySession : IDisposable
             TextRole role;
             if (e.Coverage==SemanticCoverage.InactiveAlternative) role=TextRole.Inactive;
             else if (e.Kind==SemanticKind.DeletedText || model.Revision(e.Id)=="deleted") role=TextRole.Deleted;
-            else if (e.Kind==SemanticKind.FieldInstruction || model.FieldRole(e.Id)=="instruction" && !stored.Contains(e.Id))
+            else if (e.Kind==SemanticKind.FieldInstruction || operands.Contains(e.Id) || model.FieldRole(e.Id)=="instruction" && !stored.Contains(e.Id))
                 role=TextRole.FieldInstruction;
             else if (control) role=TextRole.Control;
             else if (paragraph is null || run is null || model.ParentId(e.Id) is not {} owner || !Word(owner,"t"))

@@ -120,3 +120,7 @@ La reprise UX-OPUS-001 complète les mêmes témoins avec une cellule placée, u
 Le cas ciblé `exchange-quality` crée un DOCX synthétique de deux paragraphes et produit trois exports du profil texte à partir de ce témoin. Les fichiers produits et les résultats des validateurs restent dans la qualification locale ignorée. Le témoin à deux corps dans `DocxCore.Targeted` génère un paquet OOXML syntaxiquement lisible dont la structure de document est ambiguë.
 
 `PageDependencyCases.cs` construit la collection bibliographique, le magasin, les champs et les liaisons avec des valeurs synthétiques. Il contrôle le contenu éditorial, le raster et les refus de composition et d’export. Les sources bibliographiques du corpus privé, l’audit OPC et les fichiers produits restent dans la qualification locale ignorée.
+
+## Témoins RENDER-QUALITY-001
+
+`RenderQualityCases.cs` génère un DOCX synthétique avec des champs imbriqués, un signet, un lien de sommaire, un renvoi de page vide et trois fonds de cellule. Le cas modèle vérifie le texte visible, les résultats enregistrés et les pixels du raster. Le cas X11 utilise trois copies saisies explicitement dans la qualification locale et vérifie la lecture et les refus d’export. Les captures, les mesures, les copies et les références LibreOffice restent locales.

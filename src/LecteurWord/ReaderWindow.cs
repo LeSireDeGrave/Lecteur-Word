@@ -45,7 +45,6 @@ public sealed partial class ReaderWindow:Window
     CancellationTokenSource? pending,exportCancellation;
     InspectionResult? inspection;FlowDocument? flow;Composition? composition;Bitmap? pageBitmap;
     PageCompositionLease? nativePageLease;
-    internal bool PreferNativePages {get;set;}=Environment.GetEnvironmentVariable("LECTEUR_WORD_PAGE_PROFILE")=="native";
     internal string? NativePageStatus {get;private set;}
     IReadOnlyList<PagePlacementGap> nativePageGaps=[];
     IReadOnlyList<FlowIssue> nativePageIssues=[];
@@ -146,7 +145,7 @@ public sealed partial class ReaderWindow:Window
     public async Task OpenDocumentAsync(string path)
     {
         typographyCancellation?.Cancel();pending?.Cancel();var cancellation=new CancellationTokenSource();pending=cancellation;cancel.IsVisible=true;
-        PageCompositionLease? candidate=null;bool preferNative=PreferNativePages;
+        PageCompositionLease? candidate=null;
         status.Text=T("Lecture et inspection…","Reading and inspecting…");
         try
         {
@@ -159,14 +158,17 @@ public sealed partial class ReaderWindow:Window
                     var model=FlowReader.Read(result);
                     var reading=ReadableReader.Read(result,cancellation.Token);
                     bool hasTables=reading.Available&&reading.Presentation.BodyBlocks.Any(b=>b.Kind=="table");
-                    if(preferNative||hasTables)candidate=PageComposer.Compose(result,cancellation.Token,hasTables);
+                    if(reading.Available)candidate=PageComposer.Compose(result,cancellation.Token,hasTables);
                     var proposed=candidate?.Snapshot;
-                    bool adopt=(preferNative||hasTables)&&proposed is {Coverage:PageCoverage.Complete,Composition.Available:true,RulerModel:not null};
+                    bool adopt=proposed is {Coverage:PageCoverage.Complete,Composition.Available:true,RulerModel:not null};
                     var pageModel=adopt?proposed!.RulerModel!:LayoutReader.Read(result,cancellation.Token);
                     var layout=adopt?proposed!.Composition:Composer.Compose(pageModel,cancellation.Token);
+                    var readingLayout=pageModel.Paragraphs.ToDictionary(p=>p.Id,StringComparer.Ordinal);
+                    if(proposed?.RulerModel is {} nativeLayout)
+                        foreach(var p in nativeLayout.Paragraphs)readingLayout.TryAdd(p.Id,p);
                     var index=ReaderDocumentIndex.Build(result,reading,layout,cancellation.Token,proposed?.Semantic);
                     var checks=Enum.GetValues<ExportFormat>().ToDictionary(f=>f,f=>DocumentExports.Preflight(result,f));
-                    return(result,model,layout,pageModel,reading,index,checks,nativeStatus:proposed?.Coverage.ToString(),
+                    return(result,model,layout,pageModel,reading,readingLayout,index,checks,nativeStatus:proposed?.Coverage.ToString(),
                         gaps:proposed?.Gaps??[],nativeIssues:adopt?[]:proposed?.Composition.Issues??[]);
                 },cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();if(closed)return;
@@ -175,7 +177,7 @@ public sealed partial class ReaderWindow:Window
                 NativePageStatus=data.nativeStatus;SetNativeSelection(0,[]);
                 nativePageGaps=data.gaps;nativePageIssues=data.nativeIssues;
                 rasterPage=null;inspection=data.result;flow=data.model;composition=data.layout;pageModel=data.layout.Available?data.pageModel:null;
-                readable=data.reading;typographyDiagnostics=null;documentIndex=data.index;preflights=data.checks;fileName=Path.GetFileName(path);
+                readable=data.reading;readingParagraphs=data.readingLayout;typographyDiagnostics=null;documentIndex=data.index;preflights=data.checks;fileName=Path.GetFileName(path);
                 page=0;collapsedOutline.Clear();visibleBlockId=null;CurrentBlockId=null;CurrentNoteReferenceId=null;CurrentSection=1;ActiveReadingContext=null;
                 simplified=!data.layout.Available;readingList.ItemsSource=readable.Presentation.BodyBlocks;
                 PreparePageAids();SelectPageParagraph();RefreshReadingAppearance();RefreshElements(reset:true);UpdateUi();

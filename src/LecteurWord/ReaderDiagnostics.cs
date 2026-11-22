@@ -41,10 +41,20 @@ public sealed partial class ReaderWindow
         navItems.Children.Add(Explain(canRead?T("Le contenu est consultable. Certains éléments utilisent une présentation adaptée.","The content is readable. Some elements use an adapted presentation."):T("Le traitement s’est arrêté. Le fichier d’origine reste intact ; consultez le rapport pour connaître la cause.","Processing stopped. The original file is intact; consult the report for the cause.")));
         if(readable is not null)
         {
-            int notes=readable.Presentation.Notes.Values.Count(n=>n.Verified),uncertain=readable.Presentation.Notes.Values.Count(n=>!n.Verified),missing=readable.Presentation.Fields.Values.Count(f=>!f.HasStoredValue);
+            int notes=readable.Presentation.Notes.Values.Count(n=>n.Verified),uncertain=readable.Presentation.Notes.Values.Count(n=>!n.Verified),
+                missing=readable.Presentation.Fields.Values.Count(f=>f.Name!="TC"&&!f.HasStoredValue);
             if(notes>0)navItems.Children.Add(Explain(notes+T(" appels de notes reliés à leur contenu."," note references linked to their content.")));
             if(uncertain>0)navItems.Children.Add(Explain(uncertain+T(" correspondances de notes restent à vérifier."," note references remain unverified.")));
             if(missing>0)navItems.Children.Add(Explain(missing+T(" champs n’ont pas de valeur enregistrée. Aucune valeur n’est inventée."," fields have no stored value. No value is invented.")));
+            if(readable.Presentation.Fields.Count>0)
+            {
+                var fields=new ListBox{Name="ReadingFieldDiagnostics",ItemsSource=readable.Presentation.Fields.Values.ToArray(),Height=240,
+                    ItemTemplate=new Avalonia.Controls.Templates.FuncDataTemplate<ReadableFieldValue>((field,_)=>Explain(field is null?"":(
+                        field.Source.PartUri+" "+field.Source.Path+"\n"+field.Code.Trim()+"\n"+
+                        (field.HasStoredValue?field.StoredValue:field.Name=="TC"?T("Entrée de sommaire","Table of contents entry"):
+                            T("Résultat indisponible","Result unavailable")))))};
+                navItems.Children.Add(new Expander{Header=T("Champs et résultats enregistrés","Fields and stored results"),Content=fields});
+            }
             if(tableFallbacks.Length>0)navItems.Children.Add(Explain(tableFallbacks.Length+T(
                 " tableau(x) en lecture de secours. Consultez les propriétés non qualifiées dans les détails.",
                 " table(s) use the fallback grid. See the details for unqualified properties.")));
