@@ -50,6 +50,7 @@ Thumbs.db
 /.aws/
 /.codex/
 /.agents/
+/AGENTS.md
 *.pem
 *.key
 *.pfx
