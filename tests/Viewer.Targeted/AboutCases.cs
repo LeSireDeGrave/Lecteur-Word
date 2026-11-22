@@ -48,7 +48,7 @@ static class AboutCases
             reader.SetTheme(theme);reader.SetLanguage(english);
             reader.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="AboutLecteurWord").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
             var about=reader.OwnedWindows.OfType<AboutWindow>().Single();
-            Check(about.ActualThemeVariant==(theme==1?ThemeVariant.Light:ThemeVariant.Dark),"About theme mismatch");
+            Check(about.ActualThemeVariant==(theme==1?ThemeVariant.Light:ReaderPalette.BlueVariant),"About theme mismatch");
             Check(about.InformationText==BuildReference.Current.FullReference(english),"About metadata differs");
             Complete(about.CopyInformationAsync());Check(Complete(about.Clipboard!.TryGetTextAsync())==about.InformationText,"About clipboard differs");
             Check(about.CopyStatusText==(english?"Information copied":"Informations copiées")||about.CopyStatusText==(english?"Reference copied":"Référence copiée"),"About copy confirmation missing");

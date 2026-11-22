@@ -1,4 +1,5 @@
 using SkiaSharp;
+using System.Collections.Immutable;
 namespace LecteurWord.Flow;
 
 public static partial class Composer
@@ -46,7 +47,11 @@ public static partial class Composer
     }
     static CellBorders EffectiveBorders(LayoutTable table,LayoutCell cell)
     {
-        var b=cell.Borders;return new(b.Top??(cell.Row==0?table.Borders.Top:table.Borders.InsideH),b.Right??(cell.Column+cell.ColumnSpan==table.Columns.Count?table.Borders.Right:table.Borders.InsideV),b.Bottom??(cell.Row+cell.RowSpan==table.Rows.Count?table.Borders.Bottom:table.Borders.InsideH),b.Left??(cell.Column==0?table.Borders.Left:table.Borders.InsideV));
+        var b=cell.Borders;
+        return new(b.Top??(cell.Row==0?table.Borders.Top:b.InsideH??table.Borders.InsideH),
+            b.Right??(cell.Column+cell.ColumnSpan==table.Columns.Count?table.Borders.Right:b.InsideV??table.Borders.InsideV),
+            b.Bottom??(cell.Row+cell.RowSpan==table.Rows.Count?table.Borders.Bottom:b.InsideH??table.Borders.InsideH),
+            b.Left??(cell.Column==0?table.Borders.Left:b.InsideV??table.Borders.InsideV));
     }
     static void PlaceTableRows(MeasuredTable measured,int first,int last,float x,float y,bool repeated,List<PageLine> lines,List<PageCell> boxes,LayoutFonts fonts,Action check)
     {
@@ -54,16 +59,22 @@ public static partial class Composer
         foreach(var data in measured.Cells.Values.Where(c=>c.Cell.Row>=first&&c.Cell.Row<=last).OrderBy(c=>c.Cell.Row).ThenBy(c=>c.Cell.Column))
         {
             check();var cell=data.Cell;float cx=x+table.Columns.Take(cell.Column).Sum(),cy=y+offsets[cell.Row]-offsets[first],width=table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Sum(),height=offsets[cell.Row+cell.RowSpan]-offsets[cell.Row];
-            boxes.Add(new(table.Id,cell.Id,cell.Source,cx,cy,width,height,EffectiveBorders(table,cell),cell.Fill){IsRepeated=repeated,MergedSourceIds=table.Cells.Where(c=>c.MergeOrigin==cell.Id).Select(c=>c.Id).ToArray()});
+            boxes.Add(new(table.Id,cell.Id,cell.Source,cx,cy,width,height,EffectiveBorders(table,cell),cell.Fill){IsRepeated=repeated,MergedSourceIds=table.Cells.Where(c=>c.MergeOrigin==cell.Id).Select(c=>c.Id).ToImmutableArray()});
             float extra=height-data.Height;float cursor=cy+cell.Margins.Top+(cell.VerticalAlignment=="bottom"?extra:cell.VerticalAlignment=="center"?extra/2:0),after=0;
             foreach(var p in data.Paragraphs)
             {
                 cursor+=Math.Max(after,p.Paragraph.Properties.Before);int index=0;
                 foreach(var line in p.Lines)
                 {
+                    if(line.Native is not null)
+                    {
+                        lines.Add(PositionNative(line,p.Paragraph,cx+cell.Margins.Left,cursor,cx,cy,cx+width,cy+height,cell.Id,repeated));
+                        cursor+=line.Height;index++;
+                        continue;
+                    }
                     float left=cx+cell.Margins.Left+p.Paragraph.Properties.Left+(index==0&&p.Paragraph.List is null?p.Paragraph.Properties.FirstLine:0),available=cx+width-cell.Margins.Right-p.Paragraph.Properties.Right-left;
                     float shift=p.Paragraph.Properties.Alignment switch{"center"=>(available-line.Width)/2,"right"=>available-line.Width,_=>0};float baseline=cursor+line.Ascent;
-                    var fragments=line.Fragments.Select(f=>f with{X=f.X+left+shift}).ToArray();
+                    var fragments=Justify(line,available,p.Paragraph.Properties.Alignment=="both"&&index<p.Lines.Count-1,fonts).Select(f=>f with{X=f.X+left+shift}).ToArray();
                     foreach(var f in fragments)
                     {fonts.Get(f.Style).MeasureText(f.Text,out var ink);if(f.X+ink.Left<cx-.01f||f.X+ink.Right>cx+width+.01f||baseline+ink.Top<cy-.01f||baseline+ink.Bottom>cy+height+.01f)throw new InvalidDataException("LAYOUT_CELL_GLYPH_OUTSIDE");}
                     var images=line.Images.Select(i=>i with{X=i.X+left+shift,Y=baseline-i.Image.Height,IsRepeated=repeated}).ToArray();
@@ -92,7 +103,7 @@ public static partial class Composer
     static void DrawCells(SKCanvas canvas,ComposedPage page)
     {
         using var paint=new SKPaint{IsAntialias=true};
-        foreach(var cell in page.Cells)
+        foreach(var cell in page.DisplayCells)
         {
             if(cell.Fill is {Length:6}){paint.Style=SKPaintStyle.Fill;paint.Color=SKColor.Parse("#"+cell.Fill);canvas.DrawRect(cell.X,cell.Y,cell.Width,cell.Height,paint);}
         }
@@ -100,10 +111,20 @@ public static partial class Composer
     static void DrawCellBorders(SKCanvas canvas,ComposedPage page)
     {
         using var paint=new SKPaint{IsAntialias=true,Style=SKPaintStyle.Stroke};
-        foreach(var c in page.Cells)
+        foreach(var c in page.DisplayCells)
         {
             void Line(LayoutBorder? border,float x1,float y1,float x2,float y2)
-            {if(border is not {Width:>0})return;paint.Color=SKColor.Parse("#"+border.Color);paint.StrokeWidth=border.Width;canvas.DrawLine(x1,y1,x2,y2,paint);}
+            {
+                if(border is not {Width:>0})return;paint.Color=SKColor.Parse("#"+border.Color);paint.StrokeWidth=border.Width;
+                using var effect=border.Style is "dotted" or "dashed"?SKPathEffect.CreateDash(border.Style=="dotted"?[border.Width,border.Width*2]:[border.Width*4,border.Width*2],0):null;paint.PathEffect=effect;
+                if(border.Style=="double")
+                {
+                    paint.StrokeWidth=border.Width/3;float dx=y1==y2?0:border.Width/3,dy=y1==y2?border.Width/3:0;
+                    canvas.DrawLine(x1-dx,y1-dy,x2-dx,y2-dy,paint);canvas.DrawLine(x1+dx,y1+dy,x2+dx,y2+dy,paint);
+                }
+                else canvas.DrawLine(x1,y1,x2,y2,paint);
+                paint.PathEffect=null;
+            }
             Line(c.Borders.Top,c.X,c.Y,c.X+c.Width,c.Y);Line(c.Borders.Bottom,c.X,c.Y+c.Height,c.X+c.Width,c.Y+c.Height);Line(c.Borders.Left,c.X,c.Y,c.X,c.Y+c.Height);Line(c.Borders.Right,c.X+c.Width,c.Y,c.X+c.Width,c.Y+c.Height);
         }
     }

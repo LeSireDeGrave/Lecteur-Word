@@ -56,3 +56,67 @@ Cette inclusion est une exception explicite à l'exclusion des images privées e
 ## Fixtures LAYOUT-001B
 
 `tests/Viewer.Targeted/StructureCases.cs` génère les témoins de listes, tabulations, tableaux et petites images PNG (Skia déjà présent). Le corpus ajouté par le propriétaire dans `exemples/` est copié uniquement vers la qualification locale ignorée ; aucun DOCX Internet n’est ajouté aux sources ou redistribué. Le témoin de tableau isolé copie la première sous-arborescence de tableau du Guide dans une fixture privée distincte avec un contexte de recette déclaré ; il ne prétend pas reproduire le document entier. Les originaux sont contrôlés par SHA-256.
+
+## Fixtures LAYOUT-001C
+
+`tests/Viewer.Targeted/CompatibilityCases.cs` génère les paragraphes, styles, tableaux et JPEG témoins. Le petit JPEG bicolore provient d’un bitmap synthétique créé en mémoire avec Skia déjà présent. Les en-têtes EXIF de test sont construits pour les huit orientations et les deux ordres d’octets TIFF ; les variantes hostiles sont dérivées de ces octets synthétiques. Aucun code OfficeCLI/ElixirOffice, image privée ou nouveau corpus tiers n’est copié dans ces sources. Les noms des documents, diagnostics, empreintes, images et mesures des onze copies réelles restent exclusivement dans la qualification locale ignorée.
+
+## Reproduction RENDER-001
+
+`tests/Viewer.Targeted/RenderCases.cs` construit une fixture DrawingML minimale pour distinguer les valeurs de géométrie du texte du dessin. Elle vérifie que les nombres du vrai texte et les contenus d’espaces de noms inconnus restent consultables, tandis que les paramètres techniques gardent leur inventaire et leur provenance. Le cas réel exige une copie explicitement désignée par `LECTEUR_WORD_QA_INPUT`. Les binaires, sources externes examinées, prototypes, copies privées, mesures et captures de comparaison restent sous `.local/qualification/render-001`, sans intégration de code externe au produit.
+
+## Vérification ENGINE-ABANDON-001
+
+`tests/Viewer.Targeted/IndependentEngineCases.cs` génère un DOCX minimal propre au lecteur. Il force les anciens réglages expérimentaux pour vérifier leur absence d'effet, contrôle l'absence d'API et de référence d'assembly au travailleur écarté, puis vérifie une page composée par le moteur C# et l'intégrité de l'original. Aucun code de composition d'un moteur tiers n'est utilisé dans ce test.
+
+Le cas distinct `independent-corpus` exige deux chemins explicites : manifeste privé des onze copies figées et matrice de référence C# qualifiée. Il contrôle les empreintes, l'inspection, la lecture disponible et la pagination C# de référence, sans découvrir ou ajouter de nouveaux documents personnels présents dans `exemples/`.
+
+## Modèle et témoins SEMANTIC-001
+
+`SemanticCases.cs` construit des DOCX synthétiques pour vérifier les sources UTF-16, les références OPC, la sélection d’une branche de compatibilité, l’héritage, les fusions et le résultat de champs imbriqués. `SemanticCorpusCases.cs` exige le manifeste privé des onze copies figées et rapproche les identités, propriétés et textes du modèle avec l’inventaire DocxCore. L’implémentation s’appuie sur les spécifications publiques OOXML citées dans le dossier de modèle, et les résultats restent locaux. [Contrat sémantique et sources](modele-semantique.md).
+
+## Témoins TEXT-001
+
+`TypographyCases.cs` génère des DOCX synthétiques pour la cascade, les langues et scripts, les contrôles, le shaping, les faces et les limites. Le PNG de test est dessiné localement par Skia à partir des glyphes positionnés. `TypographyCorpusCases.cs` s’appuie sur le manifeste privé des onze copies et conserve localement les matrices, mesures, captures et empreintes. Le nouveau code dérive des spécifications publiques OOXML et des API documentées d’ICU, HarfBuzzSharp et SkiaSharp. [Contrat typographique et dépendances](typographie-text-001.md).
+
+## Témoins UX-OPUS-001
+
+`OpusUxCases.cs` génère les témoins de règle, de marques source, de sommaire, de copie, de catégories et de localisation. La recette réelle désigne uniquement le manifeste privé des onze copies. Les captures avant/après, les matrices et les journaux restent dans la qualification locale ignorée. Les contrôles et géométries d’icônes sont implémentés en Avalonia à partir des principes visuels de la capture fournie par le propriétaire. Le code, les actifs et les documents d’OpusNova restent dans leur projet.
+
+La reprise UX-OPUS-001 complète les mêmes témoins avec une cellule placée, une cellule en lecture continue et un caractère privé synthétique hors BMP. Les tests lient les marques aux identifiants et plages UTF‑16 de l’inspection. Les anciennes captures natives servent de comparaison pour le build installé à l’identique. Les nouveaux résultats restent dans le dossier privé de qualification.
+
+## Témoins UX-THEME-002
+
+`ThemeCases.cs` crée un DOCX synthétique avec un run coloré et des fichiers JSON synthétiques de préférences. Les tests comparent le raster, vérifient les valeurs Unicode et les états d’interface et calculent les contrastes à partir des couleurs résolues. Les redémarrages de recette utilisent un dossier XDG privé. Les captures natives du corpus figé et les préférences de test restent locales. Le dessin de l’icône de palette est propre à Lecteur Word. [Méthode de contraste du W3C](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).
+
+## Témoins PAGE-001A
+
+`LineCases.cs` génère des DOCX synthétiques pour contrôler les plages OOXML, les coupures Unicode et HarfBuzz, le bidi de ligne, les taquets, les champs stockés, la justification, les glyphes dessinés, l’annulation et les budgets. `LineCorpusCases.cs` utilise les onze copies existantes à partir du manifeste privé explicite. Les mesures, profils de mémoire, rasters et résultats restent dans la qualification locale ignorée. L’implémentation s’appuie sur les données TEXT-001 et les API publiques existantes. [Contrat de composition des lignes](composition-lignes-page-001a.md).
+
+## Témoins PAGE-001B
+
+`PageCases.cs` génère les témoins de sections, contraintes verticales, cellules fusionnées, répétitions et images inline. Les PNG et JPEG d’entrée proviennent de bitmaps synthétiques construits avec Skia déjà présent. `PageCorpusCases.cs` compare le profil natif et le profil C# qualifié sur les onze copies du manifeste privé. Les chronométrages, relevés de mémoire, rasters et captures Avalonia restent dans la qualification locale ignorée. [Composition des pages](composition-pages-page-001b.md).
+
+## Témoins PAGE-001C
+
+`TablePageCases.cs` génère des tableaux synthétiques pour exercer les minima, les préférences, les pourcentages, le débordement, la cascade, la grille, l’annulation et une image inline créée avec Skia. `TableAuditCases.cs` conserve avant/après, dans la qualification locale ignorée, les largeurs, sources, styles, refus et mesures des onze copies contrôlées. Les documents du corpus et leurs captures restent locaux. [Profil de composition des tableaux](composition-tableaux-page-001c.md).
+
+## Témoins PAGE-001D
+
+`PageListCases.cs` génère les définitions de listes et les chaînes de paragraphes synthétiques. Il contrôle les compteurs, les sources des niveaux, le raster des marques, les coupures imposées et la solidarité avec un tableau. `TableAuditCases.cs` relève aussi les libellés et leur mesure dans les régions analysées après un blocage de pagination. Les manifestes du corpus, les captures et les résultats restent dans la qualification locale ignorée. [Règle OOXML keepNext](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.keepnext?view=openxml-3.0.1) · [Règles Word de redémarrage](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/140a2cd9-2f26-456d-9760-ae6ecef4e8b5).
+
+## Témoins FONTS-LEGACY-001
+
+`LegacySymbolCases.cs` exerce une table `cmap` symbolique synthétique dans une dérivation mémoire de DejaVu Serif. Le corpus étend l’audit des niveaux de liste aux déclarations `w:sym` et aux caractères privés du texte. Les correspondances de rendu et la politique de faces sont documentées avec le profil typographique. [Symboles historiques Word](polices-et-typographie.md#symboles-historiques-word).
+
+## Témoins PAGE-STORIES-001
+
+`PageStoryCases.cs` construit les parties OPC et les histoires synthétiques. Leur image est générée avec Skia. Les témoins vérifient la cascade de styles, les variantes, la numérotation, les champs stockés, les marges, les quotas et la navigation headless. Les comparaisons des onze copies, les localisations OOXML et les rasters du Guide restent dans la qualification locale ignorée. [Contrat des histoires de page](composition-pages-page-001b.md#histoires-de-page).
+
+## Témoin PAGE-STYLES-002
+
+`PageStyleCases.cs` génère les deux collections, le thème, les réglages et l’en-tête synthétiques. Il vérifie l’origine des déclarations, leur effet sur la mesure, le placement et le dessin et les refus PDF, ODT et EPUB avant écriture. La matrice préalable, les copies et les mesures restent dans la qualification locale ignorée. [Contrat des collections de styles](composition-pages-page-001b.md#collections-de-styles).
+
+Le cas ciblé `exchange-quality` crée un DOCX synthétique de deux paragraphes et produit trois exports du profil texte à partir de ce témoin. Les fichiers produits et les résultats des validateurs restent dans la qualification locale ignorée. Le témoin à deux corps dans `DocxCore.Targeted` génère un paquet OOXML syntaxiquement lisible dont la structure de document est ambiguë.
+
+`PageDependencyCases.cs` construit la collection bibliographique, le magasin, les champs et les liaisons avec des valeurs synthétiques. Il contrôle le contenu éditorial, le raster et les refus de composition et d’export. Les sources bibliographiques du corpus privé, l’audit OPC et les fichiers produits restent dans la qualification locale ignorée.

@@ -68,8 +68,8 @@ public static class ReadableReader
         readonly InspectionResult input;
         readonly CancellationToken token;
         readonly Stopwatch watch = Stopwatch.StartNew();
-        readonly Dictionary<string, InventoryNode> nodes;
-        readonly ILookup<string, InventoryNode> children;
+        readonly IReadOnlyDictionary<string, InventoryNode> nodes;
+        readonly SemanticIndex index;
         readonly Dictionary<string, InventoryNode> styles;
         readonly Dictionary<string, TextStyle> styleCache = new(StringComparer.Ordinal);
         readonly List<FlowIssue> issues = [];
@@ -86,8 +86,8 @@ public static class ReadableReader
         {
             this.input = input; this.token = token;
             if (input.Manifest.Nodes.Count > 150_000) throw new ReadLimitException();
-            nodes = input.Manifest.Nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
-            children = input.Manifest.Nodes.Where(n => n.ParentId is not null).ToLookup(n => n.ParentId!);
+            index = new(input.Manifest, Check);
+            nodes = index.Nodes;
             styles = input.Manifest.Nodes.Where(n => n.Kind == "style").GroupBy(n => Attr(n, "styleId"), StringComparer.Ordinal)
                 .Where(g => g.Key.Length > 0).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
         }
@@ -98,11 +98,11 @@ public static class ReadableReader
         }
         static bool Is(InventoryNode n, string local) => n.Name == "{" + W + "}" + local;
         static string Attr(InventoryNode n, string local) => n.Attributes.GetValueOrDefault("{" + W + "}" + local) ?? "";
-        InventoryNode? Child(InventoryNode n, string local) => children[n.Id].FirstOrDefault(c => Is(c, local));
+        InventoryNode? Child(InventoryNode n, string local) => index.Children(n).FirstOrDefault(c => Is(c, local));
         IEnumerable<InventoryNode> Descendants(InventoryNode n, int depth = 0)
         {
             Check(); if (depth > 64) throw new ReadLimitException();
-            foreach (var child in children[n.Id]) { yield return child; foreach (var deeper in Descendants(child, depth + 1)) yield return deeper; }
+            foreach (var child in index.Children(n)) { yield return child; foreach (var deeper in Descendants(child, depth + 1)) yield return deeper; }
         }
         bool ImportantProperties(InventoryNode n) => Descendants(n).Any(c => c.Kind == "revision" || c.Revision != "unchanged" || c.Name.EndsWith("Change", StringComparison.Ordinal) || c.Kind == "textValue" && !string.IsNullOrWhiteSpace(c.Text));
         void Issue(string code, InventoryNode? n, string message)
@@ -114,12 +114,12 @@ public static class ReadableReader
         public ReadableDocument Build()
         {
             Check();
-            main = input.Manifest.Relationships.FirstOrDefault(r => r.SourcePart == "/" && r.Type == R + "/officeDocument")?.ResolvedPart ?? "";
-            var body = input.Manifest.Nodes.FirstOrDefault(n => n.Source.PartUri == main && Is(n, "body"));
+            main = index.Main;
+            var body = index.Body;
             if (body is null) return new(input.Manifest.SourceSha256 ?? "", false, [], [new("READ_MAIN_MISSING", null, "Corps documentaire absent.", true)], [], []);
             var docDefaults = input.Manifest.Nodes.FirstOrDefault(n => Is(n, "docDefaults"));
             if (docDefaults is not null) defaults = ParseProperties(docDefaults, true);
-            var blocks = children[body.Id].Select(n => Convert(n, defaults, n.Id, 0)).Where(b => b.Kind != "metadata").ToList();
+            var blocks = index.Children(body).Select(n => Convert(n, defaults, n.Id, 0)).Where(b => b.Kind != "metadata").ToList();
             // Running stories remain visibly separated from the body; this does not place them on pages.
             foreach (var relation in input.Manifest.Relationships.Where(r => r.SourcePart == main && r.Mode == "Internal" &&
                 (r.Type == R + "/header" || r.Type == R + "/footer")).DistinctBy(r => r.ResolvedPart))
@@ -132,7 +132,7 @@ public static class ReadableReader
             }
             Issue("READ_APPROXIMATE", body, "Lecture simplifiée continue : aucune pagination, fidélité Word ou qualification d’export déduite.");
             Check();var document=new ReadableDocument(input.Manifest.SourceSha256 ?? "", true, blocks, issues, outline, bookmarks) { Resources = checkedImages };
-            return document with {Presentation=ReadablePresentation.Create(input,document,token)};
+            return document with {Presentation=ReadablePresentation.Create(input,document,index,token)};
         }
         ReadableBlock Make(InventoryNode n, string kind, string text, IReadOnlyList<ReadableBlock> nested, TextStyle style)
         {
@@ -145,7 +145,7 @@ public static class ReadableReader
             };
         }
         List<ReadableBlock> ConvertChildren(InventoryNode n, TextStyle style, string context, int depth) =>
-            children[n.Id].Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
+            index.Children(n).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
         ReadableBlock Convert(InventoryNode n, TextStyle inherited, string context, int depth)
         {
             Check(); if (depth > 64) throw new ReadLimitException();
@@ -155,13 +155,26 @@ public static class ReadableReader
                     return Make(n, "metadata", "", [], inherited);
                 return Make(n, "text", n.Text ?? "", [], inherited);
             }
+            if (index.UnsupportedMustUnderstand(n))
+                Issue("READ_MUST_UNDERSTAND", n, "Espace de noms MustUnderstand hors profil. Présentation approximative et source conservée.");
+            if (SemanticIndex.IsAlternative(n))
+            {
+                var branch = index.SelectedBranch(n);
+                if (branch is not null && index.UnsupportedMustUnderstand(branch))
+                    Issue("READ_MUST_UNDERSTAND", branch, "Branche avec espace de noms MustUnderstand hors profil.");
+                Issue(branch is null ? "READ_ALTERNATIVE_UNRESOLVED" : "READ_ALTERNATIVE_SELECTED", n,
+                    branch is null ? "Aucune branche compatible. Alternatives conservées dans l’inventaire."
+                        : "Une branche de compatibilité est présentée. Les autres restent dans l’inventaire.");
+                return Make(n, "placeholder", "", branch is null ? [] : ConvertChildren(branch, inherited, context, depth + 1), inherited)
+                    with { Label = branch is null ? "Alternative non représentée" : "Alternative de compatibilité" };
+            }
             if (Is(n, "p"))
             {
                 var properties = Child(n, "pPr");
                 string id = properties is null ? "" : Child(properties, "pStyle") is {} pStyle ? Attr(pStyle, "val") : "";
                 var style = inherited.Over(ResolveStyle(id, new HashSet<string>(StringComparer.Ordinal)));
                 if (properties is not null) style = style.Over(ParseProperties(properties));
-                var contentList = children[n.Id].Where(c => !Is(c, "pPr")).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
+                var contentList = index.Children(n).Where(c => !Is(c, "pPr")).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
                 if (properties is not null)
                 {
                     Issue("READ_FORMATTING_APPROXIMATE", properties, "Propriétés de paragraphe interprétées partiellement ; mise en forme Word non garantie.");
@@ -186,14 +199,14 @@ public static class ReadableReader
                 var properties = Child(n, "rPr"); string id = properties is null ? "" : Child(properties, "rStyle") is {} rs ? Attr(rs, "val") : "";
                 var style = inherited.Over(ResolveStyle(id, new HashSet<string>(StringComparer.Ordinal)));
                 if (properties is not null) { style = style.Over(ParseProperties(properties));Issue("READ_FORMATTING_APPROXIMATE",properties,"Propriétés de caractères interprétées partiellement ; styles Word non garantis."); }
-                var runContent = children[n.Id].Where(c => !Is(c, "rPr")).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
+                var runContent = index.Children(n).Where(c => !Is(c, "rPr")).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
                 if(properties is not null && ImportantProperties(properties))runContent.Add(Make(properties,"placeholder","",ConvertChildren(properties,style,context,depth+1),style) with {Label="Propriétés de caractères avec révision ou contenu"});
                 var nested=runContent.ToArray();
                 if (style.Hidden == true) Issue("READ_HIDDEN_TEXT", n, "Texte masqué présenté avec son état ; il n’est pas supprimé.");
                 var block = Make(n, "run", "", nested, style); return block with { Text = block.PlainText };
             }
             if (Is(n, "t") || Is(n, "delText"))
-                return Make(n, "text", string.Concat(children[n.Id].Where(c => c.Kind == "textValue").Select(c => c.Text)), [], inherited);
+                return Make(n, "text", string.Concat(index.Children(n).Where(c => c.Kind == "textValue").Select(c => c.Text)), [], inherited);
             if (Is(n, "tab")) return Make(n, "text", "\t", [], inherited);
             if (Is(n, "br") || Is(n, "cr"))
             {
@@ -214,13 +227,13 @@ public static class ReadableReader
                 var properties = Child(n, "tcPr"); var span = properties is null ? null : Child(properties, "gridSpan"); var merge = properties is null ? null : Child(properties, "vMerge");
                 int columns = span is not null && int.TryParse(Attr(span, "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? Math.Clamp(value, 1, 64) : 1;
                 if (columns > 1 || merge is not null) Issue("READ_TABLE_MERGE", n, "Fusion source repérée ; géométrie de fusion simplifiée et explicitée.");
-                return Make(n, "cell", "", children[n.Id].Where(c => !Is(c, "tcPr") || ImportantProperties(c)).Select(c => Convert(c, inherited, context, depth + 1)).ToArray(), inherited) with
+                return Make(n, "cell", "", index.Children(n).Where(c => !Is(c, "tcPr") || ImportantProperties(c)).Select(c => Convert(c, inherited, context, depth + 1)).ToArray(), inherited) with
                 { ColumnSpan = columns, VerticalMerge = merge is null ? null : Attr(merge, "val") is { Length: > 0 } kind ? kind : "continue" };
             }
             if (Is(n, "hyperlink"))
             {
                 string id = n.Attributes.GetValueOrDefault("{" + R + "}id") ?? "";
-                string? target = Attr(n, "anchor") is { Length: > 0 } anchor ? "#" + anchor : input.Manifest.Relationships.FirstOrDefault(r => r.SourcePart == n.Source.PartUri && r.Id == id)?.Target;
+                string? target = Attr(n, "anchor") is { Length: > 0 } anchor ? "#" + anchor : index.Relation(n.Source.PartUri, id)?.Target;
                 Issue("READ_LINK_INERT", n, "Lien conservé pour lecture, sans ouverture ni accès réseau automatique.");
                 var block = Make(n, "link", "", ConvertChildren(n, inherited, context, depth), inherited) with { LinkTarget = target };
                 return block with { Text = block.PlainText };
@@ -269,8 +282,8 @@ public static class ReadableReader
         {
             string id = Attr(n, "id"), kind = Is(n, "footnoteReference") ? "footnote" : "endnote";
             Issue("READ_NOTE_INLINE", n, "Note conservée près de son appel ; placement et numérotation Word non reproduits.");
-            string? part = input.Manifest.Relationships.FirstOrDefault(r => r.SourcePart == main && r.Type == R + "/" + (kind == "footnote" ? "footnotes" : "endnotes"))?.ResolvedPart;
-            var definition = input.Manifest.Nodes.FirstOrDefault(d => d.Source.PartUri == part && Is(d, kind) && Attr(d, "id") == id);
+            string? part = index.Related(n.Source.PartUri, kind + "s")?.ResolvedPart;
+            var definition = index.Definition(part, kind, id);
             var nested = new List<ReadableBlock>();string key = part + ":" + id;
             if (definition is not null && noteStack.Add(key))
             { noteExpansions++; nested.AddRange(ConvertChildren(definition, style, context, depth)); noteStack.Remove(key); }
@@ -283,7 +296,7 @@ public static class ReadableReader
             foreach(var reference in all.Where(d=>d.Name.EndsWith("}blip",StringComparison.Ordinal)||d.Name.EndsWith("}imagedata",StringComparison.Ordinal)||d.Name.EndsWith("}svgBlip",StringComparison.Ordinal)))
             {
                 string? id=reference.Attributes.GetValueOrDefault("{"+R+"}embed")??reference.Attributes.GetValueOrDefault("{"+R+"}link")??reference.Attributes.GetValueOrDefault("{"+R+"}id");
-                var relation=input.Manifest.Relationships.FirstOrDefault(r=>r.SourcePart==n.Source.PartUri&&r.Id==id);
+                var relation=id is null ? null : index.Relation(n.Source.PartUri, id);
                 var media=input.Manifest.Media.FirstOrDefault(m=>m.PartUri==relation?.ResolvedPart);string? resource=null;
                 if(relation?.Mode=="External")Issue("READ_EXTERNAL_IMAGE",reference,"Image liée externe non chargée.");
                 else if(media is not null&&input.SafeMedia.TryGetValue(media.Id,out var bytes))
@@ -303,8 +316,14 @@ public static class ReadableReader
             foreach(var paragraph in paragraphRoots)content.Add(Convert(paragraph,style,context,depth+1));
             foreach(var text in all.Where(d=>d.Kind=="textValue"&&!string.IsNullOrWhiteSpace(d.Text)&&!AncestorsUntil(d,n).Any(a=>Is(a,"p"))))
             {
-                if(text.ParentId is {} parent&&nodes.TryGetValue(parent,out var owner)&&!owner.Name.EndsWith("}posOffset",StringComparison.Ordinal))
-                    content.Add(Make(text,"placeholder",text.Text??"",[],style) with {Label="Texte du dessin — représentation simplifiée"});
+                if(text.ParentId is {} parent&&nodes.TryGetValue(parent,out var owner))
+                {
+                    if(owner.Name is "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}posOffset" or
+                        "{http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing}pctWidth" or
+                        "{http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing}pctHeight")
+                        Issue("READ_DRAWING_GEOMETRY_METADATA",owner,"Paramètre de géométrie DrawingML conservé dans l’inventaire ; il ne constitue pas du texte du document.");
+                    else content.Add(Make(text,"placeholder",text.Text??"",[],style) with {Label="Texte du dessin — représentation simplifiée"});
+                }
             }
             if(content.Count==0)content.Add(Make(n,"image","",[],style) with {Id=n.Id+"-marker",Label="[Dessin ou image non représenté]"});
             Issue("READ_IMAGE_APPROXIMATE",n,"Dessin présenté dans le flux ; ancrage, habillage et géométrie Word non reproduits.");
@@ -330,7 +349,7 @@ public static class ReadableReader
         TextStyle ParseProperties(InventoryNode n, bool recursive = false)
         {
             TextStyle style = new();
-            foreach (var p in recursive ? Descendants(n) : children[n.Id])
+            foreach (var p in recursive ? Descendants(n) : index.Children(n))
             {
                 string value = Attr(p, "val"); bool toggle = value is not ("0" or "false" or "off");
                 if (Is(p, "b")) style = style with { Bold = toggle };
@@ -362,12 +381,12 @@ public static class ReadableReader
             var instance = input.Manifest.Nodes.FirstOrDefault(n => Is(n, "num") && Attr(n, "numId") == num);
             string abstractId = instance is not null && Child(instance, "abstractNumId") is {} a ? Attr(a, "val") : "";
             var definition = input.Manifest.Nodes.FirstOrDefault(n => Is(n, "abstractNum") && Attr(n, "abstractNumId") == abstractId);
-            var lvl = definition is null ? null : children[definition.Id].FirstOrDefault(n => Is(n, "lvl") && Attr(n, "ilvl") == level.ToString(CultureInfo.InvariantCulture));
+            var lvl = definition is null ? null : index.Children(definition).FirstOrDefault(n => Is(n, "lvl") && Attr(n, "ilvl") == level.ToString(CultureInfo.InvariantCulture));
             string format = lvl is not null && Child(lvl, "numFmt") is {} fmt ? Attr(fmt, "val") : "bullet";
             int start = lvl is not null && Child(lvl, "start") is {} st && int.TryParse(Attr(st, "val"), out int initial) ? Math.Clamp(initial, 0, 1_000_000) : 1;
             if (instance is not null)
             {
-                var over = children[instance.Id].FirstOrDefault(n => Is(n, "lvlOverride") && Attr(n, "ilvl") == level.ToString(CultureInfo.InvariantCulture));
+                var over = index.Children(instance).FirstOrDefault(n => Is(n, "lvlOverride") && Attr(n, "ilvl") == level.ToString(CultureInfo.InvariantCulture));
                 if (over is not null && Child(over, "startOverride") is {} restart && int.TryParse(Attr(restart, "val"), out int first)) start = Math.Clamp(first, 0, 1_000_000);
             }
             int current = listCounters.TryGetValue((num, level), out int previous) ? Math.Min(previous + 1, 1_000_000) : start;

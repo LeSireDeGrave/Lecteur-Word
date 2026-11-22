@@ -1,0 +1,35 @@
+# PAGE-001C — Géométrie et styles des tableaux
+
+Le profil natif de DocxFlow utilise la lecture de grilles LAYOUT-001B/C, le solveur partagé et le placement PAGE-001B. La typographie et l’assemblage de lignes réutilisent TEXT-001 et PAGE-001A. Avalonia conserve la voie expérimentale et adopte une composition complète selon le contrat PAGE-001B.
+
+## Résolution des largeurs
+
+| Information | Application |
+|---|---|
+| Région | Le corps de la section fournit la largeur de référence. Le retrait signé détermine l’origine d’un tableau gauche. Le centrage et l’alignement droit restent ceux du placement partagé. |
+| `tblW` | Une valeur en `dxa` est convertie de twips en points. Les pourcentages, en cinquantièmes de pour cent ou avec le signe `%`, se rapportent à la région. `auto` laisse le solveur déterminer la préférence. |
+| `tcW` | Une préférence absolue ou relative à la largeur de la table. Les prescriptions concurrentes sont conservées avec l’identité OOXML de la cellule. |
+| Grille fixe | Une grille concordante avec `tblW` fixe les colonnes. Sans préférence absolue de table, les cellules peuvent faire croître la grille déclarée. Les colonnes manquantes utilisent la topologie et les préférences déclarées si la résolution est déterminable. Un ajustement proportionnel éventuel vise la largeur déclarée de la table. Les limites de la région ne déclenchent pas cet ajustement. |
+| Zones omises | `gridBefore` et `gridAfter` fixent les emplacements vides. Les largeurs directes `wBefore` et `wAfter` en twips sont acceptées lorsque la somme des colonnes omises concorde avec la grille source. Les autres valeurs restent diagnostiquées. |
+| AutoFit | Les avances HarfBuzz, coupures de PAGE-001A, retraits, marges, images et réserves de bordure donnent les minima par cellule. Les contraintes portent sur chaque intervalle de colonnes occupé par une cellule. Une chaîne de bornes sur les préfixes de colonnes évite de compter deux fois les minima de cellules fusionnées qui se recouvrent. Le solveur choisit une largeur dans le corps, puis distribue le disponible selon les préférences. Les préférences relatives utilisent la largeur effectivement retenue. |
+| Débordement | Le profil peut conserver une grille fixe au-delà de la marge si la table et ses bordures tiennent sur le papier. Si une cellule ne peut contenir son minimum dans une grille fixe, ou si les minima d’AutoFit dépassent le corps, le tableau garde son diagnostic et le contenu reste accessible. |
+
+Une résolution de grille ne suffit pas à établir la pagination. Le dossier conserve séparément les largeurs choisies, les minima disponibles, les préférences et leurs sources, les refus de composition et les cellules atteintes par le placement. Un minimum inconnu peut laisser une grille fixe déterminée, avec un blocage de publication pour le contenu de la cellule. [Largeur de table OOXML](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tablewidth?view=openxml-3.0.1) · [Largeur de cellule OOXML](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tablecellwidth?view=openxml-3.0.1) · [Algorithmes de grille fixe et AutoFit](https://download.microsoft.com/download/e/1/4/e14fb96f-83b8-4a2a-84db-7fa8acbe061a/Office%20Open%20XML%20Part%203%20-%20Primer.pdf).
+
+## Cascade des styles
+
+La sélection part des positions de rangée et de colonne du modèle sémantique. `tblLook`, les tailles de bande et les masques `cnfStyle` des rangées, cellules et paragraphes déterminent les régions actives. Les coins automatiques exigent les deux bords correspondants. La cascade native part des styles de table généraux hérités, applique la table entière, les bandes horizontales, les bandes verticales, les colonnes de bord, les rangées de bord puis les coins. Pour chaque propriété prise en charge, l’ordre des déclarations est conservé. Les propriétés directes du niveau concerné viennent ensuite. Une valeur de gras ou d’italique de style de table remplace la précédente selon le profil Word documenté. [Priorité des styles conditionnels](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/f7f85a73-5f60-4f7e-a725-4f1f06198388) · [Écarts Word, §17.7.6](https://officeprotocoldoc.z19.web.core.windows.net/files/MS-OI29500/%5BMS-OI29500%5D-250218.pdf).
+
+Les sélecteurs sont résolus avant TEXT-001. Les mêmes déclarations alimentent les propriétés typographiques, les retraits des lignes et la géométrie des cellules. Les fontes, les couleurs de thème avec teinte ou ombre, les espacements, les bordures, les fonds, les marges internes et la hauteur de rangée du profil peuvent avoir une origine conditionnelle. Les propriétés d’un coin ou d’une colonne qui devraient modifier toute une rangée produisent un diagnostic. Les contradictions de bordures positives non arbitrées suivent le refus du placement partagé. [Effet de certaines propriétés conditionnelles sur la rangée](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/348cf5dd-492c-4e2b-9fe3-c4996f8c52e5).
+
+## Stabilisation et limites
+
+La grille fixe utilise au plus un ajustement de cible. AutoFit effectue des passes bornées sur les minima et les préférences, sans recherche oscillante. La largeur résolue est transmise une fois à chaque région de cellule. Le nouvel ensemble de lignes alimente ensuite le calcul de hauteur, les fusions et la répétition d’en-têtes. Les budgets existants s’appliquent à l’inspection, à la typographie, au calcul de régions et à la pagination. La sélection des styles est coopérative et bornée à 120 000 opérations ou 5 secondes. Le calcul d’une grille admet au plus 32 colonnes et 8 192 cellules, sous le délai de la phase des régions. Les largeurs, styles et métriques restent dans la session du document.
+
+Les tableaux imbriqués et flottants, la fragmentation interne de rangée, certains conflits de bordures, les masques appliqués sur des topologies ambiguës et les décorations hors profil nécessitent des traitements complémentaires. Les notes, champs dynamiques, en-têtes de page et transitions de section obéissent aux états de PAGE-001B. Une grille analysée ou une page candidate conserve le statut du corpus. [Contrat PAGE-001B](composition-pages-page-001b.md).
+
+## Lecture continue
+
+Avalonia peut afficher un tableau natif après un bloc qui interrompt la pagination. La lecture continue réutilise les lignes mesurées, les fusions, les hauteurs et la passe de dessin Skia de la composition paginée. Les en-têtes se répètent uniquement aux coupures physiques qualifiées. Le zoom multiplie les coordonnées en points par le facteur de conversion Avalonia. Une grille trop large pour la fenêtre reste accessible par défilement horizontal. Le défilement vertical est celui du document.
+
+La grille de secours conserve les cellules, leur contenu et les dimensions source disponibles. Les propriétés essentielles non résolues restent signalées dans le panneau Diagnostics. Un tableau affichable reste hors du profil actuel des exporteurs PDF, ODT et EPUB3. Le contrôle préalable refuse ces exports avec la source du tableau. Le DOCX est un format d’import.

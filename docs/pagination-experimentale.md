@@ -24,7 +24,7 @@ Budgets du profil : 50 000 nœuds d’inventaire, 500 000 caractères, 10 000 pa
 
 Les notes en bas de page/fin, en-têtes/pieds, champs, révisions, scripts et propriétés essentielles hors profil restent bloquants. L’extension LAYOUT-001B qualifie des listes, tabulations, tableaux à grille et images intégrées selon [sa matrice précise](composition-listes-tableaux-images.md). Les structures ou configurations restantes refusent le document paginé entier et conservent le mode simplifié.
 
-La justification, les colonnes multiples, les règles typographiques Word complètes, les effets de thème hors polices latines et les comportements de compatibilité Word ne sont pas reproduits. Les substitutions de police, métriques, retours et coupures peuvent différer de Word. Aucun rendu Microsoft Word de référence n’a été fourni pour les fixtures ; aucune équivalence générale n’est annoncée.
+La justification simple est étendue par [LAYOUT-001C](compatibilite-pagination.md). Les colonnes multiples, les règles typographiques Word complètes, les effets de thème hors polices latines et les comportements de compatibilité Word ne sont pas reproduits. Les substitutions de police, métriques, retours et coupures peuvent différer de Word. Aucun rendu Microsoft Word de référence n’a été fourni pour les fixtures ; aucune équivalence générale n’est annoncée.
 
 ## Viewer et exports
 

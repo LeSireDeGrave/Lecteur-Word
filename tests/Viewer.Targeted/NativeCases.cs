@@ -7,7 +7,6 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
-using Avalonia.Themes.Fluent;
 using Avalonia.VisualTree;
 using LecteurWord;
 
@@ -19,16 +18,19 @@ static class NativeCases
     public static bool Layout;
     public static bool Fonts;
     public static bool Structures;
-    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false)
+    public static bool Compatibility;
+    public static bool Opus;
+    public static bool Tables;
+    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false,bool compatibility=false,bool opus=false,bool tables=false)
     {
-        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;
+        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;Compatibility=compatibility;Opus=opus;Tables=tables;
         return AppBuilder.Configure<NativeQaApp>().UsePlatformDetect().UseSkia().WithInterFont().StartWithClassicDesktopLifetime([]);
     }
     public static void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
 }
 sealed class NativeQaApp:Application
 {
-    public override void Initialize()=>Styles.Add(new FluentTheme());
+    public override void Initialize()=>Styles.Add(ReaderApp.CreateTheme());
     public override void OnFrameworkInitializationCompleted()
     {
         if(ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -47,6 +49,9 @@ sealed class NativeQaApp:Application
     }
     static async Task Qualify(ReaderWindow window)
     {
+        if(NativeCases.Tables){await TableReadingCases.Native(window);return;}
+        if(NativeCases.Opus){await OpusUxCases.Native(window,NativeCases.Output);return;}
+        if(NativeCases.Compatibility){await CompatibilityCases.Native(window,NativeCases.Output);return;}
         if(NativeCases.Structures){await StructureCases.Native(window,NativeCases.Output);return;}
         if(NativeCases.Fonts){await FontCases.Native(window,NativeCases.Output);return;}
         if(NativeCases.Layout){await LayoutCases.Native(window,NativeCases.Output);return;}

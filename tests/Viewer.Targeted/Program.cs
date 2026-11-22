@@ -26,13 +26,49 @@ try
         case "export-odt": Exports(ExportFormat.Odt);break;
         case "export-epub": Exports(ExportFormat.Epub3);break;
         case "export-gates": ExportGates();break;
+        case "exchange-quality": ExchangeQuality();break;
         case "gui": Gui();break;
+        case "theme-preferences": ThemeCases.Preferences(root);break;
+        case "theme-gui": ThemeCases.Gui(root);break;
+        case "opus-ux-gui": OpusUxCases.Gui(root);break;
+        case "opus-ux-corpus": OpusUxCases.Corpus(root);break;
+        case "native-opus-ux": Assert(NativeCases.Run(root,opus:true)==0,"Native UX-OPUS-001 failed");break;
+        case "text-styles": TypographyCases.Styles(root);break;
+        case "text-shaping": TypographyCases.Shaping(root);break;
+        case "text-bounds": TypographyCases.Bounds(root);break;
+        case "text-corpus": TypographyCorpusCases.Corpus(root);break;
+        case "line-composer": LineCases.Run(root);break;
+        case "line-corpus": LineCorpusCases.Run(root);break;
+        case "page-geometry": PageCases.Geometry(root);break;
+        case "page-constraints": PageCases.Constraints(root);break;
+        case "page-numbering": PageCases.Numbering(root);break;
+        case "page-keep-next": PageCases.KeepNext(root);break;
+        case "page-structures": PageCases.Structures(root);break;
+        case "page-story-styles": PageCases.StoryStyles(root);break;
+        case "page-style-selection": PageCases.StyleSelection(root);break;
+        case "page-custom-xml": PageCases.CustomXml(root);break;
+        case "page-running-stories": PageCases.RunningStories(root);break;
+        case "page-gui": PageCases.Gui(root);break;
+        case "page-corpus": PageCorpusCases.Run(root);break;
+        case "page-corpus-gui": PageCorpusCases.Gui(root);break;
+        case "table-page-audit": TableAuditCases.Run(root);break;
+        case "table-reading-corpus": TableReadingCases.Corpus();break;
+        case "table-reading-native": Assert(NativeCases.Run(root,tables:true)==0,"Contrôle X11 des tableaux échoué");break;
+        case "table-page-widths": TablePageCases.Widths(root);break;
+        case "table-page-styles": TablePageCases.Styles(root);break;
+        case "table-page-image": TablePageCases.Image(root);break;
+        case "semantic-model": SemanticCases.Model(root);break;
+        case "semantic-corpus": SemanticCorpusCases.Run(root);break;
+        case "semantic-alternatives": SemanticCases.Alternatives(root);break;
+        case "independent-engine": IndependentEngineCases.Run(root);break;
+        case "independent-corpus": IndependentEngineCases.Corpus(root);break;
         case "gui-search-unicode": GuiSearchUnicode();break;
         case "about-metadata": AboutCases.Metadata();break;
         case "about-gui": AboutCases.Gui(root);break;
         case "about-no-git": AboutCases.Metadata();Assert(BuildReference.Current.Commit is null&&BuildReference.Current.HasLocalChanges is null,"Build captured Git despite missing executable");break;
         case "native-read-about": Assert(NativeCases.Run(root)==0,"Native GUI qualification failed");break;
         case "reading-model": ReadingCases.Model();break;
+        case "render-geometry": RenderCases.Geometry(root);break;
         case "reading-png": ReadingCases.PngGate();break;
         case "reading-real": ReadingCases.RealDocument();break;
         case "reading-gui": ReadingGuiCase.Run(root);break;
@@ -46,6 +82,7 @@ try
         case "fonts-resolution": FontCases.Resolution(root);break;
         case "fonts-pagination": FontCases.Pagination(root);break;
         case "fonts-embedded": FontCases.Embedded(root);break;
+        case "fonts-legacy-symbols": FontCases.LegacySymbolsCase(root);break;
         case "fonts-gui": FontCases.Gui(root);break;
         case "fonts-real": FontCases.Real(root);break;
         case "native-fonts": Assert(NativeCases.Run(root,fonts:true)==0,"Native fonts failed");break;
@@ -58,6 +95,16 @@ try
         case "structure-mixed": StructureCases.Mixed(root);break;
         case "structure-gates": StructureCases.Gates(root);break;
         case "structure-corpus": StructureCases.Corpus(root);break;
+        case "compat-corpus": CompatibilityCases.Corpus(root);break;
+        case "compat-paragraphs": CompatibilityCases.Paragraphs(root);break;
+        case "compat-spacing": CompatibilityCases.Spacing(root);break;
+        case "compat-tab-wrap": CompatibilityCases.TabWrap(root);break;
+        case "compat-autofit": CompatibilityCases.AutoFit(root);break;
+        case "compat-jpeg": CompatibilityCases.Images(root);break;
+        case "compat-jpeg-safety": CompatibilityCases.JpegSafety(root);break;
+        case "compat-table-styles": CompatibilityCases.TableStyles(root);break;
+        case "compat-boundaries": CompatibilityCases.Boundaries(root);break;
+        case "native-compat": Assert(NativeCases.Run(root,compatibility:true)==0,"Native compatibility qualification failed");break;
         case "structure-real-table": StructureCases.RealTable(root);break;
         case "structure-gui": StructureCases.Gui(root);break;
         case "native-structures": Assert(NativeCases.Run(root,structures:true)==0,"Native structures failed");break;
@@ -145,7 +192,15 @@ void ExportGates()
         string output=Path.Combine(root,f.ToString());try{DocumentExports.Export(styles,f,output);throw new InvalidOperationException("Unqualified export created");}catch(InvalidDataException){}
         Assert(!Directory.Exists(output),"Blocked export left a final output");
     }
-    var plain=Inspect(Fixtures.Paragraph("cancel"),"plain");using var cancel=new CancellationTokenSource();cancel.Cancel();
+    var plain=Inspect(Fixtures.Paragraph("cancel"),"plain");
+    var unknown=(ExportFormat)123;
+    var unknownOutput=Path.Combine(root,"format-inconnu");
+    Assert(DocumentExports.Preflight(plain,unknown) is {Allowed:false} refusal &&
+        refusal.Issues.Any(i=>i.Code=="EXPORT_FORMAT_UNSUPPORTED"),"Un format inconnu est annoncé disponible.");
+    try{DocumentExports.Export(plain,unknown,unknownOutput);throw new InvalidOperationException("Un format inconnu a été écrit.");}
+    catch(InvalidDataException e) when(e.Message=="EXPORT_PREFLIGHT_BLOCKED"){}
+    Assert(!Path.Exists(unknownOutput),"Le refus du format a laissé un répertoire.");
+    using var cancel=new CancellationTokenSource();cancel.Cancel();
     try{DocumentExports.Export(plain,ExportFormat.Odt,Path.Combine(root,"cancel"),cancel.Token);throw new InvalidOperationException("Cancellation ignored");}catch(OperationCanceledException){}
     Assert(!Directory.EnumerateDirectories(root,".lecteur-export-*").Any(),"Staging leak");
     var tiny=plain with {Manifest=plain.Manifest with {Budgets=new(){MaxOutputBytes=16}}};
@@ -155,6 +210,31 @@ void ExportGates()
     Assert(!Directory.Exists(Path.Combine(root,"quota-pdf")),"Over-budget PDF final output left behind");
     var literalCr=Inspect(Fixtures.Paragraph("literal&#13;CR"),"literal-cr");
     foreach(var f in Enum.GetValues<ExportFormat>())Assert(!DocumentExports.Preflight(literalCr,f).Allowed,"Unqualified XML control exported");
+}
+void ExchangeQuality()
+{
+    string[] expected=["Café — étude de la qualité.","Deuxième paragraphe et reprise de lecture."];
+    string source=Fixtures.Write(root,"temoin.docx",Fixtures.Parts(string.Concat(expected.Select(Fixtures.Paragraph))));
+    string hash=Sha(source);
+    using(var sdk=DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(source,false))
+    {
+        var validator=new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
+        Assert(!validator.Validate(sdk).Any(),"Le DOCX témoin échoue à la validation du schéma.");
+    }
+    var input=DocumentInspector.InspectDocument(source);
+    Assert(input.Manifest.InspectionComplete&&FlowReader.Read(input).Paragraphs.Select(p=>p.Text).SequenceEqual(expected),
+        "Le DOCX témoin ne restitue pas les paragraphes attendus.");
+    foreach(var format in Enum.GetValues<ExportFormat>())
+    {
+        string output=DocumentExports.Export(input,format,Path.Combine(root,format.ToString()));
+        string stamp=Sha(output);
+        var unsupported=DocumentInspector.InspectDocument(output);
+        Assert(!unsupported.Manifest.InspectionComplete&&!unsupported.Manifest.ImportReady&&
+            unsupported.Manifest.Status==Coverage.Refused&&Sha(output)==stamp,
+            "Un format d’entrée hors profil a été accepté ou modifié.");
+    }
+    Assert(Sha(source)==hash,"Le DOCX source a été modifié.");
+    File.WriteAllText(Path.Combine(root,"expected.json"),System.Text.Json.JsonSerializer.Serialize(expected));
 }
 void Gui()
 {

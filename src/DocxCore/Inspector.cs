@@ -209,9 +209,12 @@ public static class DocumentInspector
             using (var sdk = WordprocessingDocument.Open(sdkStream, false, new OpenSettings
             { AutoSave = false, MaxCharactersInPart = options.MaxPartBytes }))
             {
+                var mainPart = sdk.MainDocumentPart;
                 if (sdk.DocumentType != DocumentFormat.OpenXml.WordprocessingDocumentType.Document ||
-                    sdk.MainDocumentPart?.Document?.Body is null) throw new Refusal("SDK_MAIN_DOCUMENT_REFUSED");
-                if (sdk.MainDocumentPart.Uri.OriginalString != "/" + main) throw new Refusal("SDK_MAIN_PART_MISMATCH");
+                    mainPart?.Document is not {} document) throw new Refusal("SDK_MAIN_DOCUMENT_REFUSED");
+                if (document.Elements<DocumentFormat.OpenXml.Wordprocessing.Body>().Take(2).Count() != 1)
+                    throw new Refusal("DOCX_MAIN_BODY_COUNT");
+                if (mainPart.Uri.OriginalString != "/" + main) throw new Refusal("SDK_MAIN_PART_MISMATCH");
             }
             budget.Check(true);
             manifest.InspectionComplete = true;
@@ -507,7 +510,7 @@ public static class DocumentInspector
             if (w > int.MaxValue || h > int.MaxValue) throw new Refusal("IMAGE_PIXEL_LIMIT");
             return (true, (int)w, (int)h);
         }
-        // JPEG is not exposed until a bounded dimension decoder has been qualified.
+        if(type=="image/jpeg"&&JpegHeader.TryRead(data,out int width,out int height))return(true,width,height);
         return (false, null, null);
     }
 }

@@ -5,6 +5,9 @@
     <ApplicationIcon>Assets/LecteurWord.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Viewer.Targeted"/>
+    <!-- Historical experiment retained for audit only; no activation or product assembly. -->
+    <Compile Remove="ReaderExperimentalEngine.cs" />
     <ProjectReference Include="../DocxFlow/DocxFlow.csproj"/>
     <PackageReference Include="Avalonia.Desktop" Version="[12.1.6]"/>
     <PackageReference Include="Avalonia.Themes.Fluent" Version="[12.1.6]"/>

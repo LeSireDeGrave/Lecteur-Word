@@ -220,6 +220,10 @@ void HostileZip()
 }
 void HostileXml()
 {
+    var twoBodies=Fixtures.Parts(Fixtures.Paragraph("premier"));
+    twoBodies["word/document.xml"]=Encoding.UTF8.GetBytes(Fixtures.Xml("document",
+        "<w:body>"+Fixtures.Paragraph("premier")+"</w:body><w:body>"+Fixtures.Paragraph("second")+"</w:body>"));
+    Code(Inspect("double-body",twoBodies,complete:false),"DOCX_MAIN_BODY_COUNT");
     var broken=Fixtures.Parts("<w:p>");
     Code(Inspect("malformed",broken,complete:false),"UNSAFE_OR_MALFORMED_XML");
     var dtd=Fixtures.Parts(""); dtd["word/document.xml"]=Encoding.UTF8.GetBytes("<!DOCTYPE x [<!ENTITY steal SYSTEM 'file:///etc/passwd'>]>"+Fixtures.Document(Fixtures.Paragraph("&steal;")));

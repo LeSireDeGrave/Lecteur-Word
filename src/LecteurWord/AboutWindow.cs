@@ -107,11 +107,11 @@ public sealed class AboutWindow:Window
     void SetFeedback(string text){copyStatus.Text=text;feedbackTimer.Stop();feedbackTimer.Start();}
     void ApplyPalette()
     {
-        bool dark=ActualThemeVariant==ThemeVariant.Dark;
-        Background=new SolidColorBrush(Color.Parse(dark?"#111827":"#F8FAFC"));
-        Foreground=new SolidColorBrush(Color.Parse(dark?"#E5E7EB":"#172033"));
-        heading.Background=actions.Background=new SolidColorBrush(Color.Parse(dark?"#182235":"#FFFFFF"));
-        copyStatus.Foreground=new SolidColorBrush(Color.Parse(dark?"#A5B4FC":"#3156A5"));
+        var palette=ReaderPalette.For(ActualThemeVariant);
+        Background=palette.AboutSurface;
+        Foreground=palette.AboutInk;
+        heading.Background=actions.Background=palette.AboutHeading;
+        copyStatus.Foreground=palette.AboutFeedback;
     }
 
     static string ReadNotices()

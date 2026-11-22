@@ -161,7 +161,10 @@ static class StructureCases
     }
     static void VerifyGui(ReaderWindow window)
     {
-        Check(window.CurrentComposition?.Available==true&&window.CurrentComposition.Pages.Count>=3,"No rich calculated pages in viewer");window.GoToPage(1);Check(window.CurrentPage==2,"Rich page navigation failed");window.FitToWidth();
+        Check(window.CurrentComposition is {Available:true,Profile:PageComposer.Profile}&&window.CurrentComposition.Pages.Count>=2,
+            "No native multipage table in viewer");
+        Check(window.CurrentComposition!.Pages.Skip(1).SelectMany(p=>p.Cells).Any(c=>c.IsRepeated),"Repeated table headers are missing");
+        window.GoToPage(1);Check(window.CurrentPage==2,"Rich page navigation failed");window.FitToWidth();
         var composition=window.CurrentComposition??throw new InvalidOperationException("Composition unavailable");
         var sourceLine=composition.Pages.Last().Lines.Last(l=>l.CellId is not null&&!l.IsRepeated);
         var paragraph=ReadablePresentation.Walk(window.CurrentReading!.Blocks).First(b=>b.Source==sourceLine.Source&&(b.Kind=="paragraph"||b.Kind=="heading"));

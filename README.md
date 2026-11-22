@@ -12,7 +12,7 @@ Linux · C# / .NET 10 · Avalonia · Lecture seule
 
 Lecteur Word construit une visionneuse DOCX native pour Linux : une zone de lecture dominante, des commandes par icônes, des thèmes clair/sombre/système et des diagnostics accessibles. Son moteur OOXML indépendant prépare également un contrat d'échange pour un futur import dans OpusNova.
 
-**Le prototype propose une lecture simplifiée des DOCX structurés et une composition expérimentale d’un profil défini de paragraphes, listes, tableaux et images PNG. La fidélité et la pagination de Microsoft Word ne sont pas qualifiées.** Les structures hors couverture restent repérées ; un contenu consultable ne devient pas un export annoncé comme fidèle.
+**Le prototype propose une lecture simplifiée des DOCX structurés et une composition expérimentale d’un profil défini de paragraphes, listes, tableaux et images PNG/JPEG baseline. La fidélité et la pagination de Microsoft Word ne sont pas qualifiées.** Les structures hors couverture restent repérées ; un contenu consultable ne devient pas un export annoncé comme fidèle.
 
 ## Une direction visuelle, clairement annoncée
 
@@ -27,7 +27,7 @@ La référence est conservée sans conversion, en **1672 × 941 pixels**. Son [e
 | Composant | État réel du prototype |
 |---|---|
 | **Inspection DOCX** | Contrôles ZIP/OPC/XML, inventaire structuré avec provenance, diagnostics, manifeste JSON v1 et SHA-256 des médias. |
-| **Lecture** | Flux Unicode avec notes navigables et repères ; composition paginée expérimentale pour un profil de paragraphes latins, avec formats/marges DOCX, styles, listes multiniveaux, tabulations, tableaux à grille et images PNG intégrées dans un périmètre qualifié. Les documents hors profil gardent le flux simplifié. |
+| **Lecture** | Flux Unicode avec notes navigables et repères ; composition paginée expérimentale pour un profil de paragraphes latins, avec formats/marges DOCX, styles, justification simple, listes multiniveaux, tabulations, tableaux à grille/AutoFit simple et images PNG/JPEG baseline intégrées dans un périmètre qualifié. Les documents hors profil paginé gardent le flux continu. Les tableaux du profil natif y partagent la géométrie de composition. |
 | **Polices du document** | Familles Linux réellement chargées, thèmes latins, héritage et substitutions tracées ; fontes TTF incorporées dans un périmètre vérifié. Détails dans [la matrice typographique](docs/polices-et-typographie.md). |
 | **Interface Avalonia** | Clair/sombre/système, FR/EN, sommaire et signets dans le flux simplifié, recherche, diagnostics regroupés avec rapport détaillé. Pages/miniatures et zoom pour le profil composé. Aucun menu classique. |
 | **Version / À propos** | Version sémantique, heure UTC et locale, commit réel et état local détectables au build, cible et runtime ; informations embarquées et copiables sans Git à l’exécution. Crédits et notices tierces, licence du projet à définir. |
@@ -47,7 +47,7 @@ La note s’ouvre dans un espace réservé à droite ou en bas selon la largeur 
 
 ## Limites actuelles et suite prévue
 
-La [composition étendue LAYOUT-001B](docs/composition-listes-tableaux-images.md) calcule les tableaux à grille, fusions compatibles, lignes entières et en-têtes répétés, ainsi que les listes, tabulations et PNG intégrés. AutoFit, tableaux imbriqués, partage interne des lignes, habillage des flotteurs, colonnes multiples, placement des notes et recalcul des champs restent non qualifiés. Les corps de commentaires et objets spécialisés restent inventoriés ; les éléments non représentés portent des repères. Les listes et styles sont partiellement interprétés ; substitution de polices possible. Les PNG à palette, JPEG et autres formats hors profil ne sont pas décodés.
+La [composition étendue](docs/composition-listes-tableaux-images.md) conserve tableaux à grille, fusions compatibles, lignes entières et en-têtes répétés. [LAYOUT-001C](docs/compatibilite-pagination.md) ajoute justification simple, espacement contextuel, marques de paragraphe, liens textuels, AutoFit mesuré, styles généraux de tableaux et JPEG baseline intégrés avec orientation EXIF contrôlée. [PAGE-001C](docs/composition-tableaux-page-001c.md) précise les styles conditionnels pris en charge et la géométrie commune à la lecture continue. AutoFit complexe, tableaux imbriqués, partage interne des lignes, habillage des flotteurs, colonnes multiples, placement des notes et recalcul des champs restent non qualifiés. Les corps de commentaires et objets spécialisés restent inventoriés ; les éléments non représentés portent des repères. Les listes et styles sont partiellement interprétés ; substitution de polices possible. Les PNG à palette, JPEG progressifs/CMYK et autres formats hors profil ne sont pas décodés.
 
 Restent à qualifier ou implémenter : navigation précise à l’intérieur des tableaux longs, impression, comparaison visuelle Word, lecteur d’écran et DPI physiques multiples, associations de fichiers et Native AOT. Aucune conformité Word, PDF/A ou PDF/UA n'est annoncée.
 
@@ -137,6 +137,7 @@ Chaque commande sélectionne un cas explicite. **Aucune suite complète sans aut
 - [Sécurité et limites](docs/securite.md)
 - [UX et qualification](docs/ux.md)
 - [Dépendances et licences](docs/dependances.md)
+- [Stratégie DOCX indépendante et retrait du moteur externe](docs/strategie-rendu-docx-independant.md)
 - [Provenance des fichiers de test et de la maquette](docs/provenance.md)
 
 ## Licence et diffusion

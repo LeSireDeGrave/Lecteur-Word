@@ -31,41 +31,40 @@ public sealed class ReadablePresentation
     public static IEnumerable<ReadableBlock> Walk(IEnumerable<ReadableBlock> blocks)
     {foreach(var b in blocks){yield return b;foreach(var c in Walk(b.Children))yield return c;}}
 
-    internal static ReadablePresentation Create(InspectionResult input,ReadableDocument document,CancellationToken token)
-        =>new Builder(input,document,token).Build();
+    internal static ReadablePresentation Create(InspectionResult input,ReadableDocument document,SemanticIndex index,CancellationToken token)
+        =>new Builder(input,document,index,token).Build();
     sealed class Builder
     {
         const string W="http://schemas.openxmlformats.org/wordprocessingml/2006/main";
         const string R="http://schemas.openxmlformats.org/officeDocument/2006/relationships";
         readonly InspectionResult input;readonly ReadableDocument doc;readonly CancellationToken token;
-        readonly Dictionary<string,InventoryNode> nodes;readonly ILookup<string,InventoryNode> children;
+        readonly IReadOnlyDictionary<string,InventoryNode> nodes;readonly SemanticIndex index;
         readonly Dictionary<string,ReadableBlock> blocks;
         readonly List<FlowIssue> issues=[];
         readonly Dictionary<string,ReadableFieldValue> fields=[];readonly HashSet<string> details=[];
         readonly Stopwatch timer=Stopwatch.StartNew();
         string main="";
-        public Builder(InspectionResult input,ReadableDocument doc,CancellationToken token)
-        {this.input=input;this.doc=doc;this.token=token;nodes=input.Manifest.Nodes.ToDictionary(n=>n.Id);children=input.Manifest.Nodes.Where(n=>n.ParentId is not null).ToLookup(n=>n.ParentId!);blocks=Walk(doc.Blocks).GroupBy(b=>b.Id).ToDictionary(g=>g.Key,g=>g.First());}
+        public Builder(InspectionResult input,ReadableDocument doc,SemanticIndex index,CancellationToken token)
+        {this.input=input;this.doc=doc;this.token=token;this.index=index;nodes=index.Nodes;blocks=Walk(doc.Blocks).GroupBy(b=>b.Id).ToDictionary(g=>g.Key,g=>g.First());}
         void Check(){token.ThrowIfCancellationRequested();if(timer.ElapsedMilliseconds>10_000)throw new InvalidOperationException("Reading aids time budget exceeded");}
         static bool Is(InventoryNode n,string local)=>n.Name=="{"+W+"}"+local;
         static string Attr(InventoryNode n,string local)=>n.Attributes.GetValueOrDefault("{"+W+"}"+local)??"";
         InventoryNode? Parent(InventoryNode n)=>n.ParentId is {} id?nodes.GetValueOrDefault(id):null;
-        IEnumerable<InventoryNode> Tree(InventoryNode n){Check();yield return n;foreach(var child in children[n.Id])foreach(var d in Tree(child))yield return d;}
+        IEnumerable<InventoryNode> Tree(InventoryNode n){Check();yield return n;foreach(var child in index.Children(n))foreach(var d in Tree(child))yield return d;}
         void Issue(string code,SourceLocation source,string message)=>issues.Add(new(code,source,message,false));
         public ReadablePresentation Build()
         {
-            main=input.Manifest.Relationships.FirstOrDefault(r=>r.SourcePart=="/"&&r.Type==R+"/officeDocument")?.ResolvedPart??"";
+            main=index.Main;
             var body=doc.Blocks.Where(b=>b.Source.PartUri==main).ToArray();
             var notes=new Dictionary<string,ReadableNoteLink>();var numbers=new Dictionary<string,string>();int foot=0,end=0;
             foreach(var top in body)
             foreach(var b in Walk([top]).Where(b=>b.Kind=="note"))
             {
                 Check();var n=nodes.GetValueOrDefault(b.Id);string kind=b.NoteKind??"";
-                var relationships=input.Manifest.Relationships.Where(r=>r.SourcePart==main&&r.Type==R+"/"+(kind=="footnote"?"footnotes":"endnotes")&&r.Mode=="Internal").ToArray();
-                string? part=relationships.Length==1?relationships[0].ResolvedPart:null;
-                var definitions=input.Manifest.Nodes.Where(d=>d.Source.PartUri==part&&Is(d,kind)&&Attr(d,"id")==b.NoteId).ToArray();
-                bool verified=n is not null&&n.Source.PartUri==main&&Parent(n) is {} parent&&Is(parent,"r")&&definitions.Length==1&&b.Children.Count>0&&
-                    Attr(definitions[0],"type") is "" or "normal"&&Attr(n,"customMarkFollows") is not ("1" or "true" or "on")&&
+                string? part=n is null?null:index.Related(n.Source.PartUri,kind+"s")?.ResolvedPart;
+                var definition=index.Definition(part,kind,b.NoteId??"");
+                bool verified=n is not null&&n.Source.PartUri==main&&Parent(n) is {} parent&&Is(parent,"r")&&definition is not null&&b.Children.Count>0&&
+                    Attr(definition,"type") is "" or "normal"&&Attr(n,"customMarkFollows") is not ("1" or "true" or "on")&&
                     int.TryParse(b.NoteId,NumberStyles.Integer,CultureInfo.InvariantCulture,out int id)&&id>0;
                 // Nested note calls cannot be assigned a safe main-story return anchor.
                 if(top.Source.PartUri!=b.Source.PartUri)verified=false;
@@ -75,7 +74,8 @@ public sealed class ReadablePresentation
                 if(!verified)Issue("READ_NOTE_LINK_UNVERIFIED",b.Source,"Correspondance de note incertaine ; aucun appel numéroté n’est inventé.");
             }
             // Parse fields per story, never across distinct note bodies.
-            foreach(var root in input.Manifest.Nodes.Where(n=>Is(n,"body")||Is(n,"hdr")||Is(n,"ftr")||Is(n,"footnote")||Is(n,"endnote")))ScanFields(root);
+            foreach(var root in input.Manifest.Nodes.Where(n=>Is(n,"body")||Is(n,"hdr")||Is(n,"ftr")||Is(n,"footnote")||Is(n,"endnote")))
+                if(!index.IsUnderInactiveBranch(root))ScanFields(root);
             return new(){BodyBlocks=body,Notes=notes,Fields=fields,FieldDetailNodes=details,Sections=Sections(body),Issues=issues};
         }
         sealed class Field(InventoryNode begin)
@@ -92,7 +92,7 @@ public sealed class ReadablePresentation
                 if(Is(n,"fldSimple"))
                 {
                     var text=Tree(n).Where(t=>Is(t,"t")).ToArray();
-                    string value=string.Concat(text.SelectMany(t=>children[t.Id].Where(c=>c.Kind=="textValue")).Select(c=>c.Text));
+                    string value=string.Concat(text.SelectMany(t=>index.Children(t).Where(c=>c.Kind=="textValue")).Select(c=>c.Text));
                     AddField(n,Attr(n,"instr"),value,text.Length>0,n.Revision=="unchanged",[]);
                 }
                 if(Is(n,"fldChar"))
@@ -117,8 +117,8 @@ public sealed class ReadablePresentation
                 foreach(var f in stack)
                 {
                     if(n.Revision!="unchanged")f.Unsafe=true;
-                    if(Is(n,"instrText")&&!f.Separated){f.DetailIds.Add(n.Id);f.Code.Append(string.Concat(children[n.Id].Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
-                    if(Is(n,"t")&&f.Separated){f.HasValue=true;f.Value.Append(string.Concat(children[n.Id].Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
+                    if(Is(n,"instrText")&&!f.Separated){f.DetailIds.Add(n.Id);f.Code.Append(string.Concat(index.Children(n).Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
+                    if(Is(n,"t")&&f.Separated){f.HasValue=true;f.Value.Append(string.Concat(index.Children(n).Where(c=>c.Kind=="textValue").Select(c=>c.Text)));}
                     if(Is(n,"tab")&&f.Separated)f.Value.Append('\t');
                     if(Is(n,"br")&&f.Separated)f.Value.Append('\n');
                 }
@@ -139,11 +139,11 @@ public sealed class ReadablePresentation
             if(ends.Length>256){Issue("READ_SECTION_LIMIT",ends[0].Source,"Trop de sections pour la vue contextuelle ; inventaire conservé.");return [];}
             var result=new List<ReadableSection>();var inherited=new Dictionary<(string Kind,string Variant),(string Part,SourceLocation Source)>();var used=new HashSet<string>();
             int sectionCount=ends.Length==0?1:ends.Length+(Parent(ends[^1]) is {} lastParent&&Is(lastParent,"body")?0:1);
-            for(int index=0;index<sectionCount;index++)
+            for(int sectionIndex=0;sectionIndex<sectionCount;sectionIndex++)
             {
-                Check();InventoryNode? end=index<ends.Length?ends[index]:null;var stories=new List<ReadableStory>();
+                Check();InventoryNode? end=sectionIndex<ends.Length?ends[sectionIndex]:null;var stories=new List<ReadableStory>();
                 if(end is not null)
-                foreach(var reference in children[end.Id].Where(n=>Is(n,"headerReference")||Is(n,"footerReference")))
+                foreach(var reference in index.Children(end).Where(n=>Is(n,"headerReference")||Is(n,"footerReference")))
                 {
                     string kind=Is(reference,"headerReference")?"header":"footer",variant=Attr(reference,"type");
                     string rid=reference.Attributes.GetValueOrDefault("{"+R+"}id")??"";
@@ -153,14 +153,14 @@ public sealed class ReadablePresentation
                 foreach(var entry in inherited)
                 {
                     var story=doc.Blocks.FirstOrDefault(b=>b.Source.PartUri==entry.Value.Part&&b.Source.PartUri!=main);
-                    bool direct=end is not null&&children[end.Id].Any(n=>(Is(n,entry.Key.Kind=="header"?"headerReference":"footerReference"))&&Attr(n,"type")==entry.Key.Variant);
+                    bool direct=end is not null&&index.Children(end).Any(n=>(Is(n,entry.Key.Kind=="header"?"headerReference":"footerReference"))&&Attr(n,"type")==entry.Key.Variant);
                     bool verified=story is not null;var source=story?.Source??entry.Value.Source;
-                    stories.Add(new($"story-{index+1}-{entry.Key.Kind}-{entry.Key.Variant}",index+1,entry.Key.Kind,entry.Key.Variant,!direct,verified,source,story?.Children??[]));
+                    stories.Add(new($"story-{sectionIndex+1}-{entry.Key.Kind}-{entry.Key.Variant}",sectionIndex+1,entry.Key.Kind,entry.Key.Variant,!direct,verified,source,story?.Children??[]));
                     used.Add(entry.Value.Part);
                     if(!verified)Issue("READ_STORY_UNRESOLVED",entry.Value.Source,"En-tête ou pied non rattaché ; référence conservée.");
                 }
                 string? closing=end is not null?body.FirstOrDefault(b=>Walk([b]).Any(c=>c.Id==end.Id))?.Id:null;
-                result.Add(new(index+1,closing,stories));
+                result.Add(new(sectionIndex+1,closing,stories));
             }
             var other=doc.Blocks.Where(b=>b.Source.PartUri!=main&&!used.Contains(b.Source.PartUri)).Select(b=>new ReadableStory("unassigned-"+b.Id,0,b.Label?.StartsWith("En-tête",StringComparison.Ordinal)==true?"header":"footer","unassigned",false,false,b.Source,b.Children)).ToArray();
             if(other.Length>0)result.Add(new(0,null,other));

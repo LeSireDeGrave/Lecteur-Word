@@ -11,8 +11,7 @@ using LecteurWord.Flow;
 namespace LecteurWord;
 public sealed partial class ReaderWindow
 {
-    bool ReadingDark=>ActualThemeVariant==Avalonia.Styling.ThemeVariant.Dark;
-    IBrush ReadingAccent=>new SolidColorBrush(Color.Parse(ReadingDark?"#A8CAFF":"#245B9B"));
+    IBrush ReadingAccent=>Palette.Accent;
     public string? CurrentNoteReferenceId {get;private set;}
     public int CurrentSection {get;private set;}=1;
     public Control? ActiveReadingContext {get;private set;}
@@ -20,17 +19,17 @@ public sealed partial class ReaderWindow
     void CloseReadingContext(){readingFlyout?.Hide();readingFlyout=null;notePane.IsVisible=false;notePane.Child=null;ActiveReadingContext=null;UpdateNotePlacement();MarkNoteOrigin();}
     Control ContextCard(Control content)
     {
-        var card=new Border{Child=content,Padding=new Thickness(18),CornerRadius=new CornerRadius(10),Background=new SolidColorBrush(Color.Parse(ReadingDark?"#18212C":"#FFFFFF"))};
-        card.SetValue(TextElement.ForegroundProperty,new SolidColorBrush(Color.Parse(ReadingDark?"#E6EAF0":"#253247")));return card;
+        var card=new Border{Child=content,Padding=new Thickness(18),CornerRadius=new CornerRadius(10),Background=Palette.Field};
+        card.SetValue(TextElement.ForegroundProperty,ActualThemeVariant==ReaderPalette.BlueVariant?Palette.Ink:ReaderPalette.ReadingInk);return card;
     }
     void RefreshReadingAppearance()
     {
         var activeNote=notePane.IsVisible&&CurrentNoteReferenceId is {} id?readable?.Presentation.Notes.GetValueOrDefault(id):null;
         CloseReadingContext();
-        readingList.Background=new SolidColorBrush(Color.Parse(ReadingDark?"#18212C":"#FFFFFF"));
-        readingList.Foreground=new SolidColorBrush(Color.Parse(ReadingDark?"#E6EAF0":"#253247"));
+        readingList.Background=ReaderPalette.ReadingPaper;
+        readingList.Foreground=ReaderPalette.ReadingInk;
         // Recreate only the realized templates when theme/language changes.
-        readingList.ItemTemplate=new Avalonia.Controls.Templates.FuncDataTemplate<ReadableBlock>((b,_)=>b is null?new Border():RenderReadingBlock(b));
+        SetReadingTemplate();
         if(activeNote is not null)ShowNotePane(activeNote);
     }
     string MarkerDescription(ReadableBlock b)=>b.Kind switch
@@ -94,7 +93,7 @@ public sealed partial class ReaderWindow
                 if(!story.Verified)content.Children.Add(new TextBlock{Text=T("Correspondance incertaine · contenu conservé","Uncertain assignment · content retained"),TextWrapping=TextWrapping.Wrap,FontSize=12});
                 foreach(var block in story.Content)content.Children.Add(RenderReadingBlock(block));
             }
-            var card=ContextCard(new ScrollViewer{Content=content,MaxHeight=520,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});
+        var card=ContextCard(new ScrollViewer{Content=content,MaxHeight=520,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});
             readingFlyout?.Hide();readingFlyout=new Flyout{Content=card,Placement=PlacementMode.Right};ActiveReadingContext=card;readingFlyout.ShowAt(anchor);
     }
     Button FieldMarker(ReadableBlock block,ReadableFieldValue field)

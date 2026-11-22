@@ -30,7 +30,12 @@ public sealed partial class ReaderWindow
     void FillDiagnostics()
     {
         if(inspection is null)return;
-        var groups=DiagnosticSummary.Group(inspection,composition?.Issues??flow?.Issues??[],readable is null?[]:readable.Issues.Concat(readable.Presentation.Issues),readable?.Available==true||composition?.Available==true);
+        var readingIssues=readable?.Issues.Where(i=>i.Code!="READ_TABLE_APPROXIMATE").Concat(readable.Presentation.Issues)??[];
+        var tableFallbacks=readable?.Presentation.BodyBlocks.Where(b=>b.Kind=="table"&&
+            ReadingTableSnapshot?.ReadingTables.ContainsKey(b.Id)!=true).Select(b=>new FlowIssue("READ_TABLE_GRID_FALLBACK",b.Source,
+                "Grille en lecture de secours ; certaines dimensions ou propriétés graphiques restent non qualifiées.",false,false)).ToArray()??[];
+        var groups=DiagnosticSummary.Group(inspection,(composition?.Issues??flow?.Issues??[]).Concat(nativePageIssues),
+            readingIssues.Concat(tableFallbacks),readable?.Available==true||composition?.Available==true);
         bool canRead=readable?.Available==true||composition?.Available==true;
         navItems.Children.Add(new TextBlock{Name="DiagnosticUserSummary",Text=canRead?T("Lecture possible","Reading available"):T("Lecture indisponible","Reading unavailable"),FontSize=17,FontWeight=FontWeight.SemiBold,TextWrapping=TextWrapping.Wrap});
         navItems.Children.Add(Explain(canRead?T("Le contenu est consultable. Certains éléments utilisent une présentation adaptée.","The content is readable. Some elements use an adapted presentation."):T("Le traitement s’est arrêté. Le fichier d’origine reste intact ; consultez le rapport pour connaître la cause.","Processing stopped. The original file is intact; consult the report for the cause.")));
@@ -40,10 +45,25 @@ public sealed partial class ReaderWindow
             if(notes>0)navItems.Children.Add(Explain(notes+T(" appels de notes reliés à leur contenu."," note references linked to their content.")));
             if(uncertain>0)navItems.Children.Add(Explain(uncertain+T(" correspondances de notes restent à vérifier."," note references remain unverified.")));
             if(missing>0)navItems.Children.Add(Explain(missing+T(" champs n’ont pas de valeur enregistrée. Aucune valeur n’est inventée."," fields have no stored value. No value is invented.")));
-            if(readable.Issues.Any(i=>i.Code=="READ_TABLE_APPROXIMATE"))navItems.Children.Add(Explain(T("Les tableaux ont une disposition simplifiée.","Tables use a simplified layout.")));
+            if(tableFallbacks.Length>0)navItems.Children.Add(Explain(tableFallbacks.Length+T(
+                " tableau(x) en lecture de secours. Consultez les propriétés non qualifiées dans les détails.",
+                " table(s) use the fallback grid. See the details for unqualified properties.")));
             if(readable.Issues.Any(i=>i.Code=="READ_IMAGE_UNQUALIFIED"))navItems.Children.Add(Explain(T("Certaines images sont remplacées par un repère.","Some images are represented by a contextual mark.")));
         }
         navItems.Children.Add(Explain(T("Les repères dans le document donnent accès au détail des éléments concernés. La mise en page Microsoft Word n’est pas reproduite à l’identique.","Document marks open details for the relevant elements. Microsoft Word layout is not reproduced exactly.")));
+        FillTypographyDiagnostics();
+        if(nativePageGaps.Count>0)
+        {
+            var gaps=new ListBox{Name="NativePageGaps",ItemsSource=nativePageGaps,Height=220,FontSize=11,
+                ItemTemplate=new Avalonia.Controls.Templates.FuncDataTemplate<PagePlacementGap>((gap,_)=>Explain(gap is null?"":
+                    gap.Reason+" · "+gap.Source.Location.PartUri+" "+gap.Source.Location.Path+
+                    (gap.ContextRange is {} span?$" · UTF-16 [{span.Start}, {span.EndExclusive})":"")))};
+            var go=new Button{Content=T("Aller au passage","Go to passage"),IsEnabled=false};
+            gaps.SelectionChanged+=(_,_)=>go.IsEnabled=gaps.SelectedItem is PagePlacementGap gap&&documentIndex?.BodyIndices.ContainsKey(gap.Source.NodeId)==true;
+            go.Click+=(_,_)=>{if(gaps.SelectedItem is PagePlacementGap gap)NavigateToBlock(gap.Source.NodeId);};
+            navItems.Children.Add(new Expander{Header=T("Sources sans position de page","Sources without a page position"),
+                Content=new StackPanel{Children={gaps,go}}});
+        }
         var technical=groups.Select(g=>$"{g.Category} · {g.Severity} · ×{g.Count}\n{g.Code}\n{g.Component}\n{g.Example}").ToArray();
         navItems.Children.Add(new Expander{Name="DiagnosticTechnicalDetails",Header=T("Détails techniques et XML","Technical and XML details"),IsExpanded=false,HorizontalAlignment=HorizontalAlignment.Stretch,
             Content=new StackPanel{Children={Explain(groups.Sum(g=>g.Count)+T(" occurrences conservées dans "," retained occurrences in ")+groups.Count+T(" groupes."," groups.")),new ListBox{ItemsSource=technical,Height=340,FontSize=11,ItemTemplate=new Avalonia.Controls.Templates.FuncDataTemplate<string>((s,_)=>new TextBlock{Text=s,TextWrapping=TextWrapping.Wrap})}}}});

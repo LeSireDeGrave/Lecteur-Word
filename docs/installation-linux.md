@@ -12,10 +12,13 @@ Depuis la racine du projet, publier dans un **nouveau dossier** (ne pas écraser
 .local/dotnet/dotnet publish src/LecteurWord/LecteurWord.csproj \
   --no-restore -c Release -r linux-x64 --self-contained true \
   -p:PublishTrimmed=false -m:1 -o .local/publication-nouvelle
+python3 tools/check-independent-distribution.py --directory .local/publication-nouvelle
 python3 tools/install-linux.py --from .local/publication-nouvelle --install
 ```
 
 Le script ne requiert pas de droits administrateur. Il copie les binaires dans une nouvelle version puis bascule le lien actif ; les versions antérieures et les fenêtres déjà ouvertes restent intactes. Il refuse d’écraser un lanceur différent ou une installation non gérée. Il actualise les caches de bureau disponibles, sans changer explicitement l’éditeur DOCX par défaut. Le type DOCX est déclaré pour permettre « Ouvrir avec Lecteur Word » ; le lanceur accepte un fichier local à la fois.
+
+Après ENGINE-ABANDON-001, contrôler chaque nouvelle publication avec `check-independent-distribution.py` avant de préparer ou installer son lanceur. Ce contrôle inspecte le graphe de dépendances, les noms de fichiers et les signatures des assemblies propres ; il ne remplace pas la revue de provenance ni des licences. Les anciennes publications ElixirOffice conservées dans la qualification privée sont des archives, pas des candidats à installer. Le retrait ne modifie pas l'installation utilisateur existante ; une installation reste une opération distincte à autoriser.
 
 Pour préparer les fichiers de lancement sans installer :
 

@@ -13,7 +13,7 @@ using LecteurWord;
 using LecteurWord.DocxCore;
 using LecteurWord.Flow;
 
-static class FontCases
+static partial class FontCases
 {
     const string ThemeNs="http://schemas.openxmlformats.org/drawingml/2006/main";
     const string Missing="PoliceAbsente-FONTS001-2026";
@@ -100,7 +100,7 @@ static class FontCases
         }
         Check(counts[0]!=counts[1],"Font metrics do not affect page count");File.WriteAllText(Path.Combine(root,"font-measures.json"),JsonSerializer.Serialize(stats,new JsonSerializerOptions{WriteIndented=true}));Console.WriteLine("Font-dependent pages: "+string.Join(" / ",counts));
     }
-    static byte[] TestFont(int flags)
+    static byte[] TestFont(int flags,byte[]? cmap=null)
     {
         byte[] bytes=File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory,"../../../../../src/DocxFlow/Fonts/DejaVuSerif.ttf"));
         int count=BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4));int head=0;
@@ -108,6 +108,14 @@ static class FontCases
         {
             int p=12+16*i;string tag=Encoding.ASCII.GetString(bytes,p,4);int off=(int)BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(p+8));
             if(tag=="OS/2")BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(off+8),(ushort)flags);
+            if(tag=="cmap"&&cmap is not null)
+            {
+                int capacity=(int)BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(p+12));
+                Check(cmap.Length<=capacity,"La table synthétique dépasse son emplacement.");
+                bytes.AsSpan(off,capacity).Clear();
+                cmap.CopyTo(bytes,off);
+                BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(p+12),(uint)cmap.Length);
+            }
             if(tag=="head")head=off;
             if(tag=="name")
             {

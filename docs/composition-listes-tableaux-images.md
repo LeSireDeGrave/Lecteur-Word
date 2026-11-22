@@ -21,11 +21,11 @@ Profil local `docx-flow-layout-v2`, extension du compositeur de paragraphes exis
 | Images intégrées | DrawingML wp:inline, relations internes, tailles EMU | PNG 8 bits non entrelacé dans le profil SafePng existant ; boîte insérée au milieu du texte, largeur et hauteur DOCX conservées |
 | Proportions | Dimensions source / pixels | Une déformation déjà demandée par les dimensions du DOCX est signalée ; aucune réduction automatique pour faire tenir une image |
 | Ressource d’image | Type, relation, SHA-256, structure PNG et budgets | Image absente, invalide, remplacée sous un mauvais hash ou trop grande : refus de pagination explicite |
-| Hors profil | Inventaire et lecture simplifiée conservés | Tableaux imbriqués, styles/AutoFit complexes, partage interne d’une ligne, flottants/habillages/croppings/effets, JPEG/SVG/EMF, notes de page, champs et scripts non qualifiés |
+| Hors profil | Inventaire et lecture simplifiée conservés | Tableaux imbriqués, styles/AutoFit complexes, partage interne d’une ligne, flottants/habillages/croppings/effets, JPEG hors profil baseline, SVG/EMF, notes de page, champs et scripts non qualifiés |
 
 Les tabulations `num` du niveau de liste sont reconnues lorsqu’elles correspondent au retrait du texte ; les configurations différentes restent refusées. Les suffixes espace/nothing sont conservés mais non qualifiés, ainsi que la solidarité keepNext interne aux cellules. La solidarité d’un paragraphe avec le début d’un tableau est prise en compte ; une contrainte impossible est refusée.
 
-Les valeurs de repli des profils antérieurs restent explicites lorsqu’elles étaient déjà diagnostiquées. Une grille fournie sans tblLayout fixed utilise une **prévisualisation à grille fixe signalée** ; elle ne prétend pas reproduire l’algorithme AutoFit Word. Les propriétés essentielles non interprétées refusent le document paginé entier ; le flux simplifié conserve alors les repères et diagnostics.
+Les valeurs de repli des profils antérieurs restent explicites lorsqu’elles étaient déjà diagnostiquées. Depuis [LAYOUT-001C](compatibilite-pagination.md), une grille sans `tblLayout fixed` passe par l’AutoFit simple mesuré ; les styles généraux et JPEG baseline disposent d’un profil propre. Les limites historiques de cette matrice sont complétées par cette extension, sans qualification de l’algorithme AutoFit Word complet. Les propriétés essentielles non interprétées refusent le document paginé entier ; le flux simplifié conserve alors les repères et diagnostics.
 
 ## Pages et traçabilité
 

@@ -8,6 +8,7 @@ public static partial class LayoutReader
     sealed partial class Reader
     {
         readonly Dictionary<string,byte[]> renderImages=[];long renderPixels;
+        readonly Dictionary<string,(int Width,int Height,int Orientation)> imageSizes=[];
         const string WP="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",D="http://schemas.openxmlformats.org/drawingml/2006/main",PIC="http://schemas.openxmlformats.org/drawingml/2006/picture";
         IEnumerable<InventoryNode> Descendants(InventoryNode node)
         {
@@ -66,13 +67,16 @@ public static partial class LayoutReader
             if(!renderImages.TryGetValue(media.Id,out var clean))
             {
                 if(renderImages.Count>=64||renderPixels+(long)(media.Width??8192)*(media.Height??8192)>24_000_000){Issue("LAYOUT_IMAGE_BUDGET",blip,"Budget des images dépassé.");return null;}
-                if(!SafePng.TryGetRenderableBytes(bytes,out clean,out string reason,token)){Issue("LAYOUT_IMAGE_DECODE_REFUSED",blip,"PNG hors profil de décodage borné ; autres formats non qualifiés.");return null;}
+                int pixelWidth=media.Width??0,pixelHeight=media.Height??0,orientation=1;string reason;
+                bool decoded=media.ContentType=="image/jpeg"?SafeJpeg.TryGetRenderableBytes(bytes,out clean,out pixelWidth,out pixelHeight,out orientation,out reason,token):SafePng.TryGetRenderableBytes(bytes,out clean,out reason,token);
+                if(!decoded){Issue("LAYOUT_IMAGE_DECODE_REFUSED",blip,"Image hors profil de décodage borné PNG/JPEG baseline.");return null;}
                 if(reason.Length>0)Issue("LAYOUT_IMAGE_METADATA_OMITTED",blip,reason,false);
-                renderImages[media.Id]=clean;renderPixels+=(long)media.Width!.Value*media.Height!.Value;
+                renderImages[media.Id]=clean;imageSizes[media.Id]=(pixelWidth,pixelHeight,orientation);renderPixels+=(long)pixelWidth*pixelHeight;
             }
             if(issues.Skip(before).Any(i=>i.BlocksRendering))return null;
-            if(Math.Abs(width/height-(float)media.Width!.Value/media.Height!.Value)>.01f)Issue("LAYOUT_IMAGE_SOURCE_STRETCH",drawing,"Dimensions DOCX conservées ; proportion différente de celle des pixels source.",false);
-            return new(media.Id,drawing.Source,width,height,media.Width!.Value,media.Height!.Value,media.Sha256){RenderBytes=clean};
+            var dimensions=imageSizes[media.Id];
+            if(Math.Abs(width/height-(float)dimensions.Width/dimensions.Height)>.01f)Issue("LAYOUT_IMAGE_SOURCE_STRETCH",drawing,"Dimensions DOCX conservées ; proportion différente de celle des pixels source orientés.",false);
+            return new(media.Id,drawing.Source,width,height,dimensions.Width,dimensions.Height,media.Sha256){RenderBytes=clean,OriginalPixelWidth=media.Width!.Value,OriginalPixelHeight=media.Height!.Value,Orientation=dimensions.Orientation};
         }
     }
 }

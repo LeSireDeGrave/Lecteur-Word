@@ -9,16 +9,35 @@ public enum ExportFormat { Pdf, Odt, Epub3 }
 public sealed record ExportPreflight(bool Allowed,string Profile,IReadOnlyList<FlowIssue> Issues);
 public static class DocumentExports
 {
-    public static ExportPreflight Preflight(InspectionResult source,ExportFormat format)
+    public static ExportPreflight Preflight(InspectionResult source,ExportFormat format) =>
+        Prepare(source,format,default,out _,out _);
+
+    static ExportPreflight Prepare(InspectionResult source,ExportFormat format,CancellationToken token,
+        out FlowDocument? flow,out Composition? composition)
     {
-        var flow=FlowReader.Read(source);var issues=flow.Issues.ToList();
+        token.ThrowIfCancellationRequested();
+        flow=null;
+        composition=null;
+        if(format is not (ExportFormat.Pdf or ExportFormat.Odt or ExportFormat.Epub3))
+            return new(false,FlowDocument.Profile,[new("EXPORT_FORMAT_UNSUPPORTED",null,
+                "Format d’export hors profil / Unsupported export format",false)]);
+        flow=FlowReader.Read(source);
+        var issues=flow.Issues.ToList();
+        string tableName=SemanticIndex.QName(SemanticIndex.W,"tbl");
+        foreach(var table in source.Manifest.Nodes.Where(n=>n.Name==tableName).Take(128))
+        {
+            token.ThrowIfCancellationRequested();
+            issues.Add(new("EXPORT_TABLE_UNQUALIFIED",table.Source,
+                "Tableau DOCX hors profil PDF, ODT et EPUB3 ; export bloqué / DOCX table outside the PDF, ODT and EPUB3 export profile",false));
+        }
         foreach(var p in flow.Paragraphs.Where(p=>p.Text.Contains('\r')))
             issues.Add(new("LITERAL_CR_NOT_QUALIFIED",p.Source,"Retour CR littéral hors profil / Literal CR outside export profile",false));
         if(flow.Paragraphs.Any(p=>p.PageBreakAfter))issues.Add(new("BREAK_EXPORT_NOT_QUALIFIED",null,"Sauts de page hors profil export / Page breaks outside export profile",false));
-        if(format==ExportFormat.Pdf && flow.CanExport)
+        if(format==ExportFormat.Pdf && !issues.Any(i=>i.BlocksExport))
         {
-            var composition=Composer.Compose(flow);
-            issues.AddRange(composition.Issues.Where(i=>!issues.Contains(i)));
+            composition=Composer.Compose(flow,token);
+            foreach(var issue in composition.Issues)
+                if(!issues.Contains(issue))issues.Add(issue);
             if(!composition.Available)issues.Add(new("NO_COMPOSED_PAGES",null,"Aucune page qualifiée / No qualified page composition",true));
         }
         return new(!issues.Any(i=>i.BlocksExport),FlowDocument.Profile,issues);
@@ -26,9 +45,8 @@ public static class DocumentExports
     // Always creates a new directory with the export and a versioned inspection manifest together.
     public static string Export(InspectionResult source,ExportFormat format,string newOutputDirectory,CancellationToken token=default)
     {
-        var check=Preflight(source,format);
-        if(!check.Allowed)throw new InvalidDataException("EXPORT_PREFLIGHT_BLOCKED");
-        var flow=FlowReader.Read(source);var composition=format==ExportFormat.Pdf?Composer.Compose(flow,token):null;
+        var check=Prepare(source,format,token,out var flow,out var composition);
+        if(!check.Allowed||flow is null)throw new InvalidDataException("EXPORT_PREFLIGHT_BLOCKED");
         var budget=new ExportBudget(source.Manifest.Budgets,token);
         string output=Path.GetFullPath(newOutputDirectory),parent=Path.GetDirectoryName(output)!;
         if(!Directory.Exists(parent)||Path.Exists(output))throw new IOException("Unused temporary output directory required.");
@@ -41,9 +59,12 @@ public static class DocumentExports
         {
             token.ThrowIfCancellationRequested();
             string path=Path.Combine(stage,filename);
-            if(format==ExportFormat.Pdf)Pdf(path,composition!,token,budget);
-            else if(format==ExportFormat.Odt)Odt(path,flow,token,budget);
-            else Epub(path,flow,token,budget);
+            switch(format)
+            {
+                case ExportFormat.Pdf: Pdf(path,composition!,token,budget); break;
+                case ExportFormat.Odt: Odt(path,flow,token,budget); break;
+                case ExportFormat.Epub3: Epub(path,flow,token,budget); break;
+            }
             using(var file=budget.Create(Path.Combine(stage,"inspection.json")))
                 System.Text.Json.JsonSerializer.Serialize(file,source.Manifest,ContractJson.Default.InspectionManifest);
             using(var notice=budget.Create(Path.Combine(stage,"qualification.txt")))notice.Write(Encoding.UTF8.GetBytes("profile: "+FlowDocument.Profile+"\nSource SHA-256: "+flow.SourceHash+"\nComposition expérimentale, sans identité Word. EPUB3 reflowable.\n"));
