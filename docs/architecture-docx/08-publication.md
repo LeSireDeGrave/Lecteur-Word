@@ -1,42 +1,43 @@
 # Publication PDF, ODT, EPUB et NOVA
 
-Le contrat de publication référence l’instantané DOCX inspecté, son modèle sémantique, sa typographie et ses pages natives. Le lecteur conserve le bail de composition pendant le dialogue et l’écriture. Les pages, fragments et ressources restent les objets du moteur. Les écrivains reconstruisent seulement les objets propres au format de sortie. Les liens et médias restent associés à leurs sources et aux identifiants de l’instantané.
+La publication utilise l’instantané DOCX inspecté, le modèle sémantique, la typographie et les pages natives. Le lecteur conserve le bail de composition pendant le dialogue et l’écriture. Le précontrôle indique les adaptations et les refus avec leur provenance. L’écrivain relit sa sortie temporaire avant de la renommer dans le dossier choisi. L’annulation, les erreurs et les dépassements de quota préservent la destination. Writer, EPUBCheck, MuPDF, Poppler et OpusNova interviennent dans la recette externe.
 
-Le précontrôle produit une décision par format et par plage. L’interface présente les diagnostics avant l’écriture. L’exporteur écrit un fichier temporaire voisin, le relit et le déplace par renommage après vérification. Le contrôle d’écrasement s’applique au fichier choisi. L’annulation et les quotas sont vérifiés jusqu’au renommage. L’ancienne API d’export en dossier conserve son périmètre d’entrée et utilise les mêmes écrivains. Le lecteur travaille avec des sorties locales et les ouvertures d’OpusNova et de Writer appartiennent à la recette.
+## Conservation par format
 
-## Matrice des éléments
-
-**V** signifie vérifié sur un témoin ou le corpus. **P** indique une implémentation limitée ou une conversion signalée. **R** désigne un cas qui entraîne un refus avant publication. En PDF, « composé » désigne le rendu tel qu’il existe dans les pages natives, avec ses glyphes, vecteurs ou images. Les valeurs éditables ou les relations que le format conserve sont indiquées séparément.
-
-| Élément | PDF natif | ODT | EPUB 3 | NOVA v27 |
+| Élément | PDF natif | ODT 1.3 | EPUB 3 | NOVA 27 |
 |---|---|---|---|---|
-| Métadonnées | V titre, auteur, valeurs reconnues | V propriétés Dublin Core et dates | V titre, langue, identifiant et propriétés reconnues | V titre et auteur, dates dans le manifeste |
-| Titres et niveaux | V signets de navigation quand le niveau est connu | V titres éditables et niveaux | V XHTML et navigation par niveaux | R hiérarchie éditoriale |
-| Paragraphes et styles | V glyphes et apparence composée | V paragraphes et styles de présentation automatiques | V paragraphes et CSS | V texte et plages de style |
-| Polices, tailles et couleurs | V faces admissibles, sous-ensembles et texte extractible | V noms de faces et styles de texte | V noms de faces, couleurs et tailles en CSS | V face, taille, couleur et attributs du profil |
-| Listes et numérotation | V marqueurs composés | P niveau simple, nombres décimaux ou puce standard | P même profil, listes XHTML | R listes |
-| Tabulations et retraits | V positions composées | P tabulations et propriétés de paragraphe prises en charge | P retraits CSS, tabulations adaptées au support | P caractères de tabulation, R taquets et retraits de mise en page |
-| Sections, marges, orientation | V dimensions sur chaque feuille | P disposition unique | P relecture adaptative, signalement des dimensions papier | P relecture éditable, signalement des dimensions papier |
-| Sauts | V coupures physiques | P saut avant paragraphe, R cas internes complexes | R sauts de page explicites hors profil | R sauts de page et structure complexe |
-| Tableaux, fusions et bordures | V composition et traits | V témoin de fusion horizontale, P variantes et bordures | V témoin de fusion horizontale, P variantes et bordures CSS | R tableaux |
-| Images intégrées | V objets image et dimensions | V image PNG insérée, P JPEG natif | V PNG, texte alternatif et couverture choisie, P JPEG | R images |
-| Dessins VML et DrawingML | V traits et polygones composés | P SVG dans le profil d’image en ligne | P ressource SVG | R |
-| SmartArt | V dessin vectoriel composé | P formes, connecteurs et libellés en SVG en ligne | P même profil SVG | R |
-| Graphiques et équations | P représentation déjà qualifiée par le moteur | R hors profil structuré | R hors profil structuré | R |
-| MathType | V aperçu passif de Stage 2 | R conversion | R conversion | R |
-| Zones de texte | V composition, ordre et rognage du papier | R conversion | R conversion | R |
-| En-têtes et pieds | V ancrages, décorations et champs composés | R histoires auxiliaires non vides | R histoires auxiliaires non vides | R histoires auxiliaires non vides |
-| Notes | V notes composées | P appels et corps éditables pris en charge dans le profil | P appels, corps et retours dans le profil | R notes |
-| Hyperliens | V annotations externes et cibles internes qualifiées | V liens dans le corps | V liens XHTML | R liens |
-| Signets et destinations | V destinations nommées et navigation | V témoin de signet et cible locale | V identifiants et fragments XHTML | R signets |
-| Sommaires | V résultat composé et renvois vérifiés | R sommaire DOCX actif hors profil | V navigation EPUB produite à partir des titres, R champ de sommaire actif | R |
-| Champs et numéros de page | V résultats de la composition | P PAGE et NUMPAGES simples, résultat des champs verrouillés pris en charge | P résultat des champs verrouillés | P résultat textuel des champs verrouillés |
-| Commentaires et révisions | P état de lecture, historique signalé | R historique | R historique | R historique |
-| Substitutions et glyphes | V rendu de la face résolue, pièce jointe de provenance pour les carrés et substitutions manuelles | P noms des faces et caractères Unicode du texte source | P noms des faces et caractères Unicode du texte source | P plages Unicode scalaires et faces du profil |
-| Éléments hors profil | V diagnostic, refus des pages incomplètes et de l’incorporation de face non autorisée | V diagnostic de refus avant fichier | V diagnostic de refus avant fichier | V diagnostic de refus avant fichier |
+| Métadonnées | Titre, auteur et propriétés reconnues | Dublin Core et dates | Titre, auteur, langue et identifiant | Titre, auteur et dates |
+| Titres et paragraphes | Texte et signets hiérarchiques | Titres, paragraphes, propriétés effectives et styles nommés | Titres XHTML et navigation hiérarchique | Paragraphes, titres et arborescence déclarée par les styles source |
+| Caractères et polices | Sous-ensembles incorporés selon les droits et le profil, texte extractible | Styles et faces déclarées | CSS et faces déclarées | Plages scalaires et styles natifs |
+| Listes | Marqueurs composés | Niveaux et numérotation qualifiés, libellés éditables en adaptation signalée | Listes structurées et libellés, styles CSS | Listes au motif et au retrait compatibles |
+| Sections et coupures | Feuilles composées, document entier ou plage | Styles de page, marges, orientation et transitions qualifiées | Chapitres redistribuables, coupures papier adaptées | Géométrie commune et sauts avant paragraphe qualifiés |
+| Tableaux | Grille et bordures composées | Tables éditables, fusions, bordures, fonds | Tables XHTML, fusions, CSS | Blocs natifs, fusions, bordures uniformes, marges compatibles |
+| Images | Images et transparences composées | PNG et JPEG admis, description disponible | PNG, JPEG et SVG admis, couverture source ou choisie | PNG et JPEG admis dans un paragraphe isolé, ressource et alternative |
+| Vecteurs et SmartArt | Traits et formes du peintre natif | SVG en ligne ou dans une zone compatible | SVG intégré, profil des dessins en ligne | Refus des dessins complexes |
+| Graphiques et équations | Représentation disponible dans le peintre, aperçu passif qualifié | Refus hors profil | Refus hors profil | Refus hors profil |
+| Histoires auxiliaires | Placement, champs et dessins composés | Variantes reliées aux styles de page, texte et certains cadres éditables | Contenu utile inclus une fois, folios papier écartés | Refus des histoires utiles hors profil |
+| Notes | Appels et corps composés | Notes éditables, appels et corps | Appels, corps et liens de retour | Appels et corps natifs, numérotation OpusNova |
+| Liens et signets | Annotations et destinations qualifiées | Hyperliens, signets par plage et références | Liens entre chapitres et vers les notes | Liens et signets du manuscrit |
+| Sommaires et champs | Résultats du moteur | Numéros et totaux de page, renvois dynamiques, entrées de sommaire et résultats qualifiés | Navigation XHTML et résultats utiles qualifiés | Renvois compatibles et texte vérifié, refus des champs actifs hors profil |
+| Commentaires et révisions | État de lecture et diagnostic d’historique | Refus de l’historique hors profil | Refus de l’historique hors profil | Refus de l’historique hors profil |
+| Glyphes historiques | Marque visible ou choix utilisateur selon la composition, provenance sur demande explicite | Code original et face déclarée selon le profil | Code original et face déclarée selon le profil | Code original dans les plages scalaires selon le profil |
 
-La comparaison PDF qualifie la sortie du peintre natif. Les PDF gardent leurs dimensions, les annotations et les signets que le profil sait placer. La sélection et l’extraction sont confirmées pour le texte courant du corpus. La structure d’accessibilité PDF, les formes sérialisées comme objets éditables et l’extraction exacte des ligatures ou des glyphes de police symbolique restent hors de cette qualification. [Métadonnées du moteur PDF Skia](https://api.skia.org/structSkPDF_1_1Metadata.html)
+La fidélité PDF est mesurée par rapport aux feuilles natives de Lecteur Word. Les options d’image couvrent l’encodage sans perte et deux niveaux JPEG pour les images opaques. L’option de provenance ajoute uniquement les enregistrements des glyphes concernés et leur origine dans le paquet source. Elle est désactivée à chaque ouverture du dialogue. [Métadonnées du moteur PDF Skia](https://api.skia.org/structSkPDF_1_1Metadata.html)
 
-Les profils ODT et EPUB passent par la structure sémantique, les styles effectifs et les géométries de cellules et dessins utilisables. Ils partagent la gestion des ressources et un contrôle de réouverture ZIP/XML. L’EPUB utilise le profil de lecture adaptatif, un paquet OPF, un sommaire XHTML et une feuille CSS. Le texte alternatif déclaré est conservé pour les images intégrées. L’incorporation de fontes redistribuables et les effets typographiques complexes restent hors profil. [OpenDocument 1.3](https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/OpenDocument-v1.3-os-part3-schema.html) · [EPUB 3.3](https://www.w3.org/TR/epub-33/)
+L’ODT utilise les styles de page, un document de styles et un corps éditable. L’EPUB assemble un paquet OPF, les chapitres XHTML, les feuilles de style et les ressources intégrées. Les ancres sont résolues après le découpage, y compris pour le retour d’une note vers son appel. Le texte alternatif déclaré est repris. L’incorporation de polices EPUB, les habillages complexes et certaines transitions physiques restent à qualifier. [OpenDocument 1.3](https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/OpenDocument-v1.3-os-part3-schema.html) · [EPUB 3.3](https://www.w3.org/TR/epub-33/)
 
-L’encodeur NOVA suit les fichiers `manifest.json`, `documents/{id}.txt` et `styles/{id}.json` du schéma v27. Les plages de style utilisent les offsets scalaires Unicode. La version a été vérifiée à la révision `8633f8fb457396c9015304228694afc72ee7ded6` de `main`. Le profil éprouvé correspond au manuscrit éditable en paragraphes et styles simples. La forêt éditoriale, les ancrages natifs, les blocs, les notes et les ressources avancées entraînent un refus explicite pour ce format. [Dépôt OpusNova](https://github.com/LeSireDeGrave/OpusNova/tree/8633f8fb457396c9015304228694afc72ee7ded6)
+## Contrat DOCX vers NOVA
+
+La version native 27 a été vérifiée dans le dépôt canonique OpusNova et sur GitHub à la révision `8633f8fb457396c9015304228694afc72ee7ded6`. Le manifeste relie le document actif, la bibliothèque de styles, la géométrie du projet, les ressources et les enregistrements auxiliaires. [Dépôt OpusNova](https://github.com/LeSireDeGrave/OpusNova/tree/8633f8fb457396c9015304228694afc72ee7ded6)
+
+| Contrat NOVA | Source dans DocxFlow |
+|---|---|
+| `documents/{id}.txt`, `styles/{id}.json` v9 | Ordre des blocs, paragraphes, caractères et plages scalaires Unicode |
+| `anchors/{id}.json` v3, `manuscript` v3 | Titres réels déclarés Partie, Chapitre ou Scène et leur position dans le manuscrit |
+| `blocks/{id}.json` | Tableaux et images aux ancrages natifs, marqués par U+FFFC |
+| `resources/{id}.bin` | PNG ou JPEG placé, identifié par son SHA-256 |
+| `notes.json` v1 | Appels, types et corps de notes |
+| `org.opusnova.references` v1 | Plages de liens et signets du manuscrit |
+| `org.opusnova.page_styles` | Format et marges communs aux sections admises |
+
+Les identifiants sont dérivés de l’empreinte du DOCX et de l’identité logique de chaque élément. Un titre éditorial correspond à un paragraphe source. La solidarité et les sauts proviennent des propriétés de ce paragraphe. Le profil utilise un document interne par DOCX. Les changements de géométrie entre sections, les références internes aux corps annexes et les objets pour lesquels la représentation native est insuffisante donnent lieu à un refus localisé.

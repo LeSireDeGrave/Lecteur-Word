@@ -10,6 +10,7 @@ public sealed record ListLabel(string NumId,int Level,string Text,string Alignme
 {
     internal SemanticNumbering? Numbering {get;init;}
     internal IReadOnlyList<string> ReferencedLevels {get;init;}=[];
+    internal int? Counter {get;init;}
 }
 public sealed record InlineImage(string ResourceId,SourceLocation Source,float Width,float Height,int PixelWidth,int PixelHeight,string Sha256)
 {

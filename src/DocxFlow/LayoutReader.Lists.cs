@@ -252,7 +252,7 @@ public static partial class LayoutReader
             if(semantic is not null&&(label.Length>128||label.Any(char.IsControl)))
             {Issue("LAYOUT_LIST_SYMBOL_UNQUALIFIED",n,"Libellé développé hors du profil borné.");return null;}
             return new ListLabel(id,index,label,level.Alignment,level.Suffix,level.Node.Source,Character(Child(level.Node,"rPr"),character))
-            {Numbering=selection,ReferencedLevels=origins.ToArray()};
+            {Numbering=selection,ReferencedLevels=origins.ToArray(),Counter=state[index]};
         }
     }
 }

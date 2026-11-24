@@ -8,7 +8,8 @@ using LecteurWord.DocxCore;
 
 namespace LecteurWord.Flow;
 
-internal sealed class StructuredPublication(PublicationSource source,ExportFormat format,CancellationToken token,bool useCover=false)
+internal sealed partial class StructuredPublication(PublicationSource source,ExportFormat format,CancellationToken token,
+    bool useCover=false,PublicationCover? selectedCover=null)
 {
     internal const string HtmlNamespace="http://www.w3.org/1999/xhtml";
     internal static readonly XNamespace Html=HtmlNamespace, Epub="http://www.idpf.org/2007/ops",
@@ -22,13 +23,14 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         Xlink="http://www.w3.org/1999/xlink", Svg="http://www.w3.org/2000/svg";
     internal sealed record Asset(string Path,string Mime,byte[] Data);
     internal sealed record Inline(SemanticSource Source,string? Value,TextStyle? Style,FontResolution? Font,
-        string? Anchor=null,SemanticReference? Link=null,SemanticReference? Note=null,InlineImage? Image=null,string? Field=null);
+        string? Anchor=null,SemanticReference? Link=null,SemanticReference? Note=null,InlineImage? Image=null,string? Field=null,
+        string? AnchorEnd=null,string? Target=null,string? NumberFormat=null,string? DeclaredFont=null);
 
     internal readonly List<FlowIssue> Issues=[];
     internal readonly List<PublicationFeature> Features=[];
     readonly HashSet<(string,string?)> seen=[];
     internal readonly List<Asset> Assets=[];
-    internal Asset? Cover=>useCover?Assets.FirstOrDefault(a=>a.Mime is "image/png" or "image/jpeg"):null;
+    internal Asset? Cover {get;private set;}
     readonly Dictionary<string,Asset> assetsById=new(StringComparer.Ordinal);
     internal readonly XElement Automatic=new(Office+"automatic-styles");
     readonly Dictionary<(string,XElement),string> styles=new(new StyleEquality());
@@ -49,7 +51,19 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
     readonly ILookup<string,SemanticElement> marks=source.Semantic!.Elements.Where(e=>e.Kind==SemanticKind.BookmarkStart&&
         e.Coverage==SemanticCoverage.Represented).Select(e=>(element:e,paragraph:ParagraphOf(source.Semantic!,e.Id)))
         .Where(x=>x.paragraph is not null).ToLookup(x=>x.paragraph!,x=>x.element,StringComparer.Ordinal);
+    readonly ILookup<string,SemanticElement> bookmarkEnds=source.Semantic!.Elements
+        .Where(e=>e.Kind==SemanticKind.BookmarkEnd&&e.Coverage==SemanticCoverage.Represented)
+        .Select(e=>(Element:e,Paragraph:ParagraphOf(source.Semantic!,e.Id))).Where(e=>e.Paragraph is not null)
+        .ToLookup(e=>e.Paragraph!,e=>e.Element,StringComparer.Ordinal);
+    readonly ILookup<(string? Story,string? Number),SemanticElement> bookmarkStarts=source.Semantic!.Elements
+        .Where(e=>e.Kind==SemanticKind.BookmarkStart&&e.Coverage==SemanticCoverage.Represented)
+        .ToLookup(e=>(e.StoryId,source.Semantic!.Attribute(e.Id,"id")));
     readonly HashSet<string> writtenNotes=new(StringComparer.Ordinal);
+    readonly IReadOnlyDictionary<string,string> noteLabels=(source.Pagination?.Composition.Pages??[])
+        .SelectMany(p=>p.DisplayLines).SelectMany(line=>line.Native?.Generated??[])
+        .Where(part=>part.Kind=="noteNumber").GroupBy(part=>part.Cause.NodeId,StringComparer.Ordinal)
+        .Where(parts=>parts.All(part=>part.Fragment.Text==parts.First().Fragment.Text))
+        .ToDictionary(parts=>parts.Key,parts=>parts.First().Fragment.Text,StringComparer.Ordinal);
     readonly List<(string Id,bool End,string Label,XElement[] Blocks)> notes=[];
     internal IReadOnlyList<(string Id,bool End,string Label,XElement[] Blocks)> Notes=>notes;
     internal readonly List<(string Id,int Level,string Title)> Headings=[];
@@ -60,20 +74,21 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
     internal PublicationMetadata Metadata=>source.Metadata;
     internal SemanticDocument Model=>model;
 
-    internal static PublicationPlan Prepare(PublicationSource source,ExportFormat format,CancellationToken token,bool useCover=false)
+    internal static PublicationPlan Prepare(PublicationSource source,ExportFormat format,CancellationToken token,
+        bool useCover=false,PublicationCover? selectedCover=null)
     {
         if(source.Pagination is not {Typography:{},RulerModel:{}}||source.Semantic is null)
             return Publications.Blocked("EXPORT_SEMANTIC_UNAVAILABLE","Les styles et la structure vérifiés du document sont indisponibles.");
-        var book=new StructuredPublication(source,format,token,useCover);
+        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
         _=book.BuildBody();
         return new(format switch{ExportFormat.Odt=>"odt-semantic-v1",ExportFormat.Epub3=>"epub-semantic-v1",_=>"opusnova-v27"},
             [..book.Features],[..book.Issues]);
     }
 
     internal static void Write(string path,PublicationSource source,ExportFormat format,ExportBudget budget,
-        IProgress<PublicationProgress>? progress,CancellationToken token,bool useCover=false)
+        IProgress<PublicationProgress>? progress,CancellationToken token,bool useCover=false,PublicationCover? selectedCover=null)
     {
-        var book=new StructuredPublication(source,format,token,useCover);
+        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
         var body=book.BuildBody();
         if(book.Issues.Any(i=>i.BlocksExport))throw new PublicationRefusal(book.Issues);
         if(format==ExportFormat.Nova)
@@ -85,9 +100,10 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         PublicationPackages.Write(path,source,book,body,format,budget,progress,token);
     }
 
-    internal static void Verify(string path,PublicationSource source,ExportFormat format,CancellationToken token,bool useCover=false)
+    internal static void Verify(string path,PublicationSource source,ExportFormat format,CancellationToken token,
+        bool useCover=false,PublicationCover? selectedCover=null)
     {
-        var book=new StructuredPublication(source,format,token,useCover);
+        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
         var body=book.BuildBody();
         if(format==ExportFormat.Nova)NovaPublication.Verify(path,book,token);
         else PublicationPackages.Verify(path,source,book,body,format,token);
@@ -99,17 +115,9 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         if(model.Stories.SingleOrDefault(s=>s.Kind=="body") is not {} body)return [];
         Feature("metadata",PublicationRetention.Native,null,"Propriétés du document et langue.");
         Feature("document",PublicationRetention.Structured,model.Source(body.RootId).Location,"Ordre de lecture et paragraphes.");
-        if(Odt&&snapshot.Sections.Length!=1)
-            Issue("EXPORT_ODT_SECTIONS",model.Source(body.RootId),"Le profil ODT conserve une disposition de page unique.");
         if(!Odt&&snapshot.Sections.Length>0)
-            Issue("EXPORT_REFLOW_PAPER",model.Source(body.RootId),"La publication s’adapte au support de lecture. Les marges et dimensions du papier restent dans le DOCX.",false);
-        foreach(var region in model.Sections.SelectMany(s=>s.RunningStories).Where(s=>s.Reference.TargetId is not null).DistinctBy(s=>s.Reference.TargetId))
-        {
-            string root=region.Reference.TargetId!;
-            if(model.BlocksOf(root).Any(e=>e.Kind!=SemanticKind.Paragraph||tokens[e.Id].Any(t=>Visible(t)&&
-                (t.Control=="Drawing"||!string.IsNullOrWhiteSpace(t.Original)))))
-                Issue("EXPORT_RUNNING_STORY",model.Source(root),"Un en-tête ou pied de page contient des éléments hors du profil de publication.");
-        }
+            Issue("EXPORT_REFLOW_PAPER",model.Source(body.RootId),"La publication s’adapte au support de lecture.",false);
+        var auxiliary=Odt?BuildOdtPageStyles():BuildReflowStories(format==ExportFormat.Epub3);
         foreach(var issue in snapshot.Typography!.Diagnostics.Where(i=>i.Code is "TEXT_PROPERTY_PARTIAL" or "TEXT_VISIBILITY_UNRESOLVED" or
             "TEXT_HIDDEN_CONTROL_UNQUALIFIED" or "TEXT_STORY_UNQUALIFIED"))
             AddIssue(issue.Code,issue.Source,issue.Message,true);
@@ -124,10 +132,18 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         }
         if(format==ExportFormat.Nova)
         {
-            NovaPublication.Assess(this,model.BodyBlocks);
+            NovaPublication.Assess(this,token);
             return [];
         }
-        var blocks=Blocks(model.BodyBlocks);
+        var blocks=auxiliary.Concat(Blocks(model.BodyBlocks)).ToArray();
+        if(selectedCover is not null)
+        {
+            string extension=selectedCover.Mime=="image/png"?".png":".jpg";
+            Cover=new("images/cover"+extension,selectedCover.Mime,selectedCover.Bytes.ToArray());
+            Assets.Add(Cover);
+            Feature("cover",PublicationRetention.Native,null,"Couverture choisie pour cette publication.");
+        }
+        else if(useCover)Cover=Assets.FirstOrDefault(a=>a.Mime is "image/png" or "image/jpeg");
         if(useCover&&Cover is null)Issue("EXPORT_EPUB_COVER",model.Source(body.RootId),"Aucune illustration PNG ou JPEG ne peut servir de couverture.");
         return blocks;
     }
@@ -136,7 +152,7 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
     {
         for(string? parent=model.ParentId(id);parent is not null;parent=model.ParentId(parent))
             if(model.Element(parent).Kind is SemanticKind.Property or SemanticKind.Section||
-                model.Element(parent).Kind==SemanticKind.Drawing&&placedImages.ContainsKey(parent))return true;
+                model.Element(parent).Kind==SemanticKind.Drawing&&(placedImages.ContainsKey(parent)||odtFloatingIds.Contains(parent)))return true;
         return false;
     }
 
@@ -150,24 +166,25 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
                     foreach(var slice in fragment.Sources)fontMap.TryAdd(slice.Source.NodeId,face);
         var parts=new List<(int Index,Inline Item)>();
         foreach(var mark in marks[paragraph])
+        {
             if(model.Attribute(mark.Id,"name")!="_GoBack")
                 parts.Add((mark.Order,new(model.Source(mark.Id),null,null,null,Anchor:Id(mark.Id))));
+        }
+        if(Odt||format==ExportFormat.Nova)
+            foreach(var mark in bookmarkEnds[paragraph])
+                parts.Add((mark.Order,new(model.Source(mark.Id),null,null,null,AnchorEnd:model.Attribute(mark.Id,"id"))));
 
         var all=tokens[paragraph].ToArray();
         var fields=fieldsByParagraph[paragraph];
         var replaced=new HashSet<string>(StringComparer.Ordinal);
         foreach(var field in fields)
         {
-            if(Odt&&field.StructureVerified&&!field.Locked&&field.Command is ("PAGE" or "NUMPAGES")&&
-                PageFieldSyntax.Read(model,field,allowCachedPageStyle:false) is {Format:null,DecimalPlaces:0})
+            if(TryStructuredField(field,all,parts,replaced))
             {
-                var node=model.Source(field.Id);
-                parts.Add((model.Element(field.Id).Order,new(node,model.StoredText(field),null,null,Field:field.Command)));
-                replaced.UnionWith(field.StoredResultIds);
-                Feature("fields",PublicationRetention.Native,node.Location,"Champ de numéro ou total de pages ODT.");
+                continue;
             }
             else if(field is not {StructureVerified:true,Locked:true,StoredResultIds.IsEmpty:false})
-                Issue("EXPORT_FIELD_UNSUPPORTED",model.Source(field.Id),"Champ actif hors profil de conversion.");
+                Issue("EXPORT_FIELD_UNSUPPORTED",model.Source(field.Id),"Champ actif hors profil de conversion · "+field.Command+".");
             else Feature("fields",PublicationRetention.Structured,model.Source(field.Id).Location,"Résultat stocké du champ verrouillé.");
         }
         foreach(var item in all)
@@ -188,18 +205,38 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
                         if(model.Attribute(item.Source.NodeId,"type") is null or "textWrapping")value="\n";
                         else if(Odt&&model.Attribute(item.Source.NodeId,"type")=="page")
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Field:"BREAK")));
+                        else if(format==ExportFormat.Epub3&&model.Attribute(item.Source.NodeId,"type") is ("page" or "column"))
+                        {
+                            Issue("EXPORT_EPUB_REFLOW_BREAK",item.Source,"Le saut de feuille ou de colonne est adapté à la lecture continue.",false);
+                            value="\n";
+                        }
                         else Issue("EXPORT_BREAK_UNSUPPORTED",item.Source,"Saut de page ou de colonne hors profil.");
                         break;
                     case "Drawing":
                         if(placedImages.GetValueOrDefault(item.Source.NodeId) is {} image&&
-                            format!=ExportFormat.Nova&&AssetFor(image) is not null)
+                            AssetFor(image) is {} asset&&(format!=ExportFormat.Nova||asset.Mime is "image/png" or "image/jpeg"))
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Link:link,Image:image)));
+                        else if(Odt&&odtFloatingIds.Contains(item.Source.NodeId))
+                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Field:"FLOAT")));
+                        else if(reflowStory&&format==ExportFormat.Epub3&&IsDecorativeDrawing(item.Source.NodeId))
+                            Issue("EXPORT_EPUB_DECORATION",item.Source,"Le décor récurrent est écarté de la lecture continue.",false);
                         else Issue("EXPORT_DRAWING_UNSUPPORTED",item.Source,"Dessin, graphique ou équation hors du profil structuré.");
+                        continue;
+                    case "Symbol":
+                        if(item.Style is {} symbolStyle&&uint.TryParse(value,NumberStyles.AllowHexSpecifier,
+                            CultureInfo.InvariantCulture,out uint code)&&code<=int.MaxValue&&Rune.TryCreate((int)code,out var rune)&&
+                            model.Attribute(item.Source.NodeId,"font") is {Length:>0} declaredFont)
+                        {
+                            Issue("EXPORT_SYMBOL_SOURCE_CODE",item.Source,$"Le caractère U+{code:X4} d’origine est conservé avec sa face déclarée.",false);
+                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,rune.ToString(),symbolStyle,null,
+                                Link:link,DeclaredFont:declaredFont)));
+                        }
+                        else Issue("EXPORT_SYMBOL_UNQUALIFIED",item.Source,"Le code ou la police du symbole ne peut être conservé.");
                         continue;
                     case "NoteMark":continue;
                     case "NoteCall":
                         var note=references[item.Source.NodeId].SingleOrDefault();
-                        if(format!=ExportFormat.Nova&&note is {Status:ReferenceStatus.Resolved,TargetId:not null})
+                        if(note is {Status:ReferenceStatus.Resolved,TargetId:not null})
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Note:note)));
                         else Issue("EXPORT_NOTE_UNSUPPORTED",item.Source,"Note hors du profil structuré.");
                         continue;
@@ -220,6 +257,10 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
     }
 
     internal LayoutParagraph? Paragraph(string id)=>paragraphs.GetValueOrDefault(id);
+    internal LayoutTable? LayoutTable(string id)=>tables.GetValueOrDefault(id);
+    internal PageCompositionSnapshot Snapshot=>snapshot;
+    internal string SourceHash=>source.SourceHash;
+    internal string? NoteLabel(string node)=>noteLabels.GetValueOrDefault(node);
     internal static bool Visible(TextToken item)=>item.Role is TextRole.Source or TextRole.StoredField or TextRole.Control&&
         item.Style?.SuppressText!=true;
 
@@ -240,15 +281,14 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
     internal XElement[] Blocks(IEnumerable<string> ids)
     {
         var result=new List<XElement>();
-        XElement? list=null;
-        string? listId=null;
+        var lists=new List<(string Sequence,int Level,string Style,XElement Container)>();
         foreach(string id in ids)
         {
             token.ThrowIfCancellationRequested();
             var element=model.Element(id);
             if(element.Kind==SemanticKind.Table)
             {
-                list=null;listId=null;
+                lists.Clear();
                 if(tables.TryGetValue(id,out var table))result.Add(BuildTable(table));
                 else Issue("EXPORT_TABLE_UNQUALIFIED",model.Source(id),"Géométrie ou fusion de tableau hors profil structuré.");
                 continue;
@@ -260,50 +300,105 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
             }
             var paragraph=Paragraph(id);
             var markup=BuildParagraph(id,paragraph);
-            if(paragraph?.List is not {} label)
+            if(paragraph?.List is not {} label||label.Text.Length==0)
             {
-                list=null;listId=null;result.Add(markup);continue;
-            }
-            if(label.Level!=0||!TryListLabel(label.Text,out bool number,out int index))
-            {
-                Issue("EXPORT_LIST_UNSUPPORTED",model.Source(id),"Numérotation ou niveau de liste hors profil.");
+                lists.Clear();
                 result.Add(markup);
                 continue;
             }
-            if(listId!=label.NumId)
+            var format=ListFormat(label,paragraph.Id);
+            if(format is null)
             {
-                listId=label.NumId;
-                list=Odt?new(Text+"list"):new(number?Html+"ol":Html+"ul");
-                if(Odt)list.SetAttributeValue(Text+"style-name",ListStyle(number));
-                else if(number)list.SetAttributeValue("start",index);
-                result.Add(list);
+                Issue("EXPORT_LIST_UNSUPPORTED",model.Source(id),"Libellé ou glyphe de liste hors profil.");
+                lists.Clear();
+                result.Add(markup);
+                continue;
             }
+            var (number,index,prefix,suffix,display,custom)=format.Value;
+            int currentDepth=lists.Count>0&&lists[^1].Level==label.Level?lists.Count-1:lists.Count;
+            string style=Odt?ListStyle(currentDepth,number,prefix,suffix,display,custom):custom?"literal":number;
+            while(lists.Count>0&&(lists[^1].Sequence!=label.NumId||lists[^1].Level>label.Level||
+                lists[^1].Level==label.Level&&lists[^1].Style!=style))lists.RemoveAt(lists.Count-1);
+            if(lists.Count==0||lists[^1].Level!=label.Level)
+            {
+                int depth=lists.Count;
+                if(Odt)style=ListStyle(depth,number,prefix,suffix,display,custom);
+                var container=Odt?new XElement(Text+"list"):new XElement(number.Length>0?Html+"ol":Html+"ul");
+                if(Odt)container.SetAttributeValue(Text+"style-name",style);
+                else if(custom)container.SetAttributeValue("style","list-style-type:none");
+                else if(number.Length>0)
+                {
+                    container.SetAttributeValue("type",number);
+                    if(index>0)container.SetAttributeValue("start",index);
+                }
+                if(lists.Count>0&&lists[^1].Container.Elements().LastOrDefault() is {} parent)parent.Add(container);
+                else result.Add(container);
+                lists.Add((label.NumId,label.Level,style,container));
+            }
+
             var entry=new XElement(Odt?Text+"list-item":Html+"li",markup);
-            if(number)entry.SetAttributeValue(Odt?Text+"start-value":"value",index);
-            list!.Add(entry);
-            Feature("lists",PublicationRetention.Native,label.Source,"Liste ordonnée ou à puce, niveau simple.");
+            if(index>0&&!custom&&number.Length>0)entry.SetAttributeValue(Odt?Text+"start-value":"value",index);
+            if(custom)
+            {
+                var marker=Odt?new XElement(Text+"span",OdtText(display+(label.Suffix=="nothing"?"":" "))):
+                    new XElement(Html+"span",display+(label.Suffix=="nothing"?"":" "));
+                markup.AddFirst(marker);
+                Issue("EXPORT_LIST_LABEL_LITERAL",model.Source(id),"La liste reste structurée et son libellé est conservé comme texte éditable.",false);
+            }
+            lists[^1].Container.Add(entry);
+            Feature("lists",PublicationRetention.Native,label.Source,"Listes structurées, niveaux et libellés.");
         }
         return result.ToArray();
     }
 
-    static bool TryListLabel(string label,out bool numbered,out int number)
+    (string Number,int Index,string Prefix,string Suffix,string Display,bool Literal)? ListFormat(ListLabel label,string paragraph)
     {
-        number=0;
-        numbered=label.EndsWith('.')&&int.TryParse(label.AsSpan(0,label.Length-1),NumberStyles.None,
-            CultureInfo.InvariantCulture,out number)&&number>=1;
-        return numbered||label=="•";
+        if(label.Level is <0 or >8||label.Text.Any(char.IsControl))return null;
+        string? Value(string key)=>label.Numbering?.LevelId is {} level&&model.ChildId(level,key) is {} property?
+            model.Attribute(property,"val"):null;
+        string? sourceFormat=Value("numFmt");
+        string number=sourceFormat switch
+        {
+            "decimal"=>"1","lowerLetter"=>"a","upperLetter"=>"A","lowerRoman"=>"i","upperRoman"=>"I",
+            null when label.Counter.HasValue=>"1",_=>""
+        };
+        string display=snapshot.ListMarkers.GetValueOrDefault(paragraph)?.Decoration?.Fragment.Text??label.Text;
+        if(display.EnumerateRunes().Any(r=>LegacySymbols.Private(r.Value))||display.Length==0)return null;
+        if(sourceFormat=="bullet")
+            return ("",0,"","",display,!Odt||display.EnumerateRunes().Count()!=1);
+        string token="%"+(label.Level+1).ToString(CultureInfo.InvariantCulture);
+        string pattern=Value("lvlText")??"";
+        int at=pattern.IndexOf(token,StringComparison.Ordinal),index=label.Counter??0;
+        if(at>=0&&pattern.Count(c=>c=='%')==1&&index>0&&number.Length>0&&
+            (Odt&&number is "a" or "A"||number is "1" or "i" or "I"||index<=26))
+        {
+            string prefix=pattern[..at],suffix=pattern[(at+token.Length)..];
+            return (number,index,prefix,suffix,display,!Odt&&(prefix.Length>0||suffix!="."));
+        }
+        return (number,index,"","",display,true);
     }
 
-    string ListStyle(bool number)
+    readonly Dictionary<(int Depth,string Number,string Prefix,string Suffix,string Bullet,bool Literal),string> odtLists=[];
+
+    string ListStyle(int depth,string number,string prefix,string suffix,string display,bool literal)
     {
-        string name=number?"DecimalList":"BulletList";
-        if(!Automatic.Elements(Text+"list-style").Any(e=>(string?)e.Attribute(Style+"name")==name))
+        string bullet=number.Length==0&&!literal?display:"";
+        var key=(depth,number,prefix,suffix,bullet,literal);
+        if(odtLists.TryGetValue(key,out var name))return name;
+        name="LwList"+odtLists.Count.ToString(CultureInfo.InvariantCulture);
+        odtLists.Add(key,name);
+        bool numbered=number.Length>0||literal;
+        var level=new XElement(Text+(numbered?"list-level-style-number":"list-level-style-bullet"),
+            new XAttribute(Text+"level",depth+1));
+        if(numbered)
         {
-            var level=new XElement(Text+(number?"list-level-style-number":"list-level-style-bullet"),new XAttribute(Text+"level",1));
-            if(number){level.SetAttributeValue(Style+"num-format","1");level.SetAttributeValue(Style+"num-suffix",".");}
-            else level.SetAttributeValue(Text+"bullet-char","•");
-            Automatic.Add(new XElement(Text+"list-style",new XAttribute(Style+"name",name),level));
+            level.SetAttributeValue(Style+"num-format",literal?"":number);
+            if(number is "a" or "A")level.SetAttributeValue(Style+"num-letter-sync","true");
+            if(prefix.Length>0)level.SetAttributeValue(Style+"num-prefix",prefix);
+            if(suffix.Length>0)level.SetAttributeValue(Style+"num-suffix",suffix);
         }
+        else level.SetAttributeValue(Text+"bullet-char",bullet);
+        Automatic.Add(new XElement(Text+"list-style",new XAttribute(Style+"name",name),level));
         return name;
     }
 
@@ -319,26 +414,29 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
             if(level>6)block.SetAttributeValue("aria-level",level);
         }
         var parts=ReadInlines(id);
+        bool leadingBreak=parts.FirstOrDefault()?.Field=="BREAK";
         if(!Odt&&parts.Any(p=>p.Value is {} value&&(value.Contains('\t')||value.Contains('\n')||value.All(char.IsWhiteSpace))))
             block.SetAttributeValue(XNamespace.Xml+"space","preserve");
         string? plainTitle=level>0?string.Concat(parts.Select(x=>x.Value)).Trim():null;
         if(!string.IsNullOrEmpty(plainTitle))Headings.Add((Id(id),level,plainTitle));
-        if(paragraph is {} layout)ApplyParagraph(block,layout);
+        if(paragraph is {} layout)ApplyParagraph(block,layout,leadingBreak);
         foreach(var item in parts)
         {
             if(item.Field=="BREAK")
             {
                 // A mid-paragraph page break cannot be mapped to an ODF paragraph property.
-                Issue("EXPORT_ODT_INLINE_PAGE_BREAK",item.Source,"Saut de page à l’intérieur d’un paragraphe hors profil ODT.");
+                if(!leadingBreak||item!=parts[0])
+                    Issue("EXPORT_ODT_INLINE_PAGE_BREAK",item.Source,"Saut de page à l’intérieur d’un paragraphe hors profil ODT.");
                 continue;
             }
+            if(item.Field=="FLOAT"){AppendOdtDrawing(block,item.Source);continue;}
             var element=WriteInline(item);
             if(element is not null)block.Add(element);
         }
         return block;
     }
 
-    void ApplyParagraph(XElement node,LayoutParagraph paragraph)
+    void ApplyParagraph(XElement node,LayoutParagraph paragraph,bool leadingBreak)
     {
         var p=paragraph.Properties;
         if(!Odt)
@@ -354,7 +452,10 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
             new XAttribute(Fo+"margin-left",Pt(p.Left)),new XAttribute(Fo+"margin-right",Pt(p.Right)),
             new XAttribute(Fo+"text-indent",Pt(p.FirstLine)),new XAttribute(Fo+"margin-top",Pt(p.Before)),
             new XAttribute(Fo+"margin-bottom",Pt(p.After)));
-        if(p.PageBreakBefore)props.SetAttributeValue(Fo+"break-before","page");
+        int? master=OdtMasterFor(paragraph.Id);
+        if(master>1||p.PageBreakBefore||leadingBreak)props.SetAttributeValue(Fo+"break-before","page");
+        if(master is {} section&&snapshot.Sections[section-1].PageNumberStart is int number)
+            props.SetAttributeValue(Style+"page-number",number);
         if(p.KeepNext)props.SetAttributeValue(Fo+"keep-with-next","always");
         if(p.KeepLines)props.SetAttributeValue(Fo+"keep-together","always");
         if(p.LineRule=="auto")props.SetAttributeValue(Fo+"line-height",Num(p.Line/240*100)+"%");
@@ -365,17 +466,33 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
                 new XAttribute(Style+"type",tab.Alignment switch{"center"=>"center","right"=>"right","decimal"=>"char",_=>"left"})))));
         if(shaped.GetValueOrDefault(paragraph.Id)?.RightToLeft==true)props.SetAttributeValue(Style+"writing-mode","rl-tb");
         if(p.Shading is {} shade)props.SetAttributeValue(Fo+"background-color","#"+shade.Color);
-        node.SetAttributeValue(Text+"style-name",Register("paragraph",props));
+        foreach(var (edge,rule) in new[]{("top",p.TopBorder),("right",p.RightBorder),("bottom",p.BottomBorder),("left",p.LeftBorder)})
+            if(rule is not null)
+            {
+                props.SetAttributeValue(Fo+("border-"+edge),Pt(rule.Width)+" solid #"+rule.Color);
+                props.SetAttributeValue(Fo+("padding-"+edge),Pt(rule.Space));
+            }
+        node.SetAttributeValue(Text+"style-name",Register("paragraph",props,master is {} index?OdtMasterName(index):null,
+            NamedOdtStyle(paragraph)));
     }
 
     XNode? WriteInline(Inline item)
     {
-        if(item.Anchor is {} anchor)return Odt?new XElement(Text+"bookmark",new XAttribute(Text+"name",anchor)):
+        if(item.Anchor is {} anchor)return Odt?new XElement(Text+"bookmark-start",new XAttribute(Text+"name",anchor)):
             new XElement(Html+"span",new XAttribute("id",anchor));
+        if(item.AnchorEnd is {} end&&Odt)
+        {
+            var origin=bookmarkStarts[(model.Element(item.Source.NodeId).StoryId,end)].Take(2).ToArray();
+            if(origin is [var start])
+                return model.Attribute(start.Id,"name")=="_GoBack"?null:
+                    new XElement(Text+"bookmark-end",new XAttribute(Text+"name",Id(start.Id)));
+            Issue("EXPORT_ODT_BOOKMARK",item.Source,"Début de signet ODT ambigu ou absent.");
+            return null;
+        }
         if(item.Note is {} note)return WriteNote(item,note);
         XNode content;
-        if(item.Field is {} field)
-            content=new XElement(Text+(field=="PAGE"?"page-number":"page-count"),item.Value??"");
+        if(Odt&&item.Field is {} field)
+            return WriteOdtField(item,field);
         else if(item.Image is {} image&&AssetFor(image) is {} asset)
         {
             var alt=AlternativeText(item.Source.NodeId);
@@ -415,8 +532,9 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
             }
         }
         else return null;
-        if(item.Link is not {} link)return content;
-        string? href=link is {Status:ReferenceStatus.Resolved,TargetId:{} target}?"#"+Id(target):Publications.SafeUrl(link.Relation?.Target);
+        if(item.Link is null&&item.Target is null)return content;
+        string? href=item.Target is {} destination?"#"+Id(destination):
+            item.Link is {Status:ReferenceStatus.Resolved,TargetId:{} target}?"#"+Id(target):Publications.SafeUrl(item.Link?.Relation?.Target);
         if(href is null)
         {
             Issue("EXPORT_LINK_UNSUPPORTED",item.Source,"Cible du lien indisponible ou hors profil.");
@@ -436,12 +554,14 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
             Issue("EXPORT_NOTE_REPEATED",item.Source,"Référence de note partagée hors du profil de numérotation.");
             return new XElement(Odt?Text+"span":Html+"span");
         }
-        string label=(notes.Count(n=>n.End==end)+1).ToString(CultureInfo.InvariantCulture);
+        string ordinal=(notes.Count(n=>n.End==end)+1).ToString(CultureInfo.InvariantCulture);
+        string label=NoteLabel(item.Source.NodeId)??ordinal;
         var blocks=Blocks(model.BlocksOf(note.TargetId!).Select(e=>e.Id));
         notes.Add((id,end,label,blocks));
         Feature("notes",PublicationRetention.Native,item.Source.Location,"Appels et corps de notes, avec retour dans l’EPUB.");
         return Odt?new XElement(Text+"note",new XAttribute(Text+"id",id),new XAttribute(Text+"note-class",end?"endnote":"footnote"),
-                new XElement(Text+"note-citation",label),new XElement(Text+"note-body",blocks)):
+                new XElement(Text+"note-citation",label==ordinal?null:new XAttribute(Text+"label",label),label),
+                new XElement(Text+"note-body",blocks)):
             new XElement(Html+"a",new XAttribute("href","#"+id),new XAttribute("id",reference),
                 new XAttribute(Epub+"type","noteref"),new XAttribute("role","doc-noteref"),label);
     }
@@ -452,6 +572,14 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         if(Odt)
         {
             grid.SetAttributeValue(Table+"name",Id(table.Id));
+            if(OdtMasterFor(table.Id) is int section)
+            {
+                var properties=new XElement(Style+"table-properties");
+                if(section>1)properties.SetAttributeValue(Fo+"break-before","page");
+                if(snapshot.Sections[section-1].PageNumberStart is int start)
+                    properties.SetAttributeValue(Style+"page-number",start);
+                grid.SetAttributeValue(Table+"style-name",Register("table",properties,OdtMasterName(section)));
+            }
             grid.Add(table.Columns.Select(width=>new XElement(Table+"table-column",new XAttribute(Table+"style-name",
                 Register("table-column",new XElement(Style+"table-column-properties",new XAttribute(Style+"column-width",Pt(width))))))));
         }
@@ -497,7 +625,7 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         return grid;
     }
 
-    Asset? AssetFor(InlineImage image)
+    internal Asset? AssetFor(InlineImage image)
     {
         string key=image.Sha256+":"+image.ResourceId;
         if(assetsById.TryGetValue(key,out var known))return known;
@@ -524,7 +652,7 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         return asset;
     }
 
-    string? AlternativeText(string id)
+    internal string? AlternativeText(string id)
     {
         var candidates=new Stack<string>();
         candidates.Push(id);
@@ -550,12 +678,15 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         if(seen.Add((kind,null)))Features.Add(new(kind,retention,location,detail));
     }
 
-    internal string Register(string family,XElement properties)
+    internal string Register(string family,XElement properties,string? master=null,string? parent=null)
     {
-        if(styles.TryGetValue((family,properties),out var id))return id;
+        var signature=new XElement("signature",new XAttribute("master",master??""),new XAttribute("parent",parent??""),new XElement(properties));
+        if(styles.TryGetValue((family,signature),out var id))return id;
         string name="Lw"+styles.Count.ToString(CultureInfo.InvariantCulture);
-        styles.Add((family,properties),name);
-        Automatic.Add(new XElement(Style+"style",new XAttribute(Style+"family",family),new XAttribute(Style+"name",name),properties));
+        styles.Add((family,signature),name);
+        Automatic.Add(new XElement(Style+"style",new XAttribute(Style+"family",family),new XAttribute(Style+"name",name),
+            master is null?null:new XAttribute(Style+"master-page-name",master),
+            parent is null?null:new XAttribute(Style+"parent-style-name",parent),properties));
         return name;
     }
 
@@ -566,7 +697,8 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         public int GetHashCode((string,XElement) value)=>HashCode.Combine(value.Item1,nodes.GetHashCode(value.Item2));
     }
 
-    internal static string? Family(Inline item)=>item.Font?.UsedFamily??(item.Style?.Slots.Ascii is {Theme:false} family?family.Value:null);
+    internal static string? Family(Inline item)=>item.DeclaredFont??item.Font?.UsedFamily??
+        (item.Style?.Slots.Ascii is {Theme:false} family?family.Value:null);
     internal static string Language(PublicationMetadata metadata)
     {
         string? language=metadata.Language;
@@ -590,7 +722,7 @@ internal sealed class StructuredPublication(PublicationSource source,ExportForma
         if(family is not null)result.SetAttributeValue(Fo+"font-family",family);
         if(style.Underline=="single")result.SetAttributeValue(Style+"text-underline-style","solid");
         if(style.Tracking!=0)result.SetAttributeValue(Fo+"letter-spacing",Pt(style.Tracking));
-        if(style.Language!="und")result.SetAttributeValue(XNamespace.Xml+"lang",style.Language);
+        if(style.Language!="und")result.SetAttributeValue(Style+"rfc-language-tag",style.Language);
         return result;
     }
 

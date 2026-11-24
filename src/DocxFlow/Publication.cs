@@ -6,7 +6,26 @@ namespace LecteurWord.Flow;
 
 internal enum PublicationRetention { Native, Structured, Vector, Raster, Unsupported }
 internal sealed record PublicationFeature(string Kind,PublicationRetention Retention,SourceLocation? Source,string Detail);
-internal sealed record PublicationRequest(ExportFormat Format,int? FirstPage=null,int? LastPage=null,bool UseCoverImage=false);
+internal sealed record PublicationRequest(ExportFormat Format,int? FirstPage=null,int? LastPage=null,bool UseCoverImage=false,
+    int PdfImageQuality=101,bool IncludePdfProvenance=false,PublicationCover? Cover=null);
+internal sealed class PublicationCover
+{
+    internal const int MaxBytes=8*1024*1024;
+    internal string Mime {get;}
+    internal ReadOnlyMemory<byte> Bytes {get;}
+
+    PublicationCover(string mime,byte[] bytes){Mime=mime;Bytes=bytes;}
+
+    internal static PublicationCover Read(byte[] input,CancellationToken token)
+    {
+        if(input.Length>MaxBytes)throw new InvalidDataException("EXPORT_COVER_SIZE");
+        if(SafePng.TryGetRenderableBytes(input,out var png,out _,token))
+            return new("image/png",png);
+        if(SafeJpeg.TryGetRenderableBytes(input,out var jpeg,out _,out _,out int orientation,out _,token)&&orientation==1)
+            return new("image/jpeg",jpeg);
+        throw new InvalidDataException("EXPORT_COVER_IMAGE");
+    }
+}
 internal sealed record PublicationProgress(string Phase,int Completed,int Total);
 internal sealed record PublicationPlan(string Profile,ImmutableArray<PublicationFeature> Features,ImmutableArray<FlowIssue> Issues)
 {
@@ -65,12 +84,15 @@ internal static class Publications
             return Blocked("EXPORT_SOURCE_UNAVAILABLE","Le modèle de publication du document est indisponible.");
         if(request.Format!=ExportFormat.Pdf&&(request.FirstPage is not null||request.LastPage is not null))
             return Blocked("EXPORT_RANGE_FORMAT","La sélection de feuilles est réservée au PDF.");
-        if(request.UseCoverImage&&request.Format!=ExportFormat.Epub3)
+        if(request.Format!=ExportFormat.Pdf&&(request.PdfImageQuality!=101||request.IncludePdfProvenance)||
+            request.PdfImageQuality is <1 or >101)
+            return Blocked("EXPORT_PDF_OPTIONS","Les options de qualité et de provenance demandées sont hors profil.");
+        if((request.UseCoverImage||request.Cover is not null)&&request.Format!=ExportFormat.Epub3)
             return Blocked("EXPORT_COVER_FORMAT","Le choix d’une couverture est réservé à l’EPUB.");
         return request.Format switch
         {
             ExportFormat.Pdf=>PdfPublication.Prepare(source,request,token),
-            ExportFormat.Odt or ExportFormat.Epub3 or ExportFormat.Nova=>StructuredPublication.Prepare(source,request.Format,token,request.UseCoverImage),
+            ExportFormat.Odt or ExportFormat.Epub3 or ExportFormat.Nova=>StructuredPublication.Prepare(source,request.Format,token,request.UseCoverImage,request.Cover),
             _=>Blocked("EXPORT_FORMAT_UNSUPPORTED","Format de publication inconnu.")
         };
     }
@@ -105,10 +127,10 @@ internal static class Publications
         try
         {
             if(request.Format==ExportFormat.Pdf)PdfPublication.Write(stage,source,request,budget,progress,token);
-            else StructuredPublication.Write(stage,source,request.Format,budget,progress,token,request.UseCoverImage);
+            else StructuredPublication.Write(stage,source,request.Format,budget,progress,token,request.UseCoverImage,request.Cover);
             progress?.Report(new("verify",0,1));
             if(request.Format==ExportFormat.Pdf)PdfPublication.Verify(stage,source,request,token);
-            else StructuredPublication.Verify(stage,source,request.Format,token,request.UseCoverImage);
+            else StructuredPublication.Verify(stage,source,request.Format,token,request.UseCoverImage,request.Cover);
             budget.Check(0);
             target.Refresh();
             if(target.LinkTarget is not null||original is {} known&&

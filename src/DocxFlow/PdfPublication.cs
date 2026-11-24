@@ -52,7 +52,11 @@ internal static class PdfPublication
         }
         features.Add(new("text",PublicationRetention.Native,null,"Glyphes positionnés, polices autorisées et texte PDF lorsque le mappage est disponible."));
         features.Add(new("drawing",PublicationRetention.Vector,null,"Formes, traits, chemins et SmartArt transmis au peintre PDF."));
-        features.Add(new("image",PublicationRetention.Raster,null,"Images de la composition incorporées comme objets PDF."));
+        features.Add(new("image",PublicationRetention.Raster,null,request.PdfImageQuality==101?
+            "Images sans compression avec perte ajoutée.":"Compression JPEG des images opaques selon la qualité choisie."));
+        if(request.IncludePdfProvenance)
+            features.Add(new("glyph-provenance",PublicationRetention.Structured,null,
+                "Pièce jointe contenant les codes des glyphes de remplacement et leurs emplacements internes."));
         features.Add(new("layout-structure",PublicationRetention.Structured,null,"Régions, tableaux, notes, zones de texte et champs sous leur forme composée."));
         var semantic=source.Semantic!;
         foreach(var kind in new[]{SemanticKind.Revision,SemanticKind.CommentReference})
@@ -102,7 +106,7 @@ internal static class PdfPublication
         var settings=new SKDocumentPdfMetadata
         {
             Title=metadata.Title,Author=metadata.Author??"",Subject=metadata.Subject??metadata.Description??"",
-            Keywords=metadata.Keywords??"",Creator="Lecteur Word",RasterDpi=144,
+            Keywords=metadata.Keywords??"",Creator="Lecteur Word",RasterDpi=144,EncodingQuality=request.PdfImageQuality,
             Creation=metadata.Created?.UtcDateTime,Modified=metadata.Modified?.UtcDateTime
         };
         int total=range.Last-range.First+1,done=0;
@@ -132,12 +136,16 @@ internal static class PdfPublication
             file.Flush();
             budget.ThrowIfFailed();
         }
-        var symbols=Selected(source,range).SelectMany(page=>Fragments(page)
-            .Where(f=>f.LegacySymbol is {Method:"missing-marker" or "user"})
-            .Select(f=>new{page=page.Number,source=f.Sources[0].Source.Location,original=f.Text,
-                codePoint=$"U+{f.LegacySymbol!.Code:X4}",requestedFont=f.LegacySymbol.Family,
-                representation=f.LegacySymbol.Method,replacementCode=f.LegacySymbol.DrawingCode})).Distinct().ToArray();
-        byte[]? provenance=symbols.Length==0?null:JsonSerializer.SerializeToUtf8Bytes(new{schema=1,symbols});
+        byte[]? provenance=null;
+        if(request.IncludePdfProvenance)
+        {
+            var symbols=Selected(source,range).SelectMany(page=>Fragments(page)
+                .Where(f=>f.LegacySymbol is {Method:"missing-marker" or "user"})
+                .Select(f=>new{page=page.Number,source=f.Sources[0].Source.Location,original=f.Text,
+                    codePoint=$"U+{f.LegacySymbol!.Code:X4}",requestedFont=f.LegacySymbol.Family,
+                    representation=f.LegacySymbol.Method,replacementCode=f.LegacySymbol.DrawingCode})).Distinct().ToArray();
+            if(symbols.Length>0)provenance=JsonSerializer.SerializeToUtf8Bytes(new{schema=1,symbols});
+        }
         if(nav.Outlines.Count>0||provenance is not null)PdfNavigation.Append(path,nav.Outlines,provenance,budget);
     }
 

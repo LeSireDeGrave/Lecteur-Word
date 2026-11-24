@@ -15,7 +15,7 @@ namespace LecteurWord;
 
 public sealed partial class ReaderWindow
 {
-    sealed record PublicationPreferences(ExportFormat Format,string Directory);
+    sealed record PublicationPreferences(ExportFormat Format,string Directory,int PdfImageQuality=101);
     PublicationPreferences? publicationPreferences;
     internal Window? ActivePublicationDialog {get;private set;}
 
@@ -46,6 +46,17 @@ public sealed partial class ReaderWindow
         AutomationProperties.SetName(first,T("Première feuille","First page"));
         AutomationProperties.SetName(last,T("Dernière feuille","Last page"));
         var cover=new CheckBox{Name="PublicationCover",Content=T("Utiliser la première illustration comme couverture","Use the first illustration as cover")};
+        var coverName=new TextBox{Name="PublicationCoverName",IsReadOnly=true};
+        var chooseCover=new Button{Name="PublicationChooseCover",Content=T("Choisir…","Choose…")};
+        var clearCover=new Button{Content=T("Retirer","Remove")};
+        var coverRow=Row(T("Couverture EPUB","EPUB cover"),coverName,new StackPanel
+            {Orientation=Orientation.Horizontal,Spacing=8,Children={chooseCover,clearCover}});
+        PublicationCover? selectedCover=null;
+        var provenance=new CheckBox{Name="PublicationPdfProvenance",Content=T("Joindre la provenance des glyphes remplacés","Attach provenance of replacement glyphs")};
+        var imageQuality=new ComboBox{Name="PublicationPdfQuality",HorizontalAlignment=HorizontalAlignment.Stretch,
+            ItemsSource=new[]{T("Sans perte","Lossless"),T("JPEG haute qualité","High-quality JPEG"),T("JPEG compact","Compact JPEG")},
+            SelectedIndex=preferences?.PdfImageQuality switch{92=>1,72=>2,_=>0}};
+        var qualityRow=Row(T("Images PDF","PDF images"),imageQuality);
         var range=new StackPanel{Spacing=8,Orientation=Orientation.Horizontal,Children=
             {new TextBlock{Text=T("De","From"),VerticalAlignment=VerticalAlignment.Center},first,
                 new TextBlock{Text=T("à","to"),VerticalAlignment=VerticalAlignment.Center},last}};
@@ -57,7 +68,7 @@ public sealed partial class ReaderWindow
         var openFile=new Button{Name="PublicationOpenFile",Content=T("Ouvrir le fichier","Open file"),IsVisible=false};
         var openFolder=new Button{Name="PublicationOpenFolder",Content=T("Ouvrir le dossier","Open folder"),IsVisible=false};
         var fields=new StackPanel{Spacing=12,Children={Row(T("Format","Format"),format),
-            Row(T("Destination","Destination"),output,browse),selectRange,range,cover,
+            Row(T("Destination","Destination"),output,browse),selectRange,range,qualityRow,provenance,cover,coverRow,
             new ScrollViewer{MaxHeight=196,HorizontalScrollBarVisibility=Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
                 Content=diagnostic}}};
         var controls=new StackPanel{Spacing=8,Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,
@@ -87,6 +98,10 @@ public sealed partial class ReaderWindow
         };
         selectRange.IsCheckedChanged+=(_,_)=>_=PreviewAsync();
         cover.IsCheckedChanged+=(_,_)=>_=PreviewAsync();
+        chooseCover.Click+=async(_,_)=>await ChooseCoverAsync();
+        clearCover.Click+=(_,_)=>{selectedCover=null;coverName.Text=null;_=PreviewAsync();};
+        provenance.IsCheckedChanged+=(_,_)=>_=PreviewAsync();
+        imageQuality.SelectionChanged+=(_,_)=>_=PreviewAsync();
         first.ValueChanged+=(_,_)=>_=PreviewAsync();
         last.ValueChanged+=(_,_)=>_=PreviewAsync();
         output.TextChanged+=(_,_)=>publish.IsEnabled=plan?.Allowed==true&&!writing&&!string.IsNullOrWhiteSpace(output.Text);
@@ -130,8 +145,14 @@ public sealed partial class ReaderWindow
         }
 
         ExportFormat Selected()=>order[Math.Clamp(format.SelectedIndex,0,order.Length-1)];
-        PublicationRequest Request()=>Selected()==ExportFormat.Pdf&&selectRange.IsChecked==true?
-            new(Selected(),(int?)first.Value,(int?)last.Value):new(Selected(),UseCoverImage:Selected()==ExportFormat.Epub3&&cover.IsChecked==true);
+        PublicationRequest Request()
+        {
+            if(Selected()!=ExportFormat.Pdf)return new(Selected(),UseCoverImage:Selected()==ExportFormat.Epub3&&cover.IsChecked==true,
+                Cover:Selected()==ExportFormat.Epub3?selectedCover:null);
+            return new(ExportFormat.Pdf,selectRange.IsChecked==true?(int?)first.Value:null,
+                selectRange.IsChecked==true?(int?)last.Value:null,
+                PdfImageQuality:imageQuality.SelectedIndex switch{1=>92,2=>72,_=>101},IncludePdfProvenance:provenance.IsChecked==true);
+        }
 
         Task PreviewAsync()
         {
@@ -148,9 +169,11 @@ public sealed partial class ReaderWindow
             plan=null;
             publish.IsEnabled=false;
             bool pdf=Selected()==ExportFormat.Pdf;
-            selectRange.IsVisible=pdf;
+            selectRange.IsVisible=qualityRow.IsVisible=provenance.IsVisible=pdf;
             range.IsVisible=pdf&&selectRange.IsChecked==true;
-            cover.IsVisible=Selected()==ExportFormat.Epub3;
+            coverRow.IsVisible=cover.IsVisible=Selected()==ExportFormat.Epub3;
+            cover.IsEnabled=selectedCover is null&&!writing;
+            clearCover.IsEnabled=selectedCover is not null;
             PublicationRequest requested=Request();
             diagnostic.Text=T("Vérification du contenu…","Checking the document…");
             try
@@ -174,7 +197,36 @@ public sealed partial class ReaderWindow
         }
 
         string Summarize(IEnumerable<FlowIssue> issues)=>string.Join("\n",issues.GroupBy(i=>i.Message,StringComparer.Ordinal)
-            .Take(12).Select(g=>"• "+g.Key+(g.Count()>1?$" ({g.Count().ToString(CultureInfo.CurrentCulture)})":"")));
+            .OrderByDescending(g=>g.Any(i=>i.BlocksExport)).Take(12)
+            .Select(g=>(g.Any(i=>i.BlocksExport)?T("Refus · ","Blocked · "):T("Adaptation · ","Adaptation · "))+g.Key+
+                (g.Count()>1?$" ({g.Count().ToString(CultureInfo.CurrentCulture)})":"")));
+
+        async Task ChooseCoverAsync()
+        {
+            try
+            {
+                var files=await dialog.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title=T("Choisir une couverture EPUB","Choose an EPUB cover"),
+                    FileTypeFilter=[new FilePickerFileType("PNG / JPEG"){Patterns=["*.png","*.jpg","*.jpeg"]}]
+                });
+                if(finished||files.Count==0)return;
+                await using var stream=await files[0].OpenReadAsync();
+                byte[] buffer=new byte[PublicationCover.MaxBytes+1];
+                int length=await stream.ReadAtLeastAsync(buffer,buffer.Length,false);
+                var accepted=await Task.Run(()=>PublicationCover.Read(buffer.AsSpan(0,length).ToArray(),default));
+                if(finished)return;
+                selectedCover=accepted;
+                cover.IsChecked=false;
+                coverName.Text=files[0].Name;
+                feedback.Text="";
+                _=PreviewAsync();
+            }
+            catch(Exception error) when(error is IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException)
+            {
+                if(!finished)feedback.Text=T("Image de couverture PNG ou JPEG hors du profil accepté.","The PNG or JPEG cover is outside the supported profile.");
+            }
+        }
 
         async Task BrowseAsync()
         {
@@ -216,7 +268,8 @@ public sealed partial class ReaderWindow
             exportCancellation=cancellation;
             writing=true;
             completedPath=null;
-            browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=cover.IsEnabled=range.IsEnabled=publish.IsEnabled=false;
+            browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=cover.IsEnabled=coverRow.IsEnabled=
+                range.IsEnabled=qualityRow.IsEnabled=provenance.IsEnabled=publish.IsEnabled=false;
             openFile.IsVisible=openFolder.IsVisible=false;
             cancelOrClose.Content=T("Annuler","Cancel");
             progress.IsVisible=true;
@@ -234,7 +287,8 @@ public sealed partial class ReaderWindow
                 completedPath=await Task.Run(()=>Publications.Write(source,request,destination,overwrite,observer,cancellation.Token),cancellation.Token);
                 openFile.IsVisible=openFolder.IsVisible=true;
                 feedback.Text=T("Fichier exporté.","File exported.");
-                publicationPreferences=new(request.Format,Path.GetDirectoryName(completedPath)!);
+                publicationPreferences=new(request.Format,Path.GetDirectoryName(completedPath)!,
+                    request.Format==ExportFormat.Pdf?request.PdfImageQuality:preferences?.PdfImageQuality??101);
                 SavePublicationPreferences(publicationPreferences);
             }
             catch(OperationCanceledException){feedback.Text=T("Export annulé. La destination a été préservée.","Export cancelled. The destination was preserved.");}
@@ -254,7 +308,9 @@ public sealed partial class ReaderWindow
                 writing=false;
                 exportCancellation=null;
                 progress.IsVisible=false;
-                browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=cover.IsEnabled=range.IsEnabled=true;
+                browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=coverRow.IsEnabled=
+                    range.IsEnabled=qualityRow.IsEnabled=provenance.IsEnabled=true;
+                cover.IsEnabled=selectedCover is null;
                 publish.IsEnabled=plan?.Allowed==true;
                 cancelOrClose.Content=T("Fermer","Close");
             }

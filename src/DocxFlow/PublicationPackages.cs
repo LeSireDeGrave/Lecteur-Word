@@ -94,16 +94,9 @@ internal static class PublicationPackages
             new XAttribute(Office+"version","1.3"),values);
         var result=new List<Entry>{StringEntry("mimetype",mime,true),
             XmlEntry("content.xml",Root("document-content",book.Automatic,new XElement(Office+"body",new XElement(Office+"text",body))))};
-        var geometry=source.Pagination!.Sections[0].Format;
-        var page=new XElement(Style+"page-layout-properties",
-            new XAttribute(Fo+"page-width",Pt(geometry.Width)),new XAttribute(Fo+"page-height",Pt(geometry.Height)),
-            new XAttribute(Fo+"margin-top",Pt(geometry.Top)),new XAttribute(Fo+"margin-bottom",Pt(geometry.Bottom)),
-            new XAttribute(Fo+"margin-left",Pt(geometry.Left)),new XAttribute(Fo+"margin-right",Pt(geometry.Right)),
-            new XAttribute(Style+"print-orientation",geometry.Width>geometry.Height?"landscape":"portrait"));
-        result.Add(XmlEntry("styles.xml",Root("document-styles",new XElement(Office+"styles"),
-            new XElement(Office+"automatic-styles",new XElement(Style+"page-layout",new XAttribute(Style+"name","SourcePage"),page)),
-            new XElement(Office+"master-styles",new XElement(Style+"master-page",new XAttribute(Style+"name","Standard"),
-                new XAttribute(Style+"page-layout-name","SourcePage"))))));
+        var auxiliaryStyles=new XElement(book.OdtPageDefinitions);
+        auxiliaryStyles.Add(book.Automatic.Elements().Select(style=>new XElement(style)));
+        result.Add(XmlEntry("styles.xml",Root("document-styles",book.OdtNamedStyles,auxiliaryStyles,book.OdtMasters)));
         var m=book.Metadata;
         result.Add(XmlEntry("meta.xml",Root("document-meta",new XElement(Office+"meta",
             Property(Dc+"title",m.Title),Property(Meta+"initial-creator",m.Author),Property(Dc+"creator",m.Author),
@@ -133,36 +126,89 @@ internal static class PublicationPackages
             foreach(var a in n.Blocks.SelectMany(b=>b.DescendantsAndSelf(Html+"a")).Where(a=>(string?)a.Attribute(Epub+"type")=="noteref"))
                 noteLinks.Add((string)a.Attribute("href")!,(string)a.Attribute("id")!);
         var notes=book.Notes.Select(n=>new XElement(Html+"aside",new XAttribute(Epub+"type",n.End?"endnote":"footnote"),
-            new XAttribute("role",n.End?"doc-endnote":"doc-footnote"),new XAttribute("id",n.Id),n.Blocks,
+            new XAttribute("role",n.End?"note":"doc-footnote"),new XAttribute("id",n.Id),n.Blocks,
             new XElement(Html+"p",new XElement(Html+"a",new XAttribute("href","#"+noteLinks["#"+n.Id]),
                 new XAttribute("aria-label",language.StartsWith("fr",StringComparison.Ordinal)?"Retour à l’appel":"Back to note reference"),"↩")))).ToArray();
-        var content=Xhtml(metadata.Title,body,notes);
-        var contentIds=content.Descendants().Attributes("id").Select(a=>a.Value).ToHashSet(StringComparer.Ordinal);
-        foreach(var link in content.Descendants(Html+"a").Attributes("href").Where(a=>a.Value.StartsWith('#')))
-            if(!contentIds.Contains(link.Value[1..]))throw new InvalidDataException("EXPORT_EPUB_LINK_TARGET");
+        var chapters=new List<(string Path,string Title,XElement Contents)>();
+        if(book.Cover is {} cover)
+        {
+            string label=language.StartsWith("fr",StringComparison.Ordinal)?"Couverture":"Cover";
+            chapters.Add(("cover.xhtml",label,Xhtml(label,new XElement(Html+"section",
+                new XAttribute(Epub+"type","cover"),new XElement(Html+"img",new XAttribute("src",cover.Path),
+                    new XAttribute("alt",metadata.Title))))));
+        }
+        int chapterOffset=chapters.Count;
+        var pending=new List<XElement>();
+        var knownHeadings=book.Headings.ToDictionary(h=>h.Id,h=>(h.Level,h.Title),StringComparer.Ordinal);
+        int splitLevel=body.Select(element=>(string?)element.Attribute("id")).OfType<string>()
+            .Where(knownHeadings.ContainsKey).Select(id=>knownHeadings[id].Level).DefaultIfEmpty(0).Min();
+        string chapterTitle=metadata.Title;
+        foreach(var block in body)
+        {
+            if((string?)block.Attribute("id") is {} id&&knownHeadings.TryGetValue(id,out var heading)&&heading.Level==splitLevel)
+            {
+                if(pending.Count>0)FinishChapter();
+                chapterTitle=heading.Title;
+            }
+            pending.Add(block);
+        }
+        if(pending.Count>0||chapters.Count==chapterOffset)FinishChapter();
+        if(notes.Length>0)
+        {
+            const string title="Notes";
+            chapters.Add(("notes.xhtml",title,Xhtml(title,new XElement(Html+"section",
+                new XElement(Html+"h1",title),notes))));
+        }
+        var locations=new Dictionary<string,string>(StringComparer.Ordinal);
+        var readingOrder=new Dictionary<string,int>(StringComparer.Ordinal);
+        foreach(var chapter in chapters)
+            foreach(var id in chapter.Contents.Descendants().Attributes("id"))
+            {
+                if(!locations.TryAdd(id.Value,chapter.Path))throw new InvalidDataException("EXPORT_EPUB_DUPLICATE_ID");
+                readingOrder.Add(id.Value,readingOrder.Count);
+            }
+        foreach(var chapter in chapters)
+            foreach(var link in chapter.Contents.Descendants(Html+"a").Attributes("href").Where(a=>a.Value.StartsWith('#')))
+            {
+                if(!locations.TryGetValue(link.Value[1..],out var target))throw new InvalidDataException("EXPORT_EPUB_LINK_TARGET");
+                if(target!=chapter.Path)link.SetValue(target+link.Value);
+            }
+
+        void FinishChapter()
+        {
+            int number=chapters.Count-chapterOffset+1;
+            string path=number==1?"content.xhtml":$"chapter-{number:000}.xhtml";
+            chapters.Add((path,chapterTitle,Xhtml(chapterTitle,new XElement(Html+"section",pending))));
+            pending.Clear();
+        }
         var navigation=new XElement(Html+"nav",new XAttribute(Epub+"type","toc"),
             new XAttribute("id","toc"),new XElement(Html+"h1",metadata.Title),Contents());
         XElement Contents()
         {
             var root=new XElement(Html+"ol");
-            if(book.Headings.Count==0)
-            {
-                root.Add(new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href","content.xhtml"),metadata.Title)));
-                return root;
-            }
             var hierarchy=new Stack<(int Level,XElement Item)>();
-            foreach(var heading in book.Headings)
+            var grouped=book.Headings.Where(h=>locations.ContainsKey(h.Id)).OrderBy(h=>readingOrder[h.Id])
+                .ToLookup(h=>locations[h.Id],StringComparer.Ordinal);
+            foreach(var chapter in chapters)
             {
-                while(hierarchy.TryPeek(out var current)&&current.Level>=heading.Level)hierarchy.Pop();
-                XElement list=root;
-                if(hierarchy.TryPeek(out var previous))
+                if(!grouped.Contains(chapter.Path))
                 {
-                    list=previous.Item.Element(Html+"ol")??new XElement(Html+"ol");
-                    if(list.Parent is null)previous.Item.Add(list);
+                    hierarchy.Clear();
+                    root.Add(new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href",chapter.Path),chapter.Title)));
                 }
-                var item=new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href","content.xhtml#"+heading.Id),heading.Title));
-                list.Add(item);
-                hierarchy.Push((heading.Level,item));
+                foreach(var heading in grouped[chapter.Path])
+                {
+                    while(hierarchy.TryPeek(out var current)&&current.Level>=heading.Level)hierarchy.Pop();
+                    XElement list=root;
+                    if(hierarchy.TryPeek(out var previous))
+                    {
+                        list=previous.Item.Element(Html+"ol")??new XElement(Html+"ol");
+                        if(list.Parent is null)previous.Item.Add(list);
+                    }
+                    var item=new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href",chapter.Path+"#"+heading.Id),heading.Title));
+                    list.Add(item);
+                    hierarchy.Push((heading.Level,item));
+                }
             }
             return root;
         }
@@ -172,19 +218,20 @@ internal static class PublicationPackages
                 Property(Dc+"title",metadata.Title),Property(Dc+"language",language),Property(Dc+"creator",metadata.Author),
                 Property(Dc+"subject",metadata.Subject),Property(Dc+"description",metadata.Description),Property(Dc+"date",Date(metadata.Created)),
                 new XElement(Opf+"meta",new XAttribute("property","dcterms:modified"),Date(metadata.Modified??metadata.Created??ZipDate))),
-            new XElement(Opf+"manifest",Item("body","content.xhtml","application/xhtml+xml"),Item("nav","nav.xhtml","application/xhtml+xml","nav"),
+            new XElement(Opf+"manifest",chapters.Select((c,i)=>Item("body"+i,c.Path,"application/xhtml+xml")),Item("nav","nav.xhtml","application/xhtml+xml","nav"),
                 Item("styles","style.css","text/css"),book.Assets.Select((a,i)=>Item("asset"+i.ToString(CultureInfo.InvariantCulture),a.Path,a.Mime,a==book.Cover?"cover-image":null))),
-            new XElement(Opf+"spine",new XElement(Opf+"itemref",new XAttribute("idref","body"))));
+            new XElement(Opf+"spine",chapters.Select((_,i)=>new XElement(Opf+"itemref",new XAttribute("idref","body"+i)))));
         var entries=new List<Entry>
         {
             StringEntry("mimetype","application/epub+zip",true),
             XmlEntry("META-INF/container.xml",new XElement(Container+"container",new XAttribute("version","1.0"),
                 new XElement(Container+"rootfiles",new XElement(Container+"rootfile",new XAttribute("full-path","EPUB/package.opf"),
                     new XAttribute("media-type","application/oebps-package+xml"))))),
-            XmlEntry("EPUB/package.opf",package),XmlEntry("EPUB/content.xhtml",content),
+            XmlEntry("EPUB/package.opf",package),
             XmlEntry("EPUB/nav.xhtml",Xhtml(metadata.Title,navigation)),
             StringEntry("EPUB/style.css","body { line-height: 1.4; } p, h1, h2, h3, h4, h5, h6 { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; } table { border-collapse: collapse; } img { max-width: 100%; }")
         };
+        entries.AddRange(chapters.Select(c=>XmlEntry("EPUB/"+c.Path,c.Contents)));
         entries.AddRange(book.Assets.Select(a=>new Entry("EPUB/"+a.Path,a.Data)));
         return entries;
     }
