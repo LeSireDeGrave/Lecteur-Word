@@ -15,6 +15,7 @@ using Avalonia.Platform;
 using Avalonia.Styling;
 using LecteurWord.DocxCore;
 using LecteurWord.Flow;
+using LecteurWord.Platform;
 
 namespace LecteurWord;
 public sealed partial class ReaderWindow:Window
@@ -31,23 +32,25 @@ public sealed partial class ReaderWindow:Window
     readonly TextBlock pageLabel=new(){Name="PageStatus",VerticalAlignment=VerticalAlignment.Center};
     readonly TextBlock warning=new(){Name="ReadingBanner",TextWrapping=TextWrapping.Wrap,FontSize=12,Margin=new Thickness(16,8)};
     readonly TextBox query=new(){PlaceholderText="Rechercher / Search",Name="SearchBox"};
-    readonly Image paper=new(){Name="CalculatedPage",Stretch=Stretch.Uniform};
-    readonly Border paperFrame=new(){Background=Brushes.White,Padding=new Thickness(0),BoxShadow=new BoxShadows(new BoxShadow{Blur=16,Color=Color.Parse("#25000000"),OffsetY=3})};
-    readonly ScrollViewer viewport=new(){HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
-    readonly TextBlock empty=new(){FontSize=24,TextWrapping=TextWrapping.Wrap,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center,MaxWidth=480,TextAlignment=TextAlignment.Center};
+    readonly ScrollViewer viewport=new(){Name="PageViewport",HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
+    readonly TextBlock empty=new(){Name="ReadingAvailability",FontSize=20,TextWrapping=TextWrapping.Wrap,TextAlignment=TextAlignment.Center};
+    readonly Button openReading=new(){Name="OpenContinuousReading",HorizontalAlignment=HorizontalAlignment.Center};
+    readonly Button openDiagnostics=new(){Name="OpenPaginationDiagnostics",HorizontalAlignment=HorizontalAlignment.Center};
+    readonly StackPanel unavailablePanel=new(){Spacing=14,HorizontalAlignment=HorizontalAlignment.Center,
+        VerticalAlignment=VerticalAlignment.Center,MaxWidth=490,Margin=new Thickness(18)};
     readonly Button previous,next,export,zoomOut,zoomIn,diagnostics,cancel,fitWidth;
     bool fittingWidth;
     readonly Control[] sizeDependentControls;
-    ComposedPage? rasterPage;float rasterScale;
     readonly SemaphoreSlim loader=new(1,1);
+    static readonly InspectionOptions OpenInspectionOptions=new();
+    static long nextOpenRequest;
     readonly List<(Button Button,string Fr,string En)> labels=[];
     readonly List<Bitmap> thumbnails=[];
     CancellationTokenSource? pending,exportCancellation;
-    InspectionResult? inspection;FlowDocument? flow;Composition? composition;Bitmap? pageBitmap;
+    InspectionResult? inspection;FlowDocument? flow;Composition? composition;
     PageCompositionLease? nativePageLease;
     internal string? NativePageStatus {get;private set;}
     IReadOnlyList<PagePlacementGap> nativePageGaps=[];
-    IReadOnlyList<FlowIssue> nativePageIssues=[];
     Dictionary<ExportFormat,ExportPreflight> preflights=[];
     int page;double zoom=1;bool english,navVisible=true,initialized,closed;
     readonly ThemePreference? themePreference;
@@ -65,9 +68,9 @@ public sealed partial class ReaderWindow:Window
     string T(string fr,string en)=>english?en:fr;
     public ReaderWindow():this(null){}
 
-    internal ReaderWindow(ThemePreference? preference)
+    internal ReaderWindow(ThemePreference? preference, SessionRecoveryService? recovery = null, string? startupWarning = null, ExtensionManagerService? extensions = null)
     {
-        themePreference=preference;
+        themePreference=preference;this.recovery=recovery;this.startupWarning=startupWarning;this.extensions=extensions;
         Title="Lecteur Word";Icon=BrandAssets.WindowIcon;Width=1240;Height=850;MinWidth=640;MinHeight=500;
         FontFamily=new FontFamily("avares://Avalonia.Fonts.Inter/Assets#Inter");FontSize=13;
         var root=new Grid{RowDefinitions=new RowDefinitions("43,Auto,*,Auto")};Content=root;
@@ -92,7 +95,8 @@ public sealed partial class ReaderWindow:Window
         blueTheme=IconButton("palette","Bleu Microsoft","Microsoft Blue",()=>{SetTheme(2);return Task.CompletedTask;});
         systemTheme=IconButton("system","Système","System",()=>{SetTheme(0);return Task.CompletedTask;});
         chocolateTheme.Name="ThemeChocolate";blueTheme.Name="ThemeMicrosoftBlue";systemTheme.Name="ThemeSystem";
-        AddGroup(readingMode,rulerToggle,marksToggle,fitPage,chocolateTheme,blueTheme,systemTheme);
+        InitializeViewButtons();
+        AddGroup(rulerToggle,marksToggle,fitPage,chocolateTheme,blueTheme,systemTheme);
 
         navigationToggle=IconButton("sidebar","Afficher ou masquer la navigation (F9)","Toggle navigation (F9)",()=>{ToggleNavigation();return Task.CompletedTask;});navigationToggle.Name="ToggleNavigation";
         panelToggle=IconButton("drawer","Afficher ou masquer les éléments (F8)","Toggle document elements (F8)",()=>{ToggleElements();return Task.CompletedTask;});panelToggle.Name="ToggleElements";
@@ -107,19 +111,23 @@ public sealed partial class ReaderWindow:Window
         var footerProperties=IconButton("properties","Propriétés du document","Document properties",()=>{ShowPanel("properties");return Task.CompletedTask;});
         footerProperties.Name="FooterDocumentProperties";
 
+        InitializePlatformButtons();
         InitializeWorkspace(root);InitializeFooter(root,footerProperties,copyBuild);
+        openReading.Click+=(_,_)=>SetReadingView(ReadingView.Continuous);
+        openDiagnostics.Click+=(_,_)=>ShowPanel("diagnostics");
         sizeDependentControls=[fitPage];
         copyTimer.Tick+=(_,_)=>{copyConfirmation.IsVisible=false;copyTimer.Stop();};
         query.TextChanged+=(_,_)=>{if(navMode=="search")FillSearch();};
         viewport.SizeChanged+=(_,_)=>{if(fittingWidth&&composition?.Available==true&&!simplified)FitToWidth();UpdateRuler();};
         AddHandler(KeyDownEvent,OnWorkspaceKeys,RoutingStrategies.Tunnel);
-        KeyDown+=OnKeys;Closed+=(_,_)=>{closed=true;copyTimer.Stop();typographyCancellation?.Cancel();pending?.Cancel();exportCancellation?.Cancel();pageBitmap?.Dispose();nativePageLease?.Dispose();foreach(var thumb in thumbnails)thumb.Dispose();};
+        KeyDown+=OnKeys;Closed+=(_,_)=>{closed=true;copyTimer.Stop();typographyCancellation?.Cancel();pending?.Cancel();exportCancellation?.Cancel();ResetPageDeck();nativePageLease?.Dispose();foreach(var thumb in thumbnails)thumb.Dispose();};
         ActualThemeVariantChanged+=(_,_)=>{if(initialized)PaintTheme();};
         themeChoice=themePreference?.Load()??ReaderTheme.System;
         themePlatform=Application.Current?.PlatformSettings;
         if(themePlatform is not null)themePlatform.ColorValuesChanged+=OnSystemColorsChanged;
         Closed+=(_,_)=>{if(themePlatform is not null)themePlatform.ColorValuesChanged-=OnSystemColorsChanged;};
         initialized=true;ApplyTheme();UpdateUi();
+        InitializeRecovery();
     }
     public async Task CopyBuildReferenceAsync()
     {
@@ -135,87 +143,151 @@ public sealed partial class ReaderWindow:Window
     {
         var b=new Button{Content=Icons.Make(icon),Width=32,Height=31,Padding=new Thickness(6),CornerRadius=new CornerRadius(5),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Name="Action_"+icon+"_"+labels.Count};
         labels.Add((b,fr,en));ToolTip.SetTip(b,T(fr,en));AutomationProperties.SetName(b,T(fr,en));
-        b.Click+=async(_,_)=>{try{await action();}catch(Exception){status.Text=T("Action interrompue — consulter les diagnostics","Action interrupted — check diagnostics");}};return b;
+        b.Click+=async(_,_)=>{try{await action();}catch(Exception error){RecordIncident(error,SessionStage.Interface);status.Text=T("Action interrompue — consulter le rapport","Action interrupted — view incident report");}};return b;
     }
     async Task ChooseOpen()
     {
         var files=await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions{Title=T("Ouvrir un document Word","Open a Word document"),AllowMultiple=false,FileTypeFilter=[new FilePickerFileType("DOCX"){Patterns=["*.docx"]},FilePickerFileTypes.All]});
         if(files.Count>0 && files[0].TryGetLocalPath() is {} path)await OpenDocumentAsync(path);
     }
-    public async Task OpenDocumentAsync(string path)
+    public Task OpenDocumentAsync(string path) => OpenDocumentAsync(path, null);
+
+    async Task OpenDocumentAsync(string path, ReadingSnapshot? restore)
     {
+        try { path=Path.GetFullPath(path); }
+        catch (ArgumentException error)
+        {
+            RecordIncident(error,SessionStage.OpenDocument);
+            status.Text=T("Chemin du document invalide","Invalid document path");
+            return;
+        }
+        if(recovery?.BlockedDocument==path && restore is not null)return;
+        if(recovery?.BlockedDocument==path && !await ConfirmBlockedOpenAsync())return;
+        long request=Interlocked.Increment(ref nextOpenRequest);
+        var open=System.Diagnostics.Stopwatch.StartNew();
+        Log("queued","");
         typographyCancellation?.Cancel();pending?.Cancel();var cancellation=new CancellationTokenSource();pending=cancellation;cancel.IsVisible=true;
         PageCompositionLease? candidate=null;
         status.Text=T("Lecture et inspection…","Reading and inspecting…");
+        bool published=false;
+        var operation=new SessionOperation(restore is null?SessionStage.OpenDocument:SessionStage.RestoreDocument,path);
+        activeDocumentOperation=operation;
+        TryRecovery(service=>service.Begin(operation,retry:restore is not null&&service.Start.Interrupted));
         try
         {
             await loader.WaitAsync(cancellation.Token);
+            Log("worker","acquired");
             try
             {
                 var data=await Task.Run(()=>
                 {
-                    var result=DocumentInspector.InspectDocument(path,cancellationToken:cancellation.Token);
+                    ReaderOpenMemory.Prepare(OpenInspectionOptions,request,cancellation.Token);
+                    var clock=new OpenClock();
+                    var result=DocumentInspector.InspectDocument(path,OpenInspectionOptions,cancellation.Token);
+                    clock.Report(request,"inspection",result.Manifest.InspectionComplete?"ready":
+                        result.Manifest.Diagnostics.FirstOrDefault(d=>d.Severity=="error")?.Code??"unavailable");
                     var model=FlowReader.Read(result);
-                    var reading=ReadableReader.Read(result,cancellation.Token);
+                    var reading=ReadableReader.Read(result,cancellation.Token,out var preparedModel,request);
                     bool hasTables=reading.Available&&reading.Presentation.BodyBlocks.Any(b=>b.Kind=="table");
-                    if(reading.Available)candidate=PageComposer.Compose(result,cancellation.Token,hasTables);
+                    clock=new OpenClock();
+                    if(reading.Available)candidate=PageComposer.Compose(result,cancellation.Token,hasTables,preparedModel);
                     var proposed=candidate?.Snapshot;
+                    clock.Report(request,"composition",proposed?.Coverage.ToString()??"skipped");
                     bool adopt=proposed is {Coverage:PageCoverage.Complete,Composition.Available:true,RulerModel:not null};
                     var pageModel=adopt?proposed!.RulerModel!:LayoutReader.Read(result,cancellation.Token);
-                    var layout=adopt?proposed!.Composition:Composer.Compose(pageModel,cancellation.Token);
+                    var historical=LegacySinglePage.TryCompose(proposed,pageModel,cancellation.Token);
+                    var layout=adopt?proposed!.Composition:historical??
+                        (proposed is null?new Composition([],model.Issues):proposed.Composition with{Pages=[]});
                     var readingLayout=pageModel.Paragraphs.ToDictionary(p=>p.Id,StringComparer.Ordinal);
                     if(proposed?.RulerModel is {} nativeLayout)
                         foreach(var p in nativeLayout.Paragraphs)readingLayout.TryAdd(p.Id,p);
                     var index=ReaderDocumentIndex.Build(result,reading,layout,cancellation.Token,proposed?.Semantic);
                     var checks=Enum.GetValues<ExportFormat>().ToDictionary(f=>f,f=>DocumentExports.Preflight(result,f));
                     return(result,model,layout,pageModel,reading,readingLayout,index,checks,nativeStatus:proposed?.Coverage.ToString(),
-                        gaps:proposed?.Gaps??[],nativeIssues:adopt?[]:proposed?.Composition.Issues??[]);
+                        gaps:proposed?.Gaps??[]);
                 },cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();if(closed)return;
+                cancellation.Token.ThrowIfCancellationRequested();
+                if(closed||pending!=cancellation)return;
                 readingList.ItemsSource=null;foreach(var image in readingImages.Values)image.Dispose();readingImages.Clear();readingImagePixels=0;
+                ResetPageDeck();
                 nativePageLease?.Dispose();nativePageLease=candidate;candidate=null;
                 NativePageStatus=data.nativeStatus;SetNativeSelection(0,[]);
-                nativePageGaps=data.gaps;nativePageIssues=data.nativeIssues;
-                rasterPage=null;inspection=data.result;flow=data.model;composition=data.layout;pageModel=data.layout.Available?data.pageModel:null;
+                nativePageGaps=data.gaps;
+                displayedFonts=null;inspection=data.result;flow=data.model;composition=data.layout;pageModel=data.layout.Available?data.pageModel:null;
                 readable=data.reading;readingParagraphs=data.readingLayout;typographyDiagnostics=null;documentIndex=data.index;preflights=data.checks;fileName=Path.GetFileName(path);
                 page=0;collapsedOutline.Clear();visibleBlockId=null;CurrentBlockId=null;CurrentNoteReferenceId=null;CurrentSection=1;ActiveReadingContext=null;
-                simplified=!data.layout.Available;readingList.ItemsSource=readable.Presentation.BodyBlocks;
+                readingView=data.layout.Available?ReadingView.SinglePage:ReadingView.Unavailable;
+                fittingWidth=false;
+                readingList.ItemsSource=readable.Presentation.BodyBlocks;
                 PreparePageAids();SelectPageParagraph();RefreshReadingAppearance();RefreshElements(reset:true);UpdateUi();
+                if(CurrentPage>0)RevealPage(page);
+                if(restore is not null)ApplyReadingSnapshot(restore);
+                activeDocumentPath=path;
+                resumeCandidate=null;
+                published=true;
+                Log("publication",NativePageStatus??"unavailable");
             }
             finally{loader.Release();}
         }
-        catch(OperationCanceledException){if(pending==cancellation&&!closed){UpdateUi();status.Text=T("Lecture annulée ; document précédent conservé","Inspection cancelled; previous document retained");}}
-        catch(Exception){if(pending==cancellation&&!closed)status.Text=T("Rendu interrompu — contenu hors limites","Rendering stopped — resource or format limit");}
-        finally{candidate?.Dispose();cancellation.Dispose();if(pending==cancellation)pending=null;cancel.IsVisible=pending is not null||exportCancellation is not null;}
+        catch(OperationCanceledException)
+        {
+            Log("finished",pending==cancellation?"cancelled":"superseded");
+            if(pending==cancellation&&!closed){UpdateUi();status.Text=T("Lecture annulée ; document précédent conservé","Inspection cancelled; previous document retained");}
+        }
+        catch(Exception error)
+        {
+            Log("exception",error.GetType().Name);
+            RecordIncident(error,operation.Stage);
+            if(pending==cancellation&&!closed)status.Text=T("Rendu interrompu — contenu hors limites","Rendering stopped — resource or format limit");
+        }
+        finally
+        {
+            candidate?.Dispose();cancellation.Dispose();
+            if(pending==cancellation)
+            {
+                pending=null;activeDocumentOperation=null;
+                if(!closed)SaveReading(completed:true, successfulDocument:published?path:null);
+            }
+            cancel.IsVisible=pending is not null||exportCancellation is not null;
+        }
+
+        void Log(string phase,string outcome)=>OpenTrace.Log.Phase(request,phase,outcome,open.Elapsed.TotalMilliseconds,-1);
     }
     public void GoToPage(int index)
     {
-        if(composition?.Available!=true)return;
-        simplified=false;UpdateReadingMode();page=Math.Clamp(index,0,composition.Pages.Count-1);
-        CurrentSection=composition.Pages[page].Section;CurrentBlockId=null;
-        SelectPageParagraph();ShowPage();UpdateActions();UpdateNavigationPosition();if(navMode=="pages")FillPanel();
+        if(!ShowsCalculatedPages||simplified)return;
+        ActivatePage(Math.Clamp(index,0,composition!.Pages.Count-1));
+        if(fittingWidth)FitToWidth();
+        RevealPage(page);
+        UpdateActions();UpdateNavigationPosition();if(navMode=="pages")FillPanel();
     }
     public void SetZoom(double value)
     {
         if(IsSimplifiedReading)
         {
-            readingZoom=Math.Clamp(value,.8,1.7);SetReadingTemplate();UpdateFacts(false);return;
+            string? anchor=ContinuousAnchor();
+            readingZoom=Math.Clamp(value,.8,1.7);SetReadingTemplate();UpdateFacts(false);
+            if(anchor is not null&&documentIndex?.BodyIndices.TryGetValue(anchor,out int index)==true)
+                MoveReadingBlock(index,alignAtTop:false);
+            return;
         }
         fittingWidth=false;ApplyPageZoom(value);
     }
     void ApplyPageZoom(double value)
     {
+        double y=PageOffsetInPoints();
         zoom=Math.Clamp(value,.3,2);
-        var geometry=composition?.Pages.ElementAtOrDefault(page)?.Geometry??new PageGeometry();
-        paper.Width=geometry.Width*PointsToDip*zoom;paper.Height=geometry.Height*PointsToDip*zoom;
-        ToolTip.SetTip(paper,$"{zoom:P0}");RenderPageBitmap();UpdateFacts(CurrentPage>0);UpdateRuler();UpdateNativeSelection();UpdatePageMarks();
+        if(CurrentPage==0)return;
+        RevealPage(page,y);
+        UpdateFacts(true);UpdateRuler();
     }
     public void FitToWidth()
     {
         if(CurrentPage==0)return;
         double width=viewport.Viewport.Width>0?viewport.Viewport.Width:viewport.Bounds.Width;
         if(width<=0)return;
-        fittingWidth=true;ApplyPageZoom(Math.Max(1,width-2*PageInset-3)/(composition!.Pages[page].Geometry.Width*PointsToDip));
+        double inset=2*PageInset+3+(readingView==ReadingView.FacingPages?SpreadGutter:0);
+        fittingWidth=true;ApplyPageZoom(Math.Max(1,width-inset)/(PageWidthInPoints(page)*PointsToDip));
     }
     public void ToggleNavigation()
     {
@@ -225,6 +297,14 @@ public sealed partial class ReaderWindow:Window
     }
     public void SetTheme(int value)
     {
+        if(activeTheme is {} extension && extensions is not null)
+        {
+            try { extensions.SetEnabled(extension.Manifest.Id,false); }
+            catch (Exception error) { RecordIncident(error,SessionStage.ApplyExtension,extension.Manifest.Identity); return; }
+            activeTheme=null;
+            extensionPalette=null;
+            Resources.Remove("SystemAccentColor");
+        }
         themeChoice=value switch{1=>ReaderTheme.Chocolate,2=>ReaderTheme.MicrosoftBlue,_=>ReaderTheme.System};
         ApplyTheme();
         if(themePreference?.Save(themeChoice)==false)
@@ -241,13 +321,13 @@ public sealed partial class ReaderWindow:Window
     void ApplyTheme(PlatformThemeVariant? platform=null)
     {
         var previous=ActualThemeVariant;
-        RequestedThemeVariant=ThemePreference.Resolve(themeChoice,
-            platform??themePlatform?.GetColorValues().ThemeVariant??PlatformThemeVariant.Light);
+        RequestedThemeVariant=extensionPalette is null ? ThemePreference.Resolve(themeChoice,
+            platform??themePlatform?.GetColorValues().ThemeVariant??PlatformThemeVariant.Light) : ThemeVariant.Light;
         if(previous==ActualThemeVariant)PaintTheme();
         foreach(var window in OwnedWindows)window.RequestedThemeVariant=RequestedThemeVariant;
     }
 
-    ReaderPalette Palette=>ReaderPalette.For(ActualThemeVariant);
+    ReaderPalette Palette=>extensionPalette??ReaderPalette.For(ActualThemeVariant);
     public void SetLanguage(bool useEnglish){english=useEnglish;foreach(var item in labels){ToolTip.SetTip(item.Button,T(item.Fr,item.En));AutomationProperties.SetName(item.Button,T(item.Fr,item.En));}UpdateThemeSelection();RefreshReadingAppearance();RefreshElements();UpdateUi();}
     void PaintTheme()
     {
@@ -270,16 +350,16 @@ public sealed partial class ReaderWindow:Window
                 if(inHeader)PaintHeaderAction(item.Button);
             }
         UpdateThemeSelection();
-        pageMarks.SetInk(ReferenceEquals(Palette,ReaderPalette.Blue)?Palette.Accent:Brush("#795238"));
+        RefreshPageLabels();UpdatePageMarks();UpdatePageViewButtons();
         export.Background=AccentFill;PaintElementTheme();UpdateToggle(marksToggle,marksRequested);UpdatePanels();UpdateRuler();
         if(initialized){RefreshReadingAppearance();RefreshElements();FillPanel();}
     }
 
     void UpdateThemeSelection()
     {
-        UpdateToggle(chocolateTheme,themeChoice==ReaderTheme.Chocolate);
-        UpdateToggle(blueTheme,themeChoice==ReaderTheme.MicrosoftBlue);
-        UpdateToggle(systemTheme,themeChoice==ReaderTheme.System);
+        UpdateToggle(chocolateTheme,extensionPalette is null&&themeChoice==ReaderTheme.Chocolate);
+        UpdateToggle(blueTheme,extensionPalette is null&&themeChoice==ReaderTheme.MicrosoftBlue);
+        UpdateToggle(systemTheme,extensionPalette is null&&themeChoice==ReaderTheme.System);
         foreach(var action in new[]{chocolateTheme,blueTheme,systemTheme})
             AutomationProperties.SetItemStatus(action,action.Classes.Contains("active")?T("Sélectionné","Selected"):"");
     }
@@ -305,17 +385,30 @@ public sealed partial class ReaderWindow:Window
         if(copyConfirmation.IsVisible)copyConfirmation.Text=T("Référence copiée","Reference copied");
         fileLabel.Text=fileName;ToolTip.SetTip(fileLabel,fileName.Length==0?null:fileName);
         Title=fileName.Length==0?"Lecteur Word":fileName+" — Lecteur Word";
-        bool available=composition?.Available==true;UpdateReadingMode();empty.IsVisible=!available&&readable?.Available!=true;
-        empty.Text=inspection is null?T("Ouvrez un document DOCX","Open a DOCX document"):T("Lecture indisponible. Consultez les diagnostics.","Reading unavailable. Open diagnostics.");
-        warning.Text=inspection is null?"":!inspection.Manifest.InspectionComplete?T("Inspection refusée · détails dans les diagnostics","Inspection refused · details in diagnostics"):
-            !available&&readable?.Available!=true?T("Lecture et règle indisponibles","Reading and ruler unavailable"):
-            simplified?T("Lecture simplifiée · règle indisponible","Simplified reading · ruler unavailable"):
+        bool available=composition?.Available==true;
+        UpdateReadingMode();
+        unavailablePanel.IsVisible=readingView==ReadingView.Unavailable;
+        openDiagnostics.IsVisible=inspection is not null;
+        openDiagnostics.Content=T("Voir les diagnostics","View diagnostics");
+        openReading.IsVisible=CanUseView(ReadingView.Continuous);
+        openReading.Content=T("Ouvrir en lecture continue","Open in continuous reading");
+        empty.Text=inspection is null?T("Ouvrez un document DOCX","Open a DOCX document"):
+            inspection.Manifest.Format=="legacyDoc"?
+                T("Le format DOC binaire est prévu pour la V2. Ouvrez un document DOCX.","Binary DOC is planned for V2. Open a DOCX document."):
+            !inspection.Manifest.InspectionComplete?
+                T("Le fichier n’a pas pu être interprété comme un DOCX valide et pris en charge.","The file could not be interpreted as a valid, supported DOCX."):
+            T("Ce document ne peut pas encore être paginé entièrement. Les diagnostics indiquent les éléments en cause.",
+                "This document cannot yet be fully paginated. The diagnostics identify what prevents pagination.");
+        warning.Text=inspection is null||readingView==ReadingView.Unavailable?"":
+            simplified?available?T("Lecture continue","Continuous reading"):
+                T("Pagination complète indisponible · lecture continue","Complete pagination unavailable · continuous reading"):
+            ShowsHistoricalPage?T("Page calculée · profil historique","Calculated page · historical profile"):
             T("Pages calculées · pagination expérimentale","Calculated pages · experimental pagination");
         ToolTip.SetTip(warning,T("Fidélité à Microsoft Word non qualifiée. Consultez les propriétés et diagnostics du document.",
             "Microsoft Word fidelity is unqualified. See document properties and diagnostics."));
         warning.IsVisible=!string.IsNullOrWhiteSpace(warning.Text);
         status.Text="";
-        if(available&&!simplified){SelectPageParagraph(CurrentBlockId);ShowPage();}
+        if(available&&!simplified)SelectPageParagraph(CurrentBlockId);
         UpdateActions();FillPanel();
         var choices=new StackPanel{Spacing=5,MinWidth=250};
         foreach(var format in Enum.GetValues<ExportFormat>())
@@ -343,21 +436,8 @@ public sealed partial class ReaderWindow:Window
             if(!closed)status.Text=T("Export créé : ","Export created: ")+path;
         }
         catch(OperationCanceledException){if(!closed)status.Text=T("Export annulé ; original conservé","Export cancelled; original preserved");}
-        catch(Exception){if(!closed)status.Text=T("Export refusé ; aucune sortie finale créée","Export refused; no final output created");}
+        catch(Exception error){RecordIncident(error,SessionStage.ExportDocument);if(!closed)status.Text=T("Export refusé ; aucune sortie finale créée","Export refused; no final output created");}
         finally{exportCancellation=null;cancel.IsVisible=pending is not null;if(!closed)UpdateActions();}
-    }
-    void ShowPage()
-    {
-        if(composition?.Available!=true)return;
-        if(fittingWidth)FitToWidth();else ApplyPageZoom(zoom);viewport.Offset=new Vector(0,0);
-    }
-    void RenderPageBitmap()
-    {
-        if(composition?.Available!=true||simplified)return;
-        var source=composition.Pages[page];float maximum=(float)Math.Min(3,Math.Sqrt(16_000_000d/(source.Geometry.Width*source.Geometry.Height)));
-        float scale=Math.Clamp((float)(96d/72*zoom*RenderScaling),.5f,maximum);
-        if(ReferenceEquals(rasterPage,source)&&Math.Abs(rasterScale-scale)<.03)return;
-        using var stream=new MemoryStream(Composer.PagePng(source,scale));var bitmap=new Bitmap(stream);paper.Source=bitmap;pageBitmap?.Dispose();pageBitmap=bitmap;rasterPage=source;rasterScale=scale;
     }
     void UpdateActions()
     {
@@ -372,7 +452,7 @@ public sealed partial class ReaderWindow:Window
         ToolTip.SetTip(pageLabel,available?T("Pages calculées par Lecteur Word","Pages calculated by Lecteur Word"):
             T("Lecture simplifiée, sans pagination calculée","Simplified reading, without calculated pages"));
         if(marksToggle is not null)marksToggle.IsVisible=available||IsSimplifiedReading;
-        UpdateFacts(available);UpdateRuler();UpdateNativeSelection();UpdatePageMarks();
+        UpdatePageViewButtons();UpdateFacts(available);UpdateRuler();UpdateNativeSelection();UpdatePageMarks();
     }
     void ShowPanel(string mode)
     {
@@ -388,7 +468,7 @@ public sealed partial class ReaderWindow:Window
         {
             if(key=="pages"&&(composition?.Available!=true||simplified)||key=="notes"&&readable?.Presentation.Notes.Count is not >0||key=="sections"&&readable?.Presentation.Sections.Any(s=>s.Stories.Count>0)!=true)continue;
             var button=new Button{Content=T(fr,en),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Left,
-                Background=navMode==key?AccentFill:Brushes.Transparent,BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(6),MinHeight=28,Padding=new Thickness(7,4)};
+                Background=navMode==key||navMode=="pages"&&simplified&&key=="outline"?AccentFill:Brushes.Transparent,BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(6),MinHeight=28,Padding=new Thickness(7,4)};
             button.Click+=(_,_)=>{navMode=key;FillPanel();};navigation.Children.Add(button);
         }
         navItems.Children.Clear();navigation.Children.Add(navItems);

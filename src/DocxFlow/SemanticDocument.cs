@@ -9,7 +9,7 @@ internal enum SemanticKind
     Tab, Break, SoftHyphen, NoBreakHyphen, Symbol, Table, Row, Cell, Style, Numbering,
     Drawing, InlineDrawing, FloatingDrawing, ResourceReference, NoteCall, StoryReference,
     BookmarkStart, BookmarkEnd, Link, Revision, CommentReference, ContentControl,
-    Alternative, Branch, Property, Opaque
+    Alternative, Branch, Property, Opaque, NoteMark, NoteSeparatorRule, NoteContinuationRule
 }
 
 internal enum SemanticCoverage { Represented, Technical, InactiveAlternative, InventoryOnly }
@@ -31,11 +31,20 @@ internal sealed record SemanticField(string Id, string StoryId, string? ParentFi
 internal sealed record SemanticCell(string Id, int? Column, int? ColumnSpan, string? VerticalOriginId, string? HorizontalOriginId);
 internal sealed record SemanticRow(string Id, ImmutableArray<SemanticCell> Cells);
 internal sealed record SemanticTable(string Id, ImmutableArray<string> GridColumns, ImmutableArray<SemanticRow> Rows);
-internal sealed record SemanticStyle(string Id, string DeclaredId, string Type, bool IsDefault, string? ParentId);
-internal sealed record SemanticStyleUse(string Id, ImmutableArray<string> BaseToDerivedIds, bool Resolved);
+internal sealed record SemanticStyle(string Id, string DeclaredId, string Type, bool IsDefault, string? ParentId)
+{
+    internal SemanticStyleReference? LinkedStyle {get;init;}
+    internal SemanticStyleReference? NextStyle {get;init;}
+}
+internal sealed record SemanticStyleReference(string DeclarationId,string? TargetId);
+internal sealed record SemanticStyleUse(string Id, ImmutableArray<string> BaseToDerivedIds, bool Resolved)
+{
+    internal bool MissingReferenceIgnored {get;init;}
+}
 internal sealed record SemanticStyleCollection(ImmutableArray<Relationship> Relations, string? RootId, string? DefaultsId,
     ImmutableArray<SemanticStyle> Definitions);
 internal sealed record SemanticStyleCompatibility(Relationship? SettingsRelation, ImmutableArray<string> DeclarationIds, int? Mode);
+internal enum StyleCollectionKind { Ordinary, Effects }
 internal enum DependencyImpact { NoLayoutEffect, AffectsLayout, Undetermined }
 internal sealed record SemanticCustomXml(Relationship Relation, string? RootId, ImmutableArray<Relationship> PartRelations,
     string? PropertiesId, Guid? StoreId, ImmutableArray<string> Entries, DependencyImpact Impact, string Reason, string? ConsumerId=null);
@@ -48,12 +57,12 @@ internal sealed class SemanticDocument(
     IReadOnlyDictionary<string, SemanticElement> byId,
     ImmutableArray<SemanticStory> stories, ImmutableArray<string> bodyBlocks, ImmutableArray<SemanticSection> sections,
     ImmutableArray<SemanticReference> references, ImmutableArray<SemanticAlternative> alternatives,
-    ImmutableArray<SemanticTable> tables, ImmutableArray<SemanticField> fields, SemanticStyleCollection ordinaryStyles,
-    SemanticStyleCollection effectsStyles, SemanticStyleCompatibility styleCompatibility, double styleResolutionMs,
+    ImmutableArray<SemanticTable> tables, ImmutableArray<SemanticField> fields,ImmutableArray<SemanticTocEntry> tocEntries, SemanticStyleCollection ordinaryStyles,
+    SemanticStyleCollection effectsStyles, SemanticStyleCollection effectiveStyles, SemanticStyleCompatibility styleCompatibility, double styleResolutionMs,
     ImmutableArray<SemanticStyleUse> styleUses, ImmutableArray<SemanticNumbering> numbering, ImmutableArray<SemanticCustomXml> customXml)
 {
     readonly IReadOnlyDictionary<string, SemanticStyleUse> stylesByUse = styleUses.ToDictionary(s => s.Id, StringComparer.Ordinal);
-    readonly ILookup<string, SemanticStyle> defaultStyles = ordinaryStyles.Definitions.Where(s => s.IsDefault)
+    readonly ILookup<string, SemanticStyle> defaultStyles = effectiveStyles.Definitions.Where(s => s.IsDefault)
         .ToLookup(s => s.Type, StringComparer.Ordinal);
 
     internal string SnapshotId { get; } = manifest.SourceSha256!;
@@ -66,21 +75,32 @@ internal sealed class SemanticDocument(
     internal ImmutableArray<SemanticAlternative> Alternatives { get; } = alternatives;
     internal ImmutableArray<SemanticTable> Tables { get; } = tables;
     internal ImmutableArray<SemanticField> Fields { get; } = fields;
+    internal ImmutableArray<SemanticTocEntry> TocEntries {get;}=tocEntries;
+    internal ImmutableHashSet<string> TocMarkerFields {get;}=tocEntries.SelectMany(e=>e.OperandFieldIds.Prepend(e.FieldId))
+        .ToImmutableHashSet(StringComparer.Ordinal);
     internal SemanticStyleCollection OrdinaryStyles { get; } = ordinaryStyles;
     internal SemanticStyleCollection EffectsStyles { get; } = effectsStyles;
+    internal SemanticStyleCollection EffectiveStyles { get; } = effectiveStyles;
     internal SemanticStyleCompatibility StyleCompatibility { get; } = styleCompatibility;
     internal double StyleResolutionMs { get; } = styleResolutionMs;
-    internal ImmutableArray<SemanticStyle> Styles => OrdinaryStyles.Definitions;
+    internal ImmutableArray<SemanticStyle> Styles => EffectiveStyles.Definitions;
     internal ImmutableArray<SemanticStyleUse> StyleUses { get; } = styleUses;
     internal ImmutableArray<SemanticNumbering> Numbering { get; } = numbering;
     internal ImmutableArray<SemanticCustomXml> CustomXml { get; } = customXml;
     internal double CustomXmlResolutionMs { get; init; }
+    internal double FieldAnalysisMs { get; init; }
+    internal double TocEntryAnalysisMs {get;init;}
     internal IReadOnlyList<Diagnostic> InspectionDiagnostics { get; } = manifest.Diagnostics.AsReadOnly();
     internal IReadOnlyList<PartInventory> Parts { get; } = manifest.Parts.AsReadOnly();
 
     internal SemanticElement Element(string id) => byId[id];
     internal string? ParentId(string id) => index.Nodes[id].ParentId;
+    internal bool IsStandaloneBookmark(string id)=>index.IsStandaloneBookmark(index.Nodes[id]);
+    internal bool ProcessesContent(string id)=>index.ProcessesContent(index.Nodes[id]);
+    internal IEnumerable<InventoryNode> StylePropertyChildren(string id) => index.LogicalChildren(index.Nodes[id]);
+    internal string? StylePropertyParent(string id) => index.PropertyParent(index.Nodes[id])?.Id;
     internal string Name(string id) => index.Nodes[id].Name;
+    internal string? NamespaceInScope(InventoryNode node,string prefix) => index.NamespaceInScope(node,prefix);
     internal string Revision(string id) => index.Nodes[id].Revision;
     internal string FieldRole(string id) => index.Nodes[id].FieldRole;
     internal string? RawText(string id) => index.Nodes[id].Text;
@@ -90,6 +110,29 @@ internal sealed class SemanticDocument(
     internal string? RelatedPart(string type) => index.Related(MainPart, type)?.ResolvedPart;
     internal string? RelatedRoot(string type, string name) =>
         RelatedPart(type) is {} part ? index.Root(part, name)?.Id : null;
+    internal IReadOnlyDictionary<string,string> TextDocumentProperties(Action check)
+    {
+        const string properties="{http://schemas.openxmlformats.org/officeDocument/2006/custom-properties}";
+        const string text="{http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes}lpwstr";
+        var values=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        if(index.Related("/","custom-properties")?.ResolvedPart is not {} part||
+            !Parts.Any(p=>p.PartUri==part&&p.ContentType=="application/vnd.openxmlformats-officedocument.custom-properties+xml")||
+            SemanticIndex.Unique(index.ByPart[part].Where(n=>n.ParentId is null&&n.Name==properties+"Properties")) is not {} root)
+            return values;
+        foreach(var group in index.RawChildren(root).Where(n=>n.Name==properties+"property"&&
+            n.Attributes.ContainsKey("{}name")).GroupBy(n=>n.Attributes["{}name"],StringComparer.OrdinalIgnoreCase))
+        {
+            check();
+            if(SemanticIndex.Unique(group) is not {} property||property.Attributes.ContainsKey("{}linkTarget")||
+                SemanticIndex.Unique(index.RawChildren(property).Where(n=>!n.Name.StartsWith('#'))) is not {Name:text} entry)
+                continue;
+            var nodes=index.RawChildren(entry).ToArray();
+            if(nodes.All(n=>n.Kind=="textValue")&&string.Concat(nodes.Select(n=>n.Text)) is {Length:>0 and <=1024} value&&
+                !value.Any(char.IsControl))
+                values.Add(group.Key,value);
+        }
+        return values;
+    }
     internal SemanticStyleUse? StyleUse(string id) => stylesByUse.GetValueOrDefault(id);
     internal SemanticStyle? DefaultStyle(string type) => SemanticIndex.Unique(defaultStyles[type]);
     internal IEnumerable<KeyValuePair<string, string>> Attributes(string id)
@@ -134,24 +177,25 @@ internal sealed class SemanticDocument(
         return Source(id, new(0, node.Text?.Length ?? 0));
     }
 
-    // Ordered declaration roots for the first style profile. The mark uses the paragraph's
-    // direct rPr separately. These layers are evidence for a future property-specific cascade.
+    // Ordered declaration roots. A paragraph mark takes direct rPr from pPr.
     internal IEnumerable<string> PresentationDeclarations(string id, bool paragraphMark = false,
         Action<string>? unresolved = null, IEnumerable<string>? tableParagraphProperties = null,
-        string? numberingParagraphProperties = null)
+        string? numberingParagraphProperties = null,string? paragraphStyleOverride=null)
     {
         var node = index.Nodes[id];
         bool isRun = SemanticIndex.Word(node, "r");
         bool isParagraph = SemanticIndex.Word(node, "p");
         if (!isRun && !isParagraph) yield break;
         bool character = isRun || paragraphMark;
-        if (OrdinaryStyles.DefaultsId is {} defaults && index.Child(index.Nodes[defaults], character ? "rPrDefault" : "pPrDefault") is {} kind &&
+        if (EffectiveStyles.DefaultsId is {} defaults && index.Child(index.Nodes[defaults], character ? "rPrDefault" : "pPrDefault") is {} kind &&
             index.Child(kind, character ? "rPr" : "pPr") is {} properties)
             yield return properties.Id;
+        if(paragraphMark&&EffectiveStyles.DefaultsId is {} d&&index.Child(index.Nodes[d],"pPrDefault") is {} paragraphDefault&&
+            index.Child(paragraphDefault,"pPr") is {} defaultProperties&&index.Child(defaultProperties,"rPr") is {} defaultMark&&
+            BlocksOf(defaultMark.Id).Any(e=>TextStyleResolver.IsVisibility(Name(e.Id))))
+            yield return defaultMark.Id;
         if (!character && tableParagraphProperties is not null)
             foreach (string propertiesId in tableParagraphProperties) yield return propertiesId;
-        if (!character && numberingParagraphProperties is not null) yield return numberingParagraphProperties;
-
         InventoryNode? paragraph = node;
         while (paragraph is not null && !SemanticIndex.Word(paragraph, "p") && byId[paragraph.Id].StoryId == byId[id].StoryId)
             paragraph = index.Parent(paragraph);
@@ -160,7 +204,9 @@ internal sealed class SemanticDocument(
             var pp = index.Child(paragraph, "pPr");
             foreach (string layer in Layers(pp, "pStyle", "paragraph", character ? "rPr" : "pPr"))
                 yield return layer;
-            if (isParagraph && pp is not null)
+            // MS-OI29500 §17.7.2 applies the numbering properties after the paragraph style.
+            if (!character && numberingParagraphProperties is not null) yield return numberingParagraphProperties;
+            if (isParagraph && pp is not null&&paragraphStyleOverride is null)
             {
                 if (!paragraphMark) yield return pp.Id;
                 else if (index.Child(pp, "rPr") is {} mark) yield return mark.Id;
@@ -177,7 +223,7 @@ internal sealed class SemanticDocument(
         IEnumerable<string> Layers(InventoryNode? properties, string refName, string type, string layerName)
         {
             var reference = properties is null ? null : index.Child(properties, refName);
-            string? use = reference?.Id;
+            string? use = type=="paragraph"?paragraphStyleOverride??reference?.Id:reference?.Id;
             if (use is null)
                 use = DefaultStyle(type)?.Id;
             if (use is null) yield break;
@@ -185,15 +231,21 @@ internal sealed class SemanticDocument(
             if (resolved?.Resolved != true) unresolved?.Invoke(use);
             if (resolved is not null)
                 foreach (string definition in resolved.BaseToDerivedIds)
+                {
                     if (index.Child(index.Nodes[definition], layerName) is {} layer)
                         yield return layer.Id;
+                    if(paragraphMark&&type=="paragraph"&&index.Child(index.Nodes[definition],"pPr") is {} p&&
+                        index.Child(p,"rPr") is {} inheritedMark&&BlocksOf(inheritedMark.Id).Any(e=>TextStyleResolver.IsVisibility(Name(e.Id))))
+                        yield return inheritedMark.Id;
+                }
         }
     }
 
     internal string? StoredText(SemanticField field)
     {
         if (field.StoredResultIds.IsEmpty || field.StoredResultIds.Any(id => Element(id).Kind is
-            SemanticKind.Symbol or SemanticKind.Drawing or SemanticKind.Opaque or SemanticKind.NoteCall))
+            SemanticKind.Symbol or SemanticKind.Drawing or SemanticKind.Opaque or
+            SemanticKind.NoteCall or SemanticKind.NoteMark or SemanticKind.NoteSeparatorRule or SemanticKind.NoteContinuationRule))
             return null;
         return string.Concat(field.StoredResultIds.Select(id => Element(id).Kind switch
         {

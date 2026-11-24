@@ -36,7 +36,7 @@ internal sealed partial class LineComposer
         if(label.Text.Length==0)return Result(textStart:anchor);
         if(paragraph.RightToLeft||style.RightToLeft||properties.Alignment is LineAlignment.Center or LineAlignment.Right)
             return Refuse("LINE_LIST_DIRECTION","Direction ou alignement du paragraphe de liste hors profil.");
-        if(style.Hidden||style.Underline!="none")
+        if(style.SuppressText||style.Underline is not ("none" or "single" or "double"))
             return Refuse("LINE_LIST_MARK_FORMAT","Visibilité ou soulignement du libellé hors profil.");
 
         var marker=Decoration("listMarker",label.Text,style,source,0);

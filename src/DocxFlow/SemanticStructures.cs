@@ -92,15 +92,35 @@ internal static partial class SemanticReader
                 index.Root(part, "styles") is not {} root)
                 return new(relations, null, null, []);
 
+            var declared = index.LogicalChildren(root).Where(n => Word(n, "style") && Active(n)).ToArray();
+            var byName = declared.ToLookup(n => Get(n, "styleId"), StringComparer.Ordinal);
             var definitions = ImmutableArray.CreateBuilder<SemanticStyle>();
-            foreach (var node in index.RawChildren(root))
+            foreach (var node in declared)
             {
                 Check();
-                if (!Word(node, "style") || !Active(node)) continue;
                 var basedOn = index.Child(node, "basedOn");
                 definitions.Add(new(node.Id, Get(node, "styleId"), Get(node, "type"), On(node, "default"),
-                    basedOn is not null && index.Definition(part, "style", Get(basedOn, "val")) is {} parent &&
-                    parent.ParentId == root.Id ? parent.Id : null));
+                    basedOn is not null && Unique(byName[Get(basedOn, "val")]) is {} parent && Get(node,"type")!="numbering" &&
+                    Get(parent,"type")==Get(node,"type") ? parent.Id : null)
+                {
+                    LinkedStyle=Get(node,"type") switch
+                    {
+                        "paragraph"=>Reference("link","character"),
+                        "character"=>Reference("link","paragraph"),
+                        _=>Reference("link",null)
+                    },
+                    NextStyle=Reference("next",Get(node,"type")=="paragraph"?"paragraph":null)
+                });
+
+                SemanticStyleReference? Reference(string name,string? targetType)
+                {
+                    var declarations=index.LogicalChildren(node).Where(n=>Word(n,name)).Take(2).ToArray();
+                    if(declarations.Length==0)return null;
+                    var declaration=declarations[0];
+                    string? target=declarations.Length==1&&targetType is not null&&
+                        Unique(byName[Get(declaration,"val")]) is {} related&&Get(related,"type")==targetType?related.Id:null;
+                    return new(declaration.Id,target);
+                }
             }
             return new(relations, root.Id, index.Child(root, "docDefaults")?.Id, definitions.ToImmutable());
         }
@@ -134,7 +154,7 @@ internal static partial class SemanticReader
         }
 
         (ImmutableArray<SemanticStyleUse>, ImmutableArray<SemanticNumbering>) BuildStyles(
-            SemanticStyleCollection ordinary, SemanticStyleCollection effects)
+            SemanticStyleCollection ordinary, SemanticStyleCollection effects, SemanticStyleCollection effective)
         {
             string? numberingPart = index.Related(index.Main, "numbering")?.ResolvedPart;
             var uses = ImmutableArray.CreateBuilder<SemanticStyleUse>();
@@ -142,6 +162,8 @@ internal static partial class SemanticReader
             // Reuse the recorded style references and validate each chain in the related styles part.
             var byReference = new Dictionary<string, SemanticStyleUse>(StringComparer.Ordinal);
             var chains = new Dictionary<(string? Root, string Id, string Type), (ImmutableArray<string> Sources, bool Valid)>();
+            var definitions = new[] { ordinary, effects }.Distinct().ToDictionary(c => c,
+                c => c.Definitions.ToLookup(d => d.DeclaredId, StringComparer.Ordinal));
             foreach (var collection in new[] { ordinary, effects })
             foreach (var definition in collection.Definitions)
                 Resolve(index.Nodes[definition.Id], definition.DeclaredId, definition.Type, collection);
@@ -152,9 +174,9 @@ internal static partial class SemanticReader
                 var node = index.Nodes[element.Id];
                 if (Word(node, "style")) continue;
                 string type = Word(node, "pStyle") ? "paragraph" : Word(node, "rStyle") ? "character" : "table";
-                Resolve(node, Get(node, "val"), type, ordinary);
+                Resolve(node, Get(node, "val"), type, effective);
             }
-            var defaults = Unique(ordinary.Definitions.Where(s => s.IsDefault && s.Type == "paragraph"));
+            var defaults = Unique(effective.Definitions.Where(s => s.IsDefault && s.Type == "paragraph"));
             foreach (var element in OrderedElements)
             {
                 Check();
@@ -226,7 +248,17 @@ internal static partial class SemanticReader
             {
                 Check();
                 string? root = collection.RootId;
-                string? part = root is null ? null : index.Nodes[root].Source.PartUri;
+                var collectionDefinitions = definitions[collection];
+                if(name.Length>0&&(Word(origin,"pStyle")||Word(origin,"rStyle"))&&
+                    !collectionDefinitions.Contains(name))
+                {
+                    var ignored=new SemanticStyleUse(origin.Id,[],true){MissingReferenceIgnored=true};
+                    uses.Add(ignored);
+                    byReference.Add(origin.Id,ignored);
+                    Issue("SEMANTIC_STYLE_REFERENCE_IGNORED",origin,
+                        "Style de paragraphe ou de caractère absent. La référence source reste conservée.");
+                    return;
+                }
                 if (!chains.TryGetValue((root, name, type), out var result))
                 {
                     var path = new List<string>();
@@ -236,16 +268,27 @@ internal static partial class SemanticReader
                     while (current.Length > 0)
                     {
                         Check();
-                        if (path.Count >= 32 || !seen.Add(current) || index.Definition(part, "style", current) is not {} definition ||
-                            !Active(definition) || Get(definition, "type") != type || definition.ParentId != root)
+                        if (path.Count >= 32 || !seen.Add(current) || Unique(collectionDefinitions[current]) is not {} style ||
+                            style.Type != type)
                         {
                             valid = false;
                             break;
                         }
+                        var definition = index.Nodes[style.Id];
                         path.Add(definition.Id);
                         var bases = index.LogicalChildren(definition).Where(n => Word(n, "basedOn")).Take(2).ToArray();
-                        current = bases.Length == 1 ? Get(bases[0], "val") : "";
-                        if (bases.Length > 1 || bases.Length == 1 && current.Length == 0) valid = false;
+                        current="";
+                        if(bases.Length==0)continue;
+                        string parent=Get(bases[0],"val");
+                        if(bases.Length!=1||parent.Length==0){valid=false;break;}
+                        if(type!="numbering"&&collectionDefinitions.Contains(parent))
+                        {
+                            if(Unique(collectionDefinitions[parent]) is not {} target){valid=false;break;}
+                            if(target.Type==type)current=parent;
+                        }
+                        if(current.Length==0)
+                            Issue("SEMANTIC_STYLE_PARENT_IGNORED",bases[0],
+                                "Référence d’héritage sans parent applicable. La déclaration reste conservée.");
                     }
                     path.Reverse();
                     result = ([..path], valid);
@@ -254,7 +297,7 @@ internal static partial class SemanticReader
                 var use = new SemanticStyleUse(origin.Id, result.Sources, result.Valid);
                 uses.Add(use);
                 byReference.Add(origin.Id, use);
-                if (!result.Valid && collection == ordinary)
+                if (!result.Valid && collection == effective)
                     Issue("SEMANTIC_STYLE_UNRESOLVED", origin, "Chaîne de styles absente, ambiguë, incompatible ou cyclique.");
             }
         }

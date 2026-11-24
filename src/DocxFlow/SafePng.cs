@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.IO.Compression;
 
 namespace LecteurWord.Flow;
@@ -7,6 +6,7 @@ namespace LecteurWord.Flow;
 /// <summary>Conservative PNG gate for the reading view, not a decoder sandbox.</summary>
 public static class SafePng
 {
+    internal const string ColorUnqualified="MEDIA_PNG_COLOR_UNQUALIFIED";
     const int MaxBytes = 8 * 1024 * 1024, MaxDimension = 8192;
     const long MaxPixels = 8_000_000, MaxInflated = 32 * 1024 * 1024;
     static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
@@ -18,20 +18,19 @@ public static class SafePng
     }).ToArray();
     public static bool Validate(byte[] input) => TryGetRenderableBytes(input, out _, out _);
     public static bool TryGetRenderableBytes(byte[] input, out byte[] renderable, out string reason, CancellationToken cancellationToken = default)
+        =>Decode(input,out renderable,out reason,new(cancellationToken));
+
+    internal static bool Decode(byte[] input,out byte[] renderable,out string reason,MediaDecodeBudget budget)
     {
         renderable = []; reason = "PNG refusé : structure ou budget non qualifié.";
         if (input.Length is < 57 or > MaxBytes || !input.AsSpan(0, 8).SequenceEqual(Signature)) return false;
-        var watch = Stopwatch.StartNew();
-        void Check()
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (watch.ElapsedMilliseconds > 1500) throw new InvalidDataException("PNG_TIME_LIMIT");
-        }
+        void Check()=>budget.Check();
         try
         {
             using var compressed = new MemoryStream(); using var clean = new MemoryStream(); clean.Write(Signature);
             int cursor = 8, width = 0, height = 0, channels = 0, palette = 0, color = -1, chunks = 0;
             bool header = false, idat = false, idatEnded = false, ended = false, transparency = false, omitted = false;
+            bool srgb=false,gamma=false,chromaticities=false;
             while (cursor < input.Length)
             {
                 Check(); if (++chunks > 4096 || input.Length - cursor < 12) return false;
@@ -54,6 +53,23 @@ public static class SafePng
                     header = true;
                 }
                 else if (!header) return false;
+                else if(type.SequenceEqual("sRGB"u8))
+                {
+                    if(srgb||palette>0||idat||size!=1||data[0]>3)return false;
+                    srgb=true;
+                }
+                else if(type.SequenceEqual("gAMA"u8))
+                {
+                    if(gamma||palette>0||idat||size!=4||BinaryPrimitives.ReadUInt32BigEndian(data)==0)return false;
+                    gamma=true;keep=false;
+                }
+                else if(type.SequenceEqual("cHRM"u8))
+                {
+                    if(chromaticities||palette>0||idat||size!=32)return false;
+                    chromaticities=true;keep=false;
+                }
+                else if(type.SequenceEqual("iCCP"u8)||type.SequenceEqual("cICP"u8))
+                {reason=ColorUnqualified;return false;}
                 else if (type.SequenceEqual("PLTE"u8))
                 {
                     if (palette > 0 || idat || size == 0 || size % 3 != 0 || size > 768 || color is 0 or 4) return false;
@@ -87,6 +103,9 @@ public static class SafePng
                 if (ended) break;
             }
             if (!header || !ended || compressed.Length == 0) return false;
+            // sRGB takes precedence over gAMA/cHRM. A standalone profile needs a qualified color conversion.
+            if(!srgb&&(gamma||chromaticities)){reason=ColorUnqualified;return false;}
+            budget.FinishPhase("PNG structure et CRC");
             compressed.Position = 0;
             using (var inflate = new ZLibStream(compressed, CompressionMode.Decompress, true))
             {
@@ -103,10 +122,13 @@ public static class SafePng
                 }
                 if (inflate.ReadByte() != -1) return false;
             }
-            Check(); renderable = clean.ToArray();
+            budget.FinishPhase("PNG validation de l’inflation");
+            renderable = clean.ToArray();
             reason = omitted ? "Métadonnées PNG non nécessaires au décodage omises dans la copie de rendu ; original et empreinte conservés." : "";
             return true;
         }
+        catch (InvalidDataException error) when(MediaDecodeBudget.IsLimit(error.Message))
+        { renderable=[];reason=error.Message;return false; }
         catch (InvalidDataException) { return false; }
         catch (IOException) { return false; }
         catch (OverflowException) { return false; }

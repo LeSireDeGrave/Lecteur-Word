@@ -21,6 +21,9 @@ public static class DocumentExports
         if(format is not (ExportFormat.Pdf or ExportFormat.Odt or ExportFormat.Epub3))
             return new(false,FlowDocument.Profile,[new("EXPORT_FORMAT_UNSUPPORTED",null,
                 "Format d’export hors profil / Unsupported export format",false)]);
+        if(source.Manifest.Conformance=="strict")
+            return new(false,FlowDocument.Profile,[new("EXPORT_STRICT_SOURCE_UNQUALIFIED",null,
+                "Source DOCX Strict hors du profil d’export qualifié.",false)]);
         flow=FlowReader.Read(source);
         var issues=flow.Issues.ToList();
         string tableName=SemanticIndex.QName(SemanticIndex.W,"tbl");

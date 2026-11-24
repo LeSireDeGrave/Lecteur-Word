@@ -1,0 +1,24 @@
+{
+  "id": "org.lecteurword.demo.reading",
+  "name": "Repères de lecture",
+  "description": "Compte les blocs, les titres et les tableaux du document ouvert.",
+  "author": "Projet Lecteur Word",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "0.1.0",
+    "maximumExclusive": "1.0.0"
+  },
+  "apiVersion": 1,
+  "features": [
+    "reading.metrics"
+  ],
+  "permissions": [
+    "document.metrics.read"
+  ],
+  "license": "MIT",
+  "provenance": {
+    "publisher": "Projet Lecteur Word",
+    "source": null
+  },
+  "payloadSha256": "c98c7b1a495312628fcc72112a0d597f3e0588c3f069e8bae665dc79cd8c9f37"
+}

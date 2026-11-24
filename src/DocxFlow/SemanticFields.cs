@@ -100,7 +100,7 @@ internal static partial class SemanticReader
                             inner.Instruction.Add(node.Id);
                         if (element.Kind is SemanticKind.Text or SemanticKind.Tab or SemanticKind.Break
                             or SemanticKind.SoftHyphen or SemanticKind.NoBreakHyphen or SemanticKind.Symbol
-                            or SemanticKind.Drawing or SemanticKind.NoteCall)
+                            or SemanticKind.Drawing or SemanticKind.NoteCall or SemanticKind.NoteMark or SemanticKind.NoteSeparatorRule or SemanticKind.NoteContinuationRule)
                         {
                             for (int i = frames.Count - 1; i >= 0 && frames[i].InResult; i--)
                             {

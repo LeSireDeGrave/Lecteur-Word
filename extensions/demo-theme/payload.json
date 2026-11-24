@@ -1,0 +1,4 @@
+{
+  "default": { "surface": "#E5F4E9", "accent": "#214D3D" },
+  "alternate": { "surface": "#E9F2FC", "accent": "#263C70" }
+}

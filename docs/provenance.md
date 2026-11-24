@@ -124,3 +124,7 @@ Le cas ciblé `exchange-quality` crée un DOCX synthétique de deux paragraphes 
 ## Témoins RENDER-QUALITY-001
 
 `RenderQualityCases.cs` génère un DOCX synthétique avec des champs imbriqués, un signet, un lien de sommaire, un renvoi de page vide et trois fonds de cellule. Le cas modèle vérifie le texte visible, les résultats enregistrés et les pixels du raster. Le cas X11 utilise trois copies saisies explicitement dans la qualification locale et vérifie la lecture et les refus d’export. Les captures, les mesures, les copies et les références LibreOffice restent locales.
+
+## Plateforme et extensions de démonstration
+
+Les sources JSON des démonstrations sont originales au projet et accompagnées d’une licence MIT. Les paquets construits à partir de ces sources, rapports, captures et corpus de qualification restent locaux.

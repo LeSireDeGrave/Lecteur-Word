@@ -15,13 +15,26 @@ public static partial class LayoutReader
         ILookup<string,InventoryNode>? numberingInstances,numberingAbstracts;
         bool checkingListDefinition,invalidListDefinition;
         string defaultParagraphStyle="";
+        bool suppressBottomSpacing;
+        bool suppressBeforeAfterStandaloneBreak;
         void ReadSettings()
         {
             var settings=semantic is null?input.Manifest.Relationships.FirstOrDefault(r=>r.Type==R+"/settings"&&r.Mode=="Internal")?.ResolvedPart:
                 semantic.RelatedPart("settings");
             var tab=input.Manifest.Nodes.FirstOrDefault(n=>n.Source.PartUri==settings&&Is(n,"defaultTabStop"));
             if(tab is not null)paragraphDefaults=paragraphDefaults with{DefaultTab=Number(tab,"val",36,1,1440,20)};
-            foreach(var setting in input.Manifest.Nodes.Where(n=>n.Source.PartUri==settings&&(Is(n,"autoHyphenation")||Is(n,"mirrorMargins"))))
+            if(nativeComposition)
+            {
+                suppressBottomSpacing=input.Manifest.Nodes.Any(n=>n.Source.PartUri==settings&&Is(n,"suppressBottomSpacing")&&
+                    n.ParentId is {} parent&&Is(nodes[parent],"compat")&&TextStyleResolver.OnOff(n.Attributes.GetValueOrDefault("{"+W+"}val"))!=false);
+                // In the observed Word 365 mode-14 layout, a standalone manual break
+                // does not carry before spacing to the next paragraph on the fresh page.
+                suppressBeforeAfterStandaloneBreak=semantic?.StyleCompatibility is {Mode:14,DeclarationIds.Length:1}&&
+                    !input.Manifest.Nodes.Any(n=>n.Source.PartUri==settings&&Is(n,"suppressSpBfAfterPgBrk")&&
+                        n.ParentId is {} parent&&Is(nodes[parent],"compat"));
+            }
+            foreach(var setting in input.Manifest.Nodes.Where(n=>n.Source.PartUri==settings&&!nativeComposition&&
+                (Is(n,"autoHyphenation")||Is(n,"mirrorMargins"))))
                 if(Toggle(setting))Issue("LAYOUT_SETTING_UNQUALIFIED",setting,"Option de composition active non qualifiée : "+setting.Name);
             if(semantic is not null)defaultParagraphStyle=semantic.DefaultStyle("paragraph")?.DeclaredId??"";
             else defaultParagraphStyle=styles.Values.FirstOrDefault(n=>A(n,"type")=="paragraph"&&A(n,"default") is "1" or "true") is {} ds?A(ds,"styleId"):"";
@@ -44,7 +57,10 @@ public static partial class LayoutReader
             foreach(var c in children[n.Id].Where(c=>!c.Name.StartsWith('#')))
             {
                 if(!Is(c,"tab")){Issue("LAYOUT_TAB_UNQUALIFIED",c,"Arrêt de tabulation inconnu.");continue;}
-                WAttributes(c,"val","pos","leader");float pos=Number(c,"pos",0,0,1440,20);string align=A(c,"val");
+                WAttributes(c,"val","pos","leader");
+                float pos=Number(c,"pos",0,nativeComposition?-1584:0,nativeComposition?1584:1440,20);
+                string align=A(c,"val");
+                if(nativeComposition&&align is "start" or "end")align=align=="start"?"left":"right";
                 if(A(c,"leader") is not ("" or "none")&&
                     (semantic is null||A(c,"leader") is not ("dot" or "hyphen" or "underscore" or "middleDot")))
                     Issue("LAYOUT_TAB_LEADER_UNQUALIFIED",c,"Points de suite non qualifiés.");
@@ -150,7 +166,8 @@ public static partial class LayoutReader
             int value=(int)Number(node,"val",level,0,semantic is null?level:7);
             return value>level?level:value;
         }
-        ListLabel? PrepareList(InventoryNode n,InventoryNode? pp,ref ParagraphLayout p,LayoutStyle character,string styleId,ParagraphLayout? inherited=null)
+        ListLabel? PrepareList(InventoryNode n,InventoryNode? pp,ref ParagraphLayout p,LayoutStyle character,
+            IReadOnlyList<InventoryNode> paragraphStyles,ParagraphLayout? inherited=null)
         {
             SemanticNumbering? selection=semanticNumbering?.GetValueOrDefault(n.Id);
             if(semantic is not null)
@@ -176,9 +193,10 @@ public static partial class LayoutReader
             {Issue("LINE_NUMBERING_UNRESOLVED",n,"Définition de liste hors profil ou ambiguë.");return null;}
             if(level.Node is null)return null;
             if(semantic is null&&level.Suffix!="tab")Issue("LAYOUT_LIST_SUFFIX_UNQUALIFIED",n,"Suffixe autre qu’une tabulation non qualifié dans ce profil.");
-            // Numbering properties precede paragraph styles and direct properties.
-            p=Paragraph(Child(level.Node,"pPr"),inherited??paragraphDefaults);
-            foreach(var style in Chain(styleId))p=Paragraph(Child(style,"pPr"),p);
+            p=inherited??paragraphDefaults;
+            if(!nativeComposition)p=Paragraph(Child(level.Node,"pPr"),p);
+            foreach(var style in paragraphStyles)p=Paragraph(Child(style,"pPr"),p);
+            if(nativeComposition)p=Paragraph(Child(level.Node,"pPr"),p);
             p=Paragraph(pp,p) with{NumId=id,ListLevel=index};
             if(semantic is null&&p.Alignment is not ("left" or "both"))Issue("LAYOUT_LIST_ALIGNMENT_UNQUALIFIED",n,"Alignement du paragraphe de liste hors profil.");
             if(semantic is null&&Child(level.Node,"pPr") is null&&p.Left==0&&p.FirstLine==0)

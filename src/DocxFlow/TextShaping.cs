@@ -1,5 +1,8 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using HarfBuzzSharp;
 using SkiaSharp;
 using HbBuffer = HarfBuzzSharp.Buffer;
@@ -21,6 +24,19 @@ internal sealed partial class TypographySession
         byte[]? cmap;
         internal byte[] Cmap => cmap??=SkiaFace.GetTableSize(0x636d6170) is >0 and <=1_048_576?
             SkiaFace.GetTableData(0x636d6170)??[]:[];
+        byte[]? os2;
+        internal byte[] Os2 => os2??=SkiaFace.GetTableSize(0x4f532f32) is >=26 and <=4096?
+            SkiaFace.GetTableData(0x4f532f32)??[]:[];
+
+        internal int FirstSymbol
+        {
+            get
+            {
+                // In Windows symbol fonts this field is the code corresponding to byte 0x20.
+                int first=Os2.Length>=66?BinaryPrimitives.ReadUInt16BigEndian(Os2.AsSpan(64)):0;
+                return first is >=0xe000 and <=0xf820?first:0xf020;
+            }
+        }
 
         internal unsafe ShapingFace(FontResolution resolution)
         {
@@ -57,6 +73,20 @@ internal sealed partial class TypographySession
             nativeFace.Dispose();
             blob.Dispose();
         }
+    }
+
+    static SegmentKey? FitScript(SegmentKey key,ShapingFace face)
+    {
+        if(key.Style.VerticalAlignment=="baseline")return key;
+        if(face.Os2 is not {Length:>=26} metrics)return null;
+        bool superscript=key.Style.VerticalAlignment=="superscript";
+        // The OS/2 table expresses vertical size and displacement in design units.
+        int size=BinaryPrimitives.ReadInt16BigEndian(metrics.AsSpan(superscript?20:12));
+        int offset=BinaryPrimitives.ReadInt16BigEndian(metrics.AsSpan(superscript?24:16));
+        if(size<=0||size>face.UnitsPerEm||offset<0||offset>face.UnitsPerEm)return null;
+        float scale=key.Size/face.UnitsPerEm;
+        return key with{FittedSize=size*scale,
+            Style=key.Style with{BaselineShift=key.Style.BaselineShift+(superscript?offset:-offset)*scale}};
     }
 
     ShapingFace GetFace(FontResolution font)
@@ -101,6 +131,14 @@ internal sealed partial class TypographySession
     TextMeasure ShapeCore(ShapingFace face,string context,int offset,int end,byte level,string language,string script,
         float size,TextStyle style,ImmutableArray<string> features,int[] graphemeStarts,Action check,Action<int> count,Action missing)
     {
+        string displayContext=context;
+        if(style.Caps||style.SmallCaps)
+        {
+            string original=context[offset..end];
+            string display=CapitalDisplay(original,language)??throw new InvalidDataException("TEXT_CAPITAL_MAPPING_UNQUALIFIED");
+            if(display!=original)
+                displayContext=string.Concat(context.AsSpan(0,offset),display,context.AsSpan(end));
+        }
         using var buffer=new HbBuffer
         {
             Direction=(level&1)==0?Direction.LeftToRight:Direction.RightToLeft,
@@ -109,7 +147,7 @@ internal sealed partial class TypographySession
             ClusterLevel=ClusterLevel.MonotoneGraphemes,
             Flags=(offset==0?BufferFlags.BeginningOfText:0)|(end==context.Length?BufferFlags.EndOfText:0)
         };
-        buffer.AddUtf16(context,offset,end-offset);
+        buffer.AddUtf16(displayContext,offset,end-offset);
         face.Font.Shape(buffer,[..features.Select(Feature.Parse)]);
         check();
         count(buffer.Length);
@@ -120,6 +158,7 @@ internal sealed partial class TypographySession
         var glyphs=ImmutableArray.CreateBuilder<TextGlyph>(infos.Length);
         var clusterData=new SortedDictionary<int,(int First,int Count,bool Missing,bool Unsafe)>();
         double scale=(double)size/face.UnitsPerEm;
+        double scaleX=scale*(style.HorizontalScale/100d);
         double x=0,y=0;
         TextInk? ink=null;
         for(int i=0;i<infos.Length;i++)
@@ -136,11 +175,11 @@ internal sealed partial class TypographySession
             if(prior.First+prior.Count!=i)throw new InvalidDataException("TEXT_CLUSTER_ORDER");
             clusterData[cluster]=(prior.First,prior.Count+1,prior.Missing||info.Codepoint==0,
                 prior.Unsafe||(info.GlyphFlags&GlyphFlags.UnsafeToBreak)!=0);
-            double px=x+position.XOffset*scale,py=y-position.YOffset*scale-style.BaselineShift;
-            double ax=position.XAdvance*scale,ay=-position.YAdvance*scale;
+            double px=x+position.XOffset*scaleX,py=y-position.YOffset*scale-style.BaselineShift;
+            double ax=position.XAdvance*scaleX,ay=-position.YAdvance*scale;
             // Tracking applies at a drawable cluster boundary. Combining and ligature interiors stay intact.
             if(i+1==infos.Length || ClusterAt(i+1)!=cluster)ax+=style.Tracking;
-            TextInk? glyphInk=GlyphInk(face,info.Codepoint,scale,px,py);
+            TextInk? glyphInk=GlyphInk(face,info.Codepoint,scaleX,scale,px,py);
             if(glyphInk is {} box)ink=Union(ink,box);
             glyphs.Add(new((ushort)info.Codepoint,cluster,Emu(px),Emu(py),Emu(x+ax)-Emu(x),Emu(y+ay)-Emu(y)) {HarfBuzzOffset=raw,Ink=glyphInk});
             x+=ax;
@@ -177,11 +216,11 @@ internal sealed partial class TypographySession
             Metrics(face,scale,x,ink));
     }
 
-    static TextInk? GlyphInk(ShapingFace face,uint glyph,double scale,double x,double y)
+    static TextInk? GlyphInk(ShapingFace face,uint glyph,double scaleX,double scaleY,double x,double y)
     {
         if(!face.Font.TryGetGlyphExtents(glyph,out var bounds))return null;
-        long left=Emu(x+bounds.XBearing*scale),right=Emu(x+(bounds.XBearing+bounds.Width)*scale);
-        long top=Emu(y-bounds.YBearing*scale),bottom=Emu(y-(bounds.YBearing+bounds.Height)*scale);
+        long left=Emu(x+bounds.XBearing*scaleX),right=Emu(x+(bounds.XBearing+bounds.Width)*scaleX);
+        long top=Emu(y-bounds.YBearing*scaleY),bottom=Emu(y-(bounds.YBearing+bounds.Height)*scaleY);
         return left==right||top==bottom?null:new(Math.Min(left,right),Math.Min(top,bottom),Math.Max(left,right),Math.Max(top,bottom));
     }
 
@@ -200,7 +239,7 @@ internal sealed partial class TypographySession
         string? rejected=null;
         if(key.CanShape&&!(key.Request?.Theme==true&&key.Theme is null))
         {
-            foreach(var resolution in selection.ExactFaces(key.Family,key.Bold,key.Italic))
+            foreach(var resolution in selection.SymbolFaces(key.Family,key.Bold,key.Italic))
             {
                 check();
                 ShapingFace face;
@@ -208,16 +247,23 @@ internal sealed partial class TypographySession
                 catch(InvalidDataException error) when(error.Message is "TEXT_FACE_METRICS" or "LAYOUT_FONT_INVALID" or "LAYOUT_FONT_IDENTITY_MISMATCH")
                 {rejected="Face demandée inexploitable. "+error.Message;continue;}
                 if(face.SkiaFace.GetTableSize(0x66766172)>0)continue;
-                var cmap=SymbolCmap.Lookup(face.Cmap,code,face.GlyphCount,check);
+                var cmap=SymbolCmap.Lookup(face.Cmap,code,face.GlyphCount,check,face.FirstSymbol);
                 if(cmap.Status==SymbolCmap.Status.Invalid)
                 {rejected="Table cmap symbolique invalide.";continue;}
                 uint glyph=cmap.Glyph;
                 if(cmap.Status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(code,out glyph))glyph=0;
                 if(glyph==0||glyph>=face.GlyphCount||glyph>=face.SkiaFace.GlyphCount)continue;
+                if(FitScript(key,face) is not {} fitted)
+                {
+                    rejected="Métriques d’indice ou d’exposant de la face hors profil.";
+                    continue;
+                }
+                key=fitted;
                 chosen=resolution;
                 measure=MeasureGlyph(face,glyph);
-                decision=new(key.Family,code,null,resolution.Status,
-                    cmap.Status==SymbolCmap.Status.Present?"cmap OpenType 3/0, format 4.":"cmap Unicode de la face demandée.");
+                string encoding=cmap.Status==SymbolCmap.Status.Present?"cmap OpenType 3/0, format 4.":"cmap Unicode de la face utilisée.";
+                decision=new(key.Family,code,null,resolution.Status=="substituted"?"declared-alternate":resolution.Status,
+                    resolution.Status=="substituted"?resolution.Reason+" "+encoding:encoding);
                 break;
             }
             if(measure is null&&LegacySymbols.Mapping(key.Family,code) is {} mapping)
@@ -227,8 +273,10 @@ internal sealed partial class TypographySession
                 bool regularFallback=fallback is null&&(key.Bold||key.Italic);
                 if(regularFallback)fallback=selection.ExactInstalled(mapping.Face,false,false);
                 if(fallback is not null&&GetFace(fallback) is {} face&&face.SkiaFace.GetTableSize(0x66766172)==0&&
-                    face.Font.TryGetGlyph(mapping.Code,out uint glyph)&&glyph>0&&glyph<face.GlyphCount&&glyph<face.SkiaFace.GlyphCount)
+                    face.Font.TryGetGlyph(mapping.Code,out uint glyph)&&glyph>0&&glyph<face.GlyphCount&&glyph<face.SkiaFace.GlyphCount&&
+                    FitScript(key,face) is {} fitted)
                 {
+                    key=fitted;
                     chosen=fallback with {RequestedFamily=key.Family,Status="substituted",Installed=FontResolver.IsInstalled(key.Family),
                         Reason=(rejected is null?"":rejected+" ")+$"Correspondance documentée {key.Family} U+{code:X4} → U+{mapping.Code:X4}."+
                             (regularFallback?" Variante demandée indisponible dans la face libre, glyphe régulier utilisé sans synthèse.":"")};
@@ -250,9 +298,10 @@ internal sealed partial class TypographySession
         {
             check();count(1);
             double scale=(double)key.Size/face.UnitsPerEm;
-            double width=face.Font.GetHorizontalGlyphAdvance(glyph)*scale+key.Style.Tracking;
+            double scaleX=scale*(key.Style.HorizontalScale/100d);
+            double width=face.Font.GetHorizontalGlyphAdvance(glyph)*scaleX+key.Style.Tracking;
             double y=-key.Style.BaselineShift;
-            var ink=GlyphInk(face,glyph,scale,0,y);
+            var ink=GlyphInk(face,glyph,scaleX,scale,0,y);
             return new([new((ushort)glyph,0,0,Emu(y),Emu(width),0){Ink=ink}],
                 [new(new(0,original.Length),0,1,false,false)],Metrics(face,scale,width,ink));
         }
@@ -263,13 +312,14 @@ internal sealed partial class TypographySession
         check();
         if(fragment.Face is not {} resolution||!faces.TryGetValue((resolution.Sha256,resolution.FaceIndex),out var face))
             return null;
-        var cmap=SymbolCmap.Lookup(face.Cmap,' ',face.GlyphCount,check);
+        var cmap=SymbolCmap.Lookup(face.Cmap,' ',face.GlyphCount,check,face.FirstSymbol);
         uint glyph=cmap.Glyph;
         if(cmap.Status==SymbolCmap.Status.Invalid||
             cmap.Status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(' ',out glyph)||glyph==0||glyph>=face.GlyphCount)
             return null;
         count(1);
-        return Emu(face.Font.GetHorizontalGlyphAdvance(glyph)*(double)fragment.PointSize/face.UnitsPerEm+fragment.Style.Tracking);
+        return Emu(face.Font.GetHorizontalGlyphAdvance(glyph)*(double)fragment.PointSize/face.UnitsPerEm*
+            (fragment.Style.HorizontalScale/100d)+fragment.Style.Tracking);
     }
 
     internal TextMeasure ReshapeLine(TextFragment fragment,string line,int offset,int length,byte level,
@@ -290,6 +340,9 @@ internal sealed partial class TypographySession
         check();
         var token=new TextToken(source,null,paragraph,null,TextRole.Control,null,null,style);
         var key=Key(value,new Graph(0,value.Length,new ContextSlice(0,value.Length,token),level,"Latn",true),style);
+        if(style.SmallCaps&&value.EnumerateRunes().Any(Rune.IsLower)&&
+            value.EnumerateRunes().Any(r=>!Rune.IsLower(r)))
+            return null;
         if(value.EnumerateRunes().Any(r=>LegacySymbols.Private(r.Value)))
         {
             if(!LegacySymbols.SingleScalar(value,out int code))return null;
@@ -299,17 +352,37 @@ internal sealed partial class TypographySession
         }
         var resolution=Select(value,key);
         if(resolution is null)return null;
+        var face=GetFace(resolution);
+        if(FitScript(key,face) is not {} fitted)return null;
+        key=fitted;
         var features=Features(key);
-        var measure=ShapeCore(GetFace(resolution),value,0,value.Length,level,key.Language,key.Script,key.Size,
-            style,features,[0],check,count,()=>{});
+        var measure=ShapeCore(face,value,0,value.Length,level,key.Language,key.Script,key.Size,
+            key.Style,features,[0],check,count,()=>{});
         if(measure.Clusters.Any(c=>c.MissingGlyph))return null;
         return new(paragraph,0,value,[new(source with {Span=null},null,style,new(0,value.Length)){Role=TextRole.Control}],
-            key.Script,key.Language,level,style,key.Slot,key.Family,key.Request,key.Theme?.Source,resolution with {Data=null},
+            key.Script,key.Language,level,key.Style,key.Slot,key.Family,key.Request,key.Theme?.Source,resolution with {Data=null},
             key.Size,features,measure,[]);
     }
 
     internal TextStyle ListMarkerStyle(TextParagraph paragraph,string levelId) =>
         model.ChildId(levelId,"rPr") is {} properties?styles.Resolve(paragraph.Id,true,properties):paragraph.MarkStyle;
+
+    // Display-only substitution. HarfBuzz clusters continue to address the unchanged source.
+    static string? CapitalDisplay(string text,string language)
+    {
+        CultureInfo culture;
+        try { culture=CultureInfo.GetCultureInfo(language=="und"?"":language); }
+        catch(CultureNotFoundException) { return null; }
+        var display=new StringBuilder(text.Length);
+        foreach(var rune in text.EnumerateRunes())
+        {
+            var upper=Rune.IsLower(rune)?Rune.ToUpper(rune,culture):rune;
+            if(upper.Utf16SequenceLength!=rune.Utf16SequenceLength||Rune.IsLower(upper))
+                return null;
+            display.Append(upper.ToString());
+        }
+        return display.ToString();
+    }
 
     void CountGlyphs(int count)
     {
@@ -321,12 +394,14 @@ internal sealed partial class TypographySession
     static TextInk Union(TextInk? previous,TextInk next) => previous is not {} bounds?next:
         new(Math.Min(bounds.Left,next.Left),Math.Min(bounds.Top,next.Top),Math.Max(bounds.Right,next.Right),Math.Max(bounds.Bottom,next.Bottom));
 
-    static ImmutableArray<string> Features(SegmentKey key)
+    ImmutableArray<string> Features(SegmentKey key)
     {
         var result=ImmutableArray.CreateBuilder<string>();
         result.Add(key.Style.KernAt is {} threshold && key.Size>=threshold?"kern=1":"kern=0");
         string ligatures=key.Style.Ligatures;
-        if(ligatures!="default")
+        // Apply the MS-DOCX §2.6.1.17 default in the qualified Latin mode-14
+        // profile. Required substitutions (rlig) remain part of shaping.
+        if(ligatures!="default"||key.Script=="Latn"&&model.StyleCompatibility.Mode==14)
         {
             Set("liga","standard");Set("clig","contextual");Set("hlig","historical");Set("dlig","discretionary");
         }
@@ -343,7 +418,8 @@ internal sealed partial class TypographySession
         if(fragment.Face is not {} identity||fragment.Measure is not {} measured||measured.Glyphs.IsEmpty)return null;
         if(!faces.TryGetValue((identity.Sha256,identity.FaceIndex),out var face))
             throw new InvalidDataException("TEXT_PAINT_FACE");
-        using var font=new SKFont(face.SkiaFace,fragment.PointSize) { Subpixel=true, Hinting=SKFontHinting.None, LinearMetrics=true };
+        using var font=new SKFont(face.SkiaFace,fragment.PointSize) { Subpixel=true, Hinting=SKFontHinting.None, LinearMetrics=true,
+            ScaleX=fragment.Style.HorizontalScale/100f };
         using var builder=new SKTextBlobBuilder();
         var ids=new ushort[measured.Glyphs.Length];
         var points=new SKPoint[ids.Length];
@@ -357,16 +433,35 @@ internal sealed partial class TypographySession
         return builder.Build();
     }
 
-    internal void Paint(SKCanvas canvas,TextFragment fragment,float x,float baseline,SKColor automaticColor)
+    internal void Paint(SKCanvas canvas,TextFragment fragment,float x,float baseline,SKColor automaticColor,bool shadowOnly=false)
     {
         using var blob=TextBlob(fragment);
         if(blob is null)return;
+        if(shadowOnly)
+        {
+            if(fragment.Style.Shadow is not {Alpha:>0} shadow)return;
+            using var mask=shadow.Blur>0?SKMaskFilter.CreateBlur(SKBlurStyle.Normal,shadow.Blur/MathF.Sqrt(3)+.5f):null;
+            using var shadowPaint=new SKPaint{Color=SKColor.Parse(shadow.Color).WithAlpha(shadow.Alpha),IsAntialias=true,MaskFilter=mask};
+            canvas.DrawText(blob,x+shadow.OffsetX,baseline+shadow.OffsetY,shadowPaint);
+            return;
+        }
         using var paint=new SKPaint
         {
             IsAntialias=true,
             Color=fragment.Style.Color=="auto"?automaticColor:SKColor.Parse(fragment.Style.Color)
         };
         canvas.DrawText(blob,x,baseline,paint);
+    }
+
+    internal (long Top,long Bottom)? UnderlineInk(TextFragment fragment,bool useRaisedBaseline=false)
+    {
+        if(fragment.Face is not {} identity||!useRaisedBaseline&&fragment.Style.BaselineShift!=0||
+            !faces.TryGetValue((identity.Sha256,identity.FaceIndex),out var face))return null;
+        using var font=new SKFont(face.SkiaFace,fragment.PointSize);
+        var metrics=font.Metrics;
+        if(metrics.UnderlinePosition is not {} y||metrics.UnderlineThickness is not {} thickness||
+            !float.IsFinite(y)||!float.IsFinite(thickness)||thickness<=0)return null;
+        return (Emu(y-fragment.Style.BaselineShift-thickness/2),Emu(y-fragment.Style.BaselineShift+thickness/2));
     }
 
     // Diagnostic comparison on the identical face. It does not participate in shaping or painting.

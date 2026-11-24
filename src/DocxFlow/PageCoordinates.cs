@@ -10,14 +10,30 @@ internal sealed record PageCluster(Utf16Span ContextRange,PageRect Rect,Immutabl
 
 internal static class PageCoordinates
 {
+    internal static float LineTop(PageLine line)=>line.FrameTransform is null?line.NativeTop:
+        Clusters(line).Select(c=>c.Rect.Top).Concat(Images(line).Select(c=>c.Rect.Top)).DefaultIfEmpty(line.FrameTransform.Value.Y).Min();
+
+    internal static IEnumerable<(string Id,PageRect Rect)> FieldLabels(PageLine line)
+    {
+        if(line.Native is not {} native||native.Ascent is not {} ascent||native.Descent is not {} descent)yield break;
+        foreach(var field in native.Generated)
+        {
+            if(field.Kind!="pageField"||field.Fragment.Measure is not {} measure)continue;
+            var rect=Clip(line,new(line.NativeOffsetX+PageComposer.Points(field.X),
+                line.Baseline-PageComposer.Points(ascent),PageComposer.Points(measure.Metrics.Width),PageComposer.Points(ascent+descent)));
+            if(rect.Height>0)yield return (field.ResultId??field.Cause.NodeId,rect);
+        }
+    }
+
     internal static IEnumerable<PageCluster> Clusters(PageLine line)
     {
         if(line.Native is not {} native||native.Ascent is not {} ascent||native.Descent is not {} descent)yield break;
         foreach(var slot in native.Visual)
         {
             if(slot.AdvanceX+slot.ExtraAfter<=0)continue;
-            var rect=new PageRect(line.NativeOffsetX+PageComposer.Points(slot.X),line.Baseline-PageComposer.Points(ascent),
-                PageComposer.Points(slot.AdvanceX+slot.ExtraAfter),PageComposer.Points(ascent+descent));
+            var rect=Clip(line,new(line.NativeOffsetX+PageComposer.Points(slot.X),line.Baseline-PageComposer.Points(ascent),
+                PageComposer.Points(slot.AdvanceX+slot.ExtraAfter),PageComposer.Points(ascent+descent)));
+            if(rect.Height<=0)continue;
             if(slot.Cluster<0)
             {
                 var part=native.Parts[slot.Part];
@@ -38,5 +54,28 @@ internal static class PageCoordinates
             yield return new(new(f.ContextOffset+c.Start,f.ContextOffset+c.EndExclusive),
                 rect,sources.ToImmutable(),f.Text[c.Start..c.EndExclusive]);
         }
+    }
+
+    internal static IEnumerable<PageCluster> Images(PageLine line)
+    {
+        if(line.Native is not {} native||line.Images.Count==0)yield break;
+        var bySource=native.Parts.Where(p=>p.Control is {Kind:"Drawing"})
+            .ToDictionary(p=>p.Control!.Value.Source.NodeId,StringComparer.Ordinal);
+        foreach(var image in line.Images)
+        {
+            if(!bySource.TryGetValue(image.RunId,out var part))continue;
+            var rect=Clip(line,new(image.X,image.Y,image.Image.Width,image.Image.Height));
+            if(rect.Height>0)yield return new(part.ContextRange,rect,[part.Control!.Value.Source],"");
+        }
+    }
+
+    static PageRect Clip(PageLine line,PageRect rect)
+    {
+        if(line.ClipToLineBox)
+        {
+            float top=Math.Max(rect.Top,line.NativeTop);
+            rect=rect with {Top=top,Height=Math.Max(0,Math.Min(rect.Top+rect.Height,line.NativeTop+line.Height)-top)};
+        }
+        return line.FrameTransform is {} rotation?rotation.Bounds(rect):rect;
     }
 }

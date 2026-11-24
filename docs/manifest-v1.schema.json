@@ -71,6 +71,9 @@
       "items": {
         "$ref": "#/$defs/diagnostic"
       }
+    },
+    "conformance": {
+      "const": "strict"
     }
   },
   "required": [
@@ -268,6 +271,15 @@
             "instruction",
             "result"
           ]
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "sourceAttributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -349,6 +361,9 @@
               "type": "null"
             }
           ]
+        },
+        "sourceType": {
+          "type": "string"
         }
       },
       "required": [

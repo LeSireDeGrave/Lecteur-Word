@@ -203,7 +203,8 @@ public sealed partial class ReaderWindow
             var pg=composition.Pages[page];
             string id=row.Source.NodeId;
             double? y=pg.DisplayCells.FirstOrDefault(c=>!c.IsRepeated&&(c.TableId==id||c.CellId==id||c.MergedSourceIds.Contains(id)))?.Y;
-            y??=pg.DisplayLines.FirstOrDefault(l=>l.ParagraphId==id)?.Baseline;
+            if(y is null&&pg.DisplayLines.FirstOrDefault(l=>l.ParagraphId==id) is {} line)
+                y=line.FrameTransform is null?line.Baseline:PageCoordinates.LineTop(line);
             if(y is null&&pg.RunningStories.FirstOrDefault(s=>s.Selection.Reference.TargetId==id) is {} running)
                 y=PageComposer.Points(running.Region.Top);
             if(y is null && row.Category==DocumentCategory.Section && row.Section is {} n)y=pg.Lines.FirstOrDefault(l=>l.Section==n)?.Baseline;
@@ -212,7 +213,8 @@ public sealed partial class ReaderWindow
             if(y is {} vertical)
             {
                 CurrentBlockId=id;
-                viewport.Offset=new Vector(viewport.Offset.X,Math.Max(0,vertical*PointsToDip*zoom-32));
+                RevealPage(page,Math.Max(0,vertical-24),pg.DisplayCells.FirstOrDefault(c=>
+                    c.CellId==id||c.MergedSourceIds.Contains(id,StringComparer.Ordinal))?.X);
                 SelectPageParagraph(id);
                 UpdateNavigationPosition();
             }

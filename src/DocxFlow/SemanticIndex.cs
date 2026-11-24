@@ -19,7 +19,7 @@ internal sealed class SemanticIndex
     readonly ILookup<(string Part, string Id), Relationship> relations;
     readonly ILookup<(string Part, string Type), Relationship> relationsByType;
     readonly ILookup<(string Part, string Name, string Id), InventoryNode> definitions;
-    readonly Dictionary<string, InventoryNode?> alternatives = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (InventoryNode? Branch, bool Valid)> alternatives = new(StringComparer.Ordinal);
 
     internal SemanticIndex(InspectionManifest manifest, Action check)
     {
@@ -82,6 +82,18 @@ internal sealed class SemanticIndex
     internal InventoryNode? Definition(string? part, string kind, string id) =>
         part is null || id.Length == 0 ? null : Unique(definitions[(part, QName(W, kind), id)]);
 
+    internal bool IsStandaloneBookmark(InventoryNode node)
+    {
+        bool start=Word(node,"bookmarkStart");
+        if(!start&&!Word(node,"bookmarkEnd"))return false;
+        if(!int.TryParse(Get(node,"id"),System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,out _)||start&&Get(node,"name").Length==0)
+            return false;
+        return node.Attributes.Keys.All(key=>key.StartsWith("{"+Xmlns+"}",StringComparison.Ordinal)||
+                key=="{"+W+"}id"||start&&key=="{"+W+"}name")&&
+            RawChildren(node).All(n=>n.Kind=="textValue"&&string.IsNullOrWhiteSpace(n.Text)||n.Name=="#Comment");
+    }
+
     static string? DefinitionAttribute(InventoryNode node) => node.Name switch
     {
         "{" + W + "}style" => "styleId",
@@ -93,30 +105,51 @@ internal sealed class SemanticIndex
 
     internal static bool IsAlternative(InventoryNode node) => node.Name == "{" + Mc + "}AlternateContent";
 
+    internal InventoryNode? PropertyParent(InventoryNode node)
+    {
+        var parent = Parent(node);
+        while (parent is not null && (IsAlternative(parent) || ProcessesContent(parent) ||
+            parent.Name is "{" + Mc + "}Choice" or "{" + Mc + "}Fallback"))
+            parent = Parent(parent);
+        return parent;
+    }
+
     internal IEnumerable<InventoryNode> Children(InventoryNode node) =>
         !IsAlternative(node) ? children[node.Id] : SelectedBranch(node) is {} chosen ? [chosen] : [];
 
-    internal InventoryNode? SelectedBranch(InventoryNode node)
+    internal InventoryNode? SelectedBranch(InventoryNode node) => ProjectAlternative(node).Branch;
+
+    internal bool IsEmptyStyleAlternative(InventoryNode node)
     {
-        if (alternatives.TryGetValue(node.Id, out var selected)) return selected;
+        if (ProjectAlternative(node) is not (null, true)) return false;
+        return Root(node.Source.PartUri, "styles") is not null;
+    }
+
+    (InventoryNode? Branch, bool Valid) ProjectAlternative(InventoryNode node)
+    {
+        if (alternatives.TryGetValue(node.Id, out var known)) return known;
+        InventoryNode? selected = null;
         InventoryNode? fallback = null;
-        bool multipleFallbacks = false;
-        foreach (var branch in RawChildren(node))
+        int choices=0;
+        bool valid=true;
+        foreach(var branch in RawChildren(node))
         {
-            if (branch.Name == "{" + Mc + "}Choice" && SupportedPrefixes(branch, Get(branch, "Requires", "")))
+            if(branch.Kind=="textValue"&&string.IsNullOrWhiteSpace(branch.Text)||branch.Name=="#Comment")continue;
+            if(branch.Name=="{"+Mc+"}Choice"&&fallback is null)
             {
-                selected = branch;
-                break;
+                choices++;
+                string requires=Get(branch,"Requires","");
+                var prefixes=Prefixes(requires);
+                if(prefixes.Length==0||prefixes.Any(prefix=>NamespaceInScope(branch,prefix) is null))valid=false;
+                else if(selected is null&&SupportedPrefixes(branch,requires))selected=branch;
             }
-            if (branch.Name == "{" + Mc + "}Fallback")
-            {
-                multipleFallbacks |= fallback is not null;
-                fallback = branch;
-            }
+            else if(branch.Name=="{"+Mc+"}Fallback"&&fallback is null&&choices>0)fallback=branch;
+            else if (!IsIgnorableElement(branch)) valid=false;
         }
-        selected ??= multipleFallbacks ? null : fallback;
-        alternatives.Add(node.Id, selected);
-        return selected;
+        valid &= choices > 0;
+        var result = (valid ? selected ?? fallback : null, valid);
+        alternatives.Add(node.Id, result);
+        return result;
     }
 
     internal bool IsUnderInactiveBranch(InventoryNode node)
@@ -135,16 +168,60 @@ internal sealed class SemanticIndex
     bool SupportedPrefixes(InventoryNode node, string list)
     {
         // This profile understands WML for semantic extraction. Drawing extensions keep their fallback.
-        var prefixes = list.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        return prefixes.Length > 0 && prefixes.All(prefix => NamespaceInScope(node, prefix) == W);
+        var prefixes = Prefixes(list);
+        return prefixes.Length > 0 && prefixes.All(prefix => UnderstoodNamespace(NamespaceInScope(node, prefix)));
     }
 
-    string? NamespaceInScope(InventoryNode node, string prefix)
+    // Partial drawing and Office-extension readers do not implement their entire namespaces.
+    static bool UnderstoodNamespace(string? ns) => ns is W or R or "http://www.w3.org/XML/1998/namespace";
+
+    internal string? NamespaceInScope(InventoryNode node, string prefix)
     {
+        if(prefix=="xml")return "http://www.w3.org/XML/1998/namespace";
         string key = QName(Xmlns, prefix);
         for (InventoryNode? current = node; current is not null; current = Parent(current))
             if (current.Attributes.TryGetValue(key, out var value)) return value;
         return null;
+    }
+
+    static string[] Prefixes(string values)=>values.Split([' ','\t','\r','\n'],StringSplitOptions.RemoveEmptyEntries);
+
+    internal bool ProcessesContent(InventoryNode node)
+    {
+        int split=node.Name.IndexOf('}');
+        if(split<=1)return false;
+        string ns=node.Name[1..split];
+        if(UnderstoodNamespace(ns)||ns==Mc)return false;
+        string local=node.Name[(split+1)..];
+        for(InventoryNode? cursor=node;cursor is not null;cursor=Parent(cursor))
+        {
+            if(!cursor.Attributes.TryGetValue("{"+Mc+"}ProcessContent",out var names))continue;
+            foreach(string name in Prefixes(names))
+            {
+                int colon=name.IndexOf(':');
+                if(colon<=0)continue;
+                string child=name[(colon+1)..];
+                if((child==local||child=="*")&&NamespaceInScope(cursor,name[..colon])==ns&&
+                    IgnorableAt(cursor,ns))return true;
+            }
+        }
+        return false;
+    }
+
+    bool IgnorableAt(InventoryNode declaration,string ns)
+    {
+        for(InventoryNode? cursor=declaration;cursor is not null;cursor=Parent(cursor))
+            if(cursor.Attributes.TryGetValue("{"+Mc+"}Ignorable",out var prefixes)&&
+                Prefixes(prefixes).Any(prefix=>NamespaceInScope(cursor,prefix)==ns))return true;
+        return false;
+    }
+
+    bool IsIgnorableElement(InventoryNode node)
+    {
+        int end = node.Name.IndexOf('}');
+        if (end <= 1) return false;
+        string ns = node.Name[1..end];
+        return ns != Mc && !UnderstoodNamespace(ns) && IgnorableAt(node, ns) && !ProcessesContent(node);
     }
 
     internal IEnumerable<InventoryNode> LogicalChildren(InventoryNode node)
@@ -156,7 +233,7 @@ internal sealed class SemanticIndex
                 foreach (var content in Children(child).Where(n => Word(n, "sdtContent")))
                     foreach (var descendant in LogicalChildren(content)) yield return descendant;
             }
-            else if (IsAlternative(child) || child.Name is "{" + Mc + "}Choice" or "{" + Mc + "}Fallback"
+            else if (IsAlternative(child) || ProcessesContent(child) || child.Name is "{" + Mc + "}Choice" or "{" + Mc + "}Fallback"
                 or "{" + W + "}sdtContent" or "{" + W + "}customXml"
                 or "{" + W + "}ins" or "{" + W + "}moveTo")
             {

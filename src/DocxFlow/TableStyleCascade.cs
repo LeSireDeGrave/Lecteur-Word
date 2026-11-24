@@ -13,15 +13,18 @@ internal sealed class TableStyleCascade
         "band1Horz","band2Horz","nwCell","neCell","swCell","seCell"];
     static readonly string[] MaskAttributes=["firstRow","lastRow","firstColumn","lastColumn","oddVBand","evenVBand",
         "oddHBand","evenHBand","firstRowFirstColumn","firstRowLastColumn","lastRowFirstColumn","lastRowLastColumn"];
+    static readonly string[] LookAttributes=["firstRow","lastRow","firstColumn","lastColumn","noHBand","noVBand"];
     readonly SemanticDocument model;
     readonly Dictionary<string,ImmutableArray<string>> whole=new(StringComparer.Ordinal);
     readonly Dictionary<string,ImmutableArray<string>> cells=new(StringComparer.Ordinal);
     readonly Dictionary<string,ImmutableArray<string>> rows=new(StringComparer.Ordinal);
+    readonly Dictionary<string,ImmutableArray<string>> rowCells=new(StringComparer.Ordinal);
     readonly Dictionary<string,ImmutableArray<string>> paragraphs=new(StringComparer.Ordinal);
     readonly List<(string TableId,FlowIssue Issue)> issues=[];
     internal IReadOnlyList<(string TableId,FlowIssue Issue)> Issues=>issues;
     internal ImmutableArray<string> Cell(string id)=>Get(cells,id);
     internal ImmutableArray<string> Row(string id)=>Get(rows,id);
+    internal ImmutableArray<string> RowCells(string id)=>Get(rowCells,id);
     internal ImmutableArray<string> Table(string id)=>Get(whole,id);
     internal ImmutableArray<string> Text(string id)
     {
@@ -69,17 +72,25 @@ internal sealed class TableStyleCascade
                         Issue(condition.Id,"PAGE_TABLE_STYLE_CONDITION","Type de style conditionnel inconnu ou répété.");
                         continue;
                     }
+                    if(type=="wholeTable")
+                    {
+                        // MS-OI29500 §17.18.89: Word discards this conditional layer.
+                        issues.Add((table.Id,new("PAGE_TABLE_WHOLE_CONDITION_IGNORED",model.Source(condition.Id).Location,
+                            "La condition wholeTable reste inventoriée. Word utilise les déclarations générales du style.",false)));
+                        continue;
+                    }
                     if(!byCondition.TryGetValue(type,out var layer))byCondition.Add(type,layer=[]);
                     layer.Add(condition.Id);
                 }
             }
-            var baseLayers=definitions.AddRange(byCondition.GetValueOrDefault("wholeTable")??[]);
+            var baseLayers=definitions;
             whole.Add(table.Id,baseLayers);
             foreach(string declaration in baseLayers)
                 if(Child(Child(declaration,"pPr"),"rPr") is {} mark)
                     Issue(mark,"PAGE_TABLE_MARK_STYLE","Propriétés de marque de paragraphe hors profil de tableau.");
             var tableProps=baseLayers.Select(d=>model.ChildId(d,"tblPr")).Append(direct).ToArray();
             var look=tableProps.Select(p=>Child(p,"tblLook")).LastOrDefault(l=>l is not null);
+            bool hasNamedLook=look is not null&&LookAttributes.Any(name=>model.Attribute(look,name) is not null);
             bool firstRow=Look("firstRow",0x20,true),lastRow=Look("lastRow",0x40,false),
                 firstCol=Look("firstColumn",0x80,true),lastCol=Look("lastColumn",0x100,false),
                 hBand=!Look("noHBand",0x200,false),vBand=!Look("noVBand",0x400,true);
@@ -95,9 +106,10 @@ internal sealed class TableStyleCascade
                 var rowMask=new HashSet<string>(StringComparer.Ordinal);
                 if(firstRow&&r==0)rowMask.Add("firstRow");
                 if(lastRow&&r==table.Rows.Length-1)rowMask.Add("lastRow");
-                if(rowMask.Count==0&&hBand)rowMask.Add((r-(firstRow?1:0))/rowSize%2==0?"band1Horz":"band2Horz");
+                if(rowMask.Count==0&&hBand&&rowSize>0)rowMask.Add((r-(firstRow?1:0))/rowSize%2==0?"band1Horz":"band2Horz");
                 Patch(rowMask,Child(model.ChildId(row.Id,"trPr"),"cnfStyle"));
                 rows[row.Id]=Layers(rowMask);
+                var rowCellMask=new HashSet<string>(rowMask,StringComparer.Ordinal);
                 foreach(var cell in row.Cells)
                 {
                     Check();
@@ -110,7 +122,7 @@ internal sealed class TableStyleCascade
                     bool left=firstCol&&col==0,right=lastCol&&col+span==columns;
                     if(left)mask.Add("firstCol");
                     if(right)mask.Add("lastCol");
-                    if(!left&&!right&&vBand)
+                    if(!left&&!right&&vBand&&colSize>0)
                     {
                         int at=col-(firstCol?1:0);
                         if(at/colSize!=(at+span-1)/colSize&&(byCondition.ContainsKey("band1Vert")||byCondition.ContainsKey("band2Vert")))
@@ -122,6 +134,7 @@ internal sealed class TableStyleCascade
                     if(mask.Contains("lastRow")&&left)mask.Add("swCell");
                     if(mask.Contains("lastRow")&&right)mask.Add("seCell");
                     Patch(mask,Child(model.ChildId(cell.Id,"tcPr"),"cnfStyle"));
+                    rowCellMask.UnionWith(mask);
                     var cellLayers=Layers(mask);
                     cells[cell.Id]=cellLayers;
                     foreach(string layer in cellLayers.Skip(baseLayers.Length))
@@ -131,8 +144,7 @@ internal sealed class TableStyleCascade
                         if(Child(layer,"tblPr") is {} localTable&&model.BlocksOf(localTable).Any())
                             Issue(localTable,"PAGE_TABLE_CONDITIONAL_GEOMETRY","Propriétés conditionnelles de tableau entier à résoudre.");
                         if(type is not ("firstRow" or "lastRow" or "band1Horz" or "band2Horz")&&
-                            (Child(layer,"trPr") is {} localRow&&model.BlocksOf(localRow).Any()||
-                            Child(layer,"tcPr") is {} tc&&new[]{"tcMar","noWrap","vAlign"}.Any(k=>Child(tc,k) is not null)))
+                            Child(layer,"trPr") is {} localRow&&model.BlocksOf(localRow).Any())
                             Issue(layer,"PAGE_TABLE_CONDITIONAL_ROW_GEOMETRY","Effet de colonne ou de coin sur toute la rangée à résoudre.");
                     }
                     foreach(var block in model.BlocksOf(cell.Id))
@@ -144,6 +156,7 @@ internal sealed class TableStyleCascade
                         paragraphs[block.Id]=Layers(overrideMask);
                     }
                 }
+                rowCells[row.Id]=Layers(rowCellMask);
             }
 
             ImmutableArray<string> Layers(HashSet<string> mask)=>baseLayers.AddRange(Precedence.Where(mask.Contains)
@@ -157,17 +170,17 @@ internal sealed class TableStyleCascade
                     Issue(look,"PAGE_TABLE_LOOK_VALUE","Indicateur tblLook invalide.");
                     return fallback;
                 }
-                if(model.Attribute(look,"val") is not {} raw)return fallback;
+                if(hasNamedLook||model.Attribute(look,"val") is not {} raw)return false;
                 if(ushort.TryParse(raw,NumberStyles.AllowHexSpecifier,CultureInfo.InvariantCulture,out var flags))return (flags&bit)!=0;
                 Issue(look,"PAGE_TABLE_LOOK_VALUE","Masque tblLook invalide.");
                 return fallback;
             }
             int BandSize(string name)
             {
-                if(tableProps.Select(p=>Child(p,name)).LastOrDefault(x=>x is not null) is not {} at)return 1;
-                if(int.TryParse(model.Attribute(at,"val"),NumberStyles.None,CultureInfo.InvariantCulture,out int size)&&size is >=1 and <=2048)return size;
+                if(tableProps.Select(p=>Child(p,name)).LastOrDefault(x=>x is not null) is not {} at)return 0;
+                if(int.TryParse(model.Attribute(at,"val"),NumberStyles.None,CultureInfo.InvariantCulture,out int size)&&size is >=0 and <=3)return size;
                 Issue(at,"PAGE_TABLE_BAND_SIZE","Taille de bande hors profil.");
-                return 1;
+                return 0;
             }
             void Patch(HashSet<string> mask,string? source)
             {

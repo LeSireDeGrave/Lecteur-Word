@@ -168,7 +168,10 @@ internal sealed class ReaderDocumentIndex
             if(fields.TryGetValue(e.Id,out var field))
             {
                 preview=Short(field.Command);
-                if(model.StoredText(field) is {Length:>0} value)preview=Short(field.Command+" · "+value);
+                if(!model.TocMarkerFields.Contains(field.Id)&&
+                    field.StoredResultIds.All(id=>model.ParentId(id) is {} owner&&
+                        !reading.Presentation.HiddenNodes.Contains(owner)&&!reading.Presentation.FieldDetailNodes.Contains(owner))&&
+                    model.StoredText(field) is {Length:>0} value)preview=Short(field.Command+" · "+value);
                 detail+=field.StructureVerified?" · structure vérifiée":" · structure incertaine";
             }
             if(notes.TryGetValue(e.Id,out var note))
@@ -385,7 +388,7 @@ internal sealed class ReaderDocumentIndex
         }
         return null;
     }
-    static bool IsVisibleBlock(ReadableBlock b) => b.Kind is "table" or "cell" or "image" or "link" or "field" or "placeholder" or "revision" or "section";
+    static bool IsVisibleBlock(ReadableBlock b) => !b.Hidden&&b.Kind is "table" or "cell" or "image" or "link" or "field" or "placeholder" or "revision" or "section";
     static string Q(string ns,string local)=>SemanticIndex.QName(ns,local);
     static string? Short(string text)
     {

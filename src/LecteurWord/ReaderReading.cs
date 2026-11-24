@@ -19,10 +19,8 @@ public sealed partial class ReaderWindow
 {
     ReadableDocument? readable;
     IReadOnlyDictionary<string,LayoutParagraph> readingParagraphs=new Dictionary<string,LayoutParagraph>();
-    bool simplified,updatingReadingMode;
     double readingZoom=1;
     string? visibleBlockId;
-    readonly ComboBox readingMode=new(){Name="ReadingMode",Margin=new Thickness(0,0,3,0),MinWidth=106,Padding=new Thickness(7,3),VerticalAlignment=VerticalAlignment.Top};
     readonly ListBox readingList=new(){Name="SimplifiedReading",BorderThickness=new Thickness(0),Padding=new Thickness(40,22,40,36),MaxWidth=1080,HorizontalAlignment=HorizontalAlignment.Stretch};
     readonly Dictionary<string,Bitmap> readingImages=new(StringComparer.Ordinal);
     long readingImagePixels;
@@ -33,16 +31,8 @@ public sealed partial class ReaderWindow
     void InitializeReading()
     {
         InitializeNotePane();
-        AutomationProperties.SetName(readingMode,T("Mode de lecture","Reading mode"));
         StretchRows(readingList);
         readingList.ItemTemplate=new FuncDataTemplate<ReadableBlock>((block,_)=>block is null?new Border():RenderReadingBlock(block));
-        readingMode.SelectionChanged+=(_,_)=>
-        {
-            if(updatingReadingMode)return;
-            simplified=readingMode.SelectedIndex==1;
-            if(!simplified&&composition?.Available!=true)simplified=true;
-            UpdateUi();
-        };
         readingList.AddHandler(ScrollViewer.ScrollChangedEvent,(_,args)=>
         {
             if(args.Source is not ScrollViewer scroll || scroll.TemplatedParent!=readingList || !IsSimplifiedReading)return;
@@ -58,42 +48,72 @@ public sealed partial class ReaderWindow
     void UpdateReadingMode()
     {
         if(!simplified&&notePane.IsVisible)CloseReadingContext();
-        updatingReadingMode=true;
-        readingMode.ItemsSource=new[]{T("Pages","Pages"),T("Lecture","Reading")};readingMode.SelectedIndex=simplified?1:0;
-        readingMode.IsVisible=readable?.Available==true&&composition?.Available==true;
-        ToolTip.SetTip(readingMode,composition?.Available==true?T("Pagination interne expérimentale ou flux simplifié","Experimental internal pagination or simplified flow"):T("Composition hors profil : lecture simplifiée disponible","Composition outside profile: simplified reading available"));
-        AutomationProperties.SetName(readingMode,T("Mode de lecture","Reading mode"));
-        readingWorkspace.IsVisible=readingList.IsVisible=simplified&&readable?.Available==true;viewport.IsVisible=!simplified&&composition?.Available==true;
-        if(readingList.IsVisible&&navMode=="pages"&&composition?.Available!=true)navMode="outline";
-        updatingReadingMode=false;
+        readingWorkspace.IsVisible=readingList.IsVisible=simplified&&readable?.Available==true;
+        viewport.IsVisible=!simplified&&ShowsCalculatedPages;
     }
+    ScrollViewer? ReadingScroller()=>readingList.GetVisualDescendants().OfType<ScrollViewer>()
+        .FirstOrDefault(s=>s.TemplatedParent==readingList);
+
+    void MoveReadingBlock(int index,bool alignAtTop)
+    {
+        readingList.UpdateLayout();
+        readingList.ScrollIntoView(index);
+        if(!alignAtTop)return;
+        readingList.UpdateLayout();
+        if(ReadingScroller() is {} scroll&&readingList.ContainerFromIndex(index) is Control item&&
+            item.TranslatePoint(new Point(),scroll) is {} position)
+            scroll.Offset=new Vector(scroll.Offset.X,Math.Max(0,scroll.Offset.Y+position.Y-12));
+    }
+
+    void ResetReadingPosition()
+    {
+        readingList.UpdateLayout();
+        if(ReadingScroller() is {} scroll)scroll.Offset=default;
+        if(readable?.Presentation.BodyBlocks.Count>0)readingList.ScrollIntoView(0);
+    }
+
+    string? ContinuousAnchor()
+    {
+        if(CurrentBlockId is {} selected&&readable is not null&&
+            documentIndex?.BodyIndices.TryGetValue(selected,out int index)==true)
+        {
+            var block=readable.Presentation.BodyBlocks[index];
+            var item=readingList.ContainerFromIndex(index) as ListBoxItem;
+            var scroll=ReadingScroller();
+            if(item?.DataContext is ReadableBlock shown&&shown.Id==block.Id&&scroll is not null&&
+                item.TranslatePoint(new Point(),scroll) is {} top&&
+                top.Y<scroll.Viewport.Height&&top.Y+item.Bounds.Height>0)return selected;
+        }
+        return visibleBlockId??CurrentBlockId;
+    }
+
     static IEnumerable<ReadableBlock> Descendants(ReadableBlock block)
     {
         yield return block;foreach(var child in block.Children)foreach(var node in Descendants(child))yield return node;
     }
     string BlockText(ReadableBlock block)=>readable?.Presentation.TextFor(block)??block.PlainText;
-    public bool NavigateToBlock(string id)
+    public bool NavigateToBlock(string id)=>NavigateToBlock(id,alignReadingStart:false);
+
+    bool NavigateToBlock(string id,bool alignReadingStart)
     {
         if(readable?.Available!=true)return false;
         CloseReadingContext();
         var source=readable.Presentation.BodyBlocks;
         int index=documentIndex?.BodyIndices.TryGetValue(id,out int i)==true?i:-1;
         if(index<0)return false;
-        if(!simplified&&composition?.Available==true)
+        if(!simplified&&FindPageBlock(id) is {} location)
         {
-            var target=Descendants(source[index]).First(b=>b.Id==id);
-            int found=composition.Pages.ToList().FindIndex(p=>p.Lines.Any(l=>!l.IsRepeated&&l.Source==target.Source)||
-                p.Cells.Any(c=>!c.IsRepeated&&(c.CellId==id||c.MergedSourceIds.Contains(id,StringComparer.Ordinal))));
-            if(found>=0)
-            {
-                GoToPage(found);CurrentBlockId=id;SelectPageParagraph(id);UpdateNavigationPosition();return true;
-            }
+            GoToPage(location.Index);CurrentBlockId=id;SelectPageParagraph(id);
+            RevealPage(page,location.Y,location.X);
+            UpdateNavigationPosition();
+            return true;
         }
-        bool changed=!simplified;
-        simplified=true;CurrentBlockId=id;
+        if(!simplified)return false;
+        CurrentBlockId=id;
         CurrentSection=ReadingSectionAt(index)??CurrentSection;
-        if(changed)UpdateUi();
-        readingList.SelectedIndex=-1;readingList.ScrollIntoView(index);UpdateNavigationPosition();
+        readingList.SelectedIndex=-1;
+        MoveReadingBlock(index,alignReadingStart);
+        UpdateNavigationPosition();
         if(source[index].Kind=="table"&&id!=source[index].Id&&documentIndex is {} doc)
             for(string? ancestor=id;ancestor is not null&&ancestor!=source[index].Id;ancestor=doc.Semantic?.ParentId(ancestor))
                 if(doc.ReadableCells.TryGetValue(ancestor,out var cell))
@@ -102,6 +122,23 @@ public sealed partial class ReaderWindow
                     break;
                 }
         return true;
+    }
+
+    (int Index,double Y,double? X)? FindPageBlock(string id)
+    {
+        if(!ShowsCalculatedPages||readable is null||documentIndex?.BodyIndices.TryGetValue(id,out int index)!=true)return null;
+        var target=Descendants(readable.Presentation.BodyBlocks[index]).FirstOrDefault(b=>b.Id==id);
+        if(target is null)return null;
+        for(int i=0;i<composition!.Pages.Count;i++)
+        {
+            var page=composition.Pages[i];
+            var line=page.Lines.FirstOrDefault(l=>!l.IsRepeated&&(l.ParagraphId==id||l.Source==target.Source));
+            if(line is not null)return (i,Math.Max(0,line.Baseline-48),line.X);
+            var cell=page.Cells.FirstOrDefault(c=>!c.IsRepeated&&
+                (c.TableId==id||c.CellId==id||c.MergedSourceIds.Contains(id,StringComparer.Ordinal)));
+            if(cell is not null)return (i,Math.Max(0,cell.Y-32),cell.X);
+        }
+        return null;
     }
 
     bool NavigateToCell(string id)
@@ -123,7 +160,7 @@ public sealed partial class ReaderWindow
         navPosition.Foreground=SecondaryInk;
         string? activeId=CurrentBlockId;
         int currentSection=CurrentSection;
-        if(IsSimplifiedReading&&visibleBlockId is {} visible&&documentIndex?.BodyIndices.TryGetValue(visible,out int index)==true)
+        if(IsSimplifiedReading&&ContinuousAnchor() is {} visible&&documentIndex?.BodyIndices.TryGetValue(visible,out int index)==true)
         {
             currentSection=ReadingSectionAt(index)??currentSection;
             activeId=readable?.Outline.LastOrDefault(o=>documentIndex.BodyIndices.TryGetValue(o.BlockId,out int at)&&at<=index)?.BlockId??activeId;
@@ -231,7 +268,7 @@ public sealed partial class ReaderWindow
             AddReadingLinks(text,block);
             return WithTerminalTabLeader(text,block,layout?.Properties);
         }
-        if(IsFieldDetail(block))return new Border();
+        if(block.Hidden||IsFieldDetail(block))return new Border();
         if(block.Kind=="field")
         {
             var result=new StackPanel();
@@ -256,7 +293,7 @@ public sealed partial class ReaderWindow
     void AppendReadingInline(InlineCollection destination,ReadableBlock block,NonprintingBudget budget,bool nested=false,
         IReadOnlyDictionary<string,LayoutStyle>? styles=null)
     {
-        if(IsFieldDetail(block))return;
+        if(block.Hidden||IsFieldDetail(block))return;
         bool nestedParagraph=nested&&block.Kind is "paragraph" or "heading";
         if(nestedParagraph)destination.Add(new LineBreak());
         if(block.Kind=="image"){destination.Add(new InlineUIContainer(RenderReadingImage(block)));return;}
@@ -277,7 +314,6 @@ public sealed partial class ReaderWindow
             return;
         }
         if(block.Kind is "placeholder" or "break" or "revision" or "note" or "section")destination.Add(new InlineUIContainer(LocalMarker(block)));
-        if(block.Hidden&&block.Kind=="run"&&BlockText(block).Length>0)destination.Add(new InlineUIContainer(LocalMarker(block)));
         var style=styles?.GetValueOrDefault(block.Id);
         var span=new Span{FontWeight=(style?.Bold??block.Bold)?FontWeight.Bold:FontWeight.Normal,
             FontStyle=(style?.Italic??block.Italic)?FontStyle.Italic:FontStyle.Normal,
@@ -297,7 +333,7 @@ public sealed partial class ReaderWindow
     {
         double scale=PointsToDip*readingZoom;
         var first=layout?.Runs.FirstOrDefault(r=>r.Kind=="text"&&r.Text.Length>0&&
-            readable?.Presentation.FieldDetailNodes.Contains(r.Id)!=true)?.Style;
+            readable?.Presentation.FieldDetailNodes.Contains(r.Id)!=true&&readable?.Presentation.HiddenNodes.Contains(r.Id)!=true)?.Style;
         var basis=first??layout?.Runs.LastOrDefault(r=>r.Kind=="paragraphMark")?.Style;
         text.FontSize=(basis?.Size??block.FontSize??(block.Kind=="heading"?18:12))*scale;
         if(basis?.Font is {} face)text.FontFamily=new FontFamily(face.UsedFamily);

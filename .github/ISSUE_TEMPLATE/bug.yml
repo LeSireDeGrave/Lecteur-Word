@@ -1,0 +1,11 @@
+name: Signaler un problème
+description: Décrire un problème reproductible dans Lecteur Word.
+title: "[Bogue] "
+body:
+  - type: textarea
+    id: report
+    attributes:
+      label: Rapport et étapes de reproduction
+      description: Indiquez la version, le build, le système, les étapes, le résultat observé et le résultat attendu. Vous pouvez coller le rapport préparé dans l’application. Retirez les documents, les extraits personnels et les chemins privés.
+    validations:
+      required: true

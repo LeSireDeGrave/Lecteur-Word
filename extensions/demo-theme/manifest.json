@@ -1,0 +1,22 @@
+{
+  "id": "org.lecteurword.demo.theme",
+  "name": "Forêt",
+  "description": "Habille l’interface de couleurs végétales ou de bleu doux.",
+  "author": "Projet Lecteur Word",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "0.1.0",
+    "maximumExclusive": "1.0.0"
+  },
+  "apiVersion": 1,
+  "features": [
+    "appearance.theme"
+  ],
+  "permissions": [],
+  "license": "MIT",
+  "provenance": {
+    "publisher": "Projet Lecteur Word",
+    "source": null
+  },
+  "payloadSha256": "9f10e80d86a9b7f6f57571bef6cc25b2b7e38f009b1b0e0eab13bfea64515cf9"
+}

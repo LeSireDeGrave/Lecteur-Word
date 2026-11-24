@@ -5,7 +5,12 @@ namespace LecteurWord.Flow;
 public static partial class Composer
 {
     sealed record MeasuredCell(LayoutCell Cell,IReadOnlyList<MeasuredParagraph> Paragraphs,float Height);
-    sealed record MeasuredTable(LayoutTable Table,IReadOnlyDictionary<string,MeasuredCell> Cells,float[] Heights,IReadOnlyList<(int First,int Last)> Groups);
+    sealed record MeasuredTable(LayoutTable Table,IReadOnlyDictionary<string,MeasuredCell> Cells,float[] Heights,
+        float[] Offsets,IReadOnlyList<(int First,int Last)> Groups);
+    sealed record RowLine(LayoutParagraph Paragraph,MeasuredLine Line,float Top,bool BreakAfter);
+    sealed record RowCellFlow(LayoutCell Cell,IReadOnlyList<RowLine> Lines,float End);
+    sealed record CellSlice(RowCellFlow Flow,int Start,int End,float Origin);
+    sealed record RowSlice(IReadOnlyList<CellSlice> Cells,float Height,bool Last);
     static MeasuredTable MeasureTable(LayoutTable table,IReadOnlyDictionary<string,MeasuredParagraph> paragraphs,Action check)
     {
         var heights=table.Rows.Select(r=>r.Height).ToArray();var cells=new Dictionary<string,MeasuredCell>();
@@ -37,13 +42,118 @@ public static partial class Composer
             for(int row=first;row<=last;row++)foreach(var cell in table.Cells.Where(c=>c.MergeOrigin is null&&c.Row==row))last=Math.Max(last,row+cell.RowSpan-1);
             groups.Add((first,last));first=last+1;
         }
-        return new(table,cells,heights,groups);
+        var offsets=new float[heights.Length+1];
+        for(int i=0;i<heights.Length;i++)offsets[i+1]=offsets[i]+heights[i];
+        return new(table,cells,heights,offsets,groups);
     }
     static float TableStartHeight(MeasuredTable table)
     {
         int headers=table.Table.Rows.TakeWhile(r=>r.Header).Count();float height=table.Heights.Take(headers).Sum();
         if(headers<table.Table.Rows.Count){var first=table.Groups.First(g=>g.First>=headers);height+=table.Heights.Skip(first.First).Take(first.Last-first.First+1).Sum();}
         return height;
+    }
+
+    static IEnumerable<MeasuredLine> TableLines(MeasuredTable table,int first,int last)=>
+        table.Cells.Values.Where(c=>c.Cell.Row>=first&&c.Cell.Row<=last)
+            .OrderBy(c=>c.Cell.Row).ThenBy(c=>c.Cell.Column).SelectMany(c=>c.Paragraphs).SelectMany(p=>p.Lines);
+
+    static bool CanFragmentRow(MeasuredTable table,(int First,int Last) group)
+    {
+        var row=table.Table.Rows[group.First];
+        return group.First==group.Last&&row is {Header:false,CantSplit:false,Height:0,HeightRule:not "exact"}&&
+            table.Cells.Values.Where(c=>c.Cell.Row==group.First).All(c=>
+                c.Cell is {RowSpan:1,VerticalAlignment:"top"}&&
+                c.Paragraphs.SelectMany(p=>p.Lines).All(l=>l.Native is {Cut:not (LineCutKind.Page or LineCutKind.Column)}));
+    }
+
+    static RowCellFlow[] PrepareRowFlow(MeasuredTable table,int row,Action check)
+    {
+        return table.Cells.Values.Where(c=>c.Cell.Row==row).OrderBy(c=>c.Cell.Column).Select(data=>
+        {
+            var lines=new List<RowLine>();
+            float top=data.Cell.Margins.Top,after=0;
+            for(int i=0;i<data.Paragraphs.Count;i++)
+            {
+                var item=data.Paragraphs[i];var properties=item.Paragraph.Properties;
+                top+=Math.Max(after,properties.Before);
+                for(int j=0;j<item.Lines.Count;j++)
+                {
+                    check();
+                    bool paragraphEnd=j+1==item.Lines.Count;
+                    bool cut=paragraphEnd?(!properties.KeepNext||i+1==data.Paragraphs.Count):
+                        !properties.KeepLines&&(!properties.Widow||j>=1&&item.Lines.Count-j-1>=2);
+                    var line=item.Lines[j];
+                    lines.Add(new(item.Paragraph,line,top,cut));
+                    top+=line.Height;
+                }
+                after=properties.After;
+            }
+            return new RowCellFlow(data.Cell,lines,top+after+data.Cell.Margins.Bottom);
+        }).ToArray();
+    }
+
+    static float MinimumRowStart(IReadOnlyList<RowCellFlow> cells)=>cells.Select(cell=>
+    {
+        var line=cell.Lines.FirstOrDefault(l=>l.BreakAfter);
+        return line is null||ReferenceEquals(line,cell.Lines.LastOrDefault())?cell.End:line.Top+line.Line.Height;
+    }).DefaultIfEmpty().Max();
+
+    static RowSlice? SliceRow(IReadOnlyList<RowCellFlow> cells,int[] indices,float available,Action check)
+    {
+        var result=new CellSlice[cells.Count];
+        bool advanced=false,last=true;
+        float height=0;
+        for(int i=0;i<cells.Count;i++)
+        {
+            check();
+            var cell=cells[i];int start=indices[i],end=start;
+            if(start==cell.Lines.Count)
+            {
+                result[i]=new(cell,start,start,0);
+                continue;
+            }
+            float origin=start==0?0:cell.Lines[start].Top;
+            for(int j=start;j<cell.Lines.Count;j++)
+            {
+                check();var line=cell.Lines[j];
+                float bottom=j+1==cell.Lines.Count?cell.End:line.Top+line.Line.Height;
+                if(bottom-origin>available+.01f)break;
+                // A widow-protected continuation must also keep its first two remaining lines together.
+                if(line.BreakAfter&&(j>start||j+1==cell.Lines.Count||
+                    cell.Lines[j+1].Paragraph.Id!=line.Paragraph.Id||!line.Paragraph.Properties.Widow))
+                    end=j+1;
+            }
+            if(end==start)return null;
+            advanced=true;last&=end==cell.Lines.Count;
+            float extent=end==cell.Lines.Count?cell.End:cell.Lines[end-1].Top+cell.Lines[end-1].Line.Height;
+            height=Math.Max(height,extent-origin);
+            result[i]=new(cell,start,end,origin);
+        }
+        return advanced?new(result,height,last):null;
+    }
+
+    static void PlaceRowFragment(MeasuredTable table,int row,int index,RowSlice slice,float x,float y,PlacedFlowRegion? region,
+        List<PageLine> lines,List<PageCell> boxes,Action check)
+    {
+        var source=table.Table.Rows[row];
+        var identity=new TableRowFragment(source.SourceId!,source.Source!,index,index==0,slice.Last);
+        foreach(var part in slice.Cells)
+        {
+            check();var cell=part.Flow.Cell;
+            float left=x+table.Table.Columns.Take(cell.Column).Sum();
+            float width=table.Table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Sum();
+            var edges=EffectiveBorders(table.Table,cell);
+            edges=edges with {Top=identity.First?edges.Top:null,Bottom=identity.Last?edges.Bottom:null};
+            boxes.Add(new(table.Table.Id,cell.Id,cell.Source,left,y,width,slice.Height,edges,cell.Fill)
+                {FlowRegion=region,RowFragment=identity});
+            for(int i=part.Start;i<part.End;i++)
+            {
+                check();
+                var entry=part.Flow.Lines[i];
+                lines.Add(PositionNative(entry.Line,entry.Paragraph,left+cell.Margins.Left,y+entry.Top-part.Origin,
+                    left,y,left+width,y+slice.Height,cell.Id) with{FlowRegion=region});
+            }
+        }
     }
     internal static CellBorders EffectiveBorders(LayoutTable table,LayoutCell cell)
     {
@@ -53,14 +163,63 @@ public static partial class Composer
             b.Bottom??(cell.Row+cell.RowSpan==table.Rows.Count?table.Borders.Bottom:b.InsideH??table.Borders.InsideH),
             b.Left??(cell.Column==0?table.Borders.Left:b.InsideV??table.Borders.InsideV));
     }
-    static void PlaceTableRows(MeasuredTable measured,int first,int last,float x,float y,bool repeated,List<PageLine> lines,List<PageCell> boxes,LayoutFonts fonts,Action check)
+    static float CellAlignmentOffset(MeasuredCell data,float height)
     {
-        var table=measured.Table;var offsets=new float[table.Rows.Count+1];for(int i=0;i<table.Rows.Count;i++)offsets[i+1]=offsets[i]+measured.Heights[i];
-        foreach(var data in measured.Cells.Values.Where(c=>c.Cell.Row>=first&&c.Cell.Row<=last).OrderBy(c=>c.Cell.Row).ThenBy(c=>c.Cell.Column))
+        float extra=height-data.Height;
+        return data.Cell.VerticalAlignment=="bottom"?extra:data.Cell.VerticalAlignment=="center"?extra/2:0;
+    }
+
+    static bool CanCutMergedCells(MeasuredTable table,int boundary,Action check)
+    {
+        foreach(var data in table.Cells.Values.Where(c=>c.Cell.Row<boundary&&c.Cell.Row+c.Cell.RowSpan>boundary))
         {
-            check();var cell=data.Cell;float cx=x+table.Columns.Take(cell.Column).Sum(),cy=y+offsets[cell.Row]-offsets[first],width=table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Sum(),height=offsets[cell.Row+cell.RowSpan]-offsets[cell.Row];
-            boxes.Add(new(table.Id,cell.Id,cell.Source,cx,cy,width,height,EffectiveBorders(table,cell),cell.Fill){IsRepeated=repeated,MergedSourceIds=table.Cells.Where(c=>c.MergeOrigin==cell.Id).Select(c=>c.Id).ToImmutableArray()});
-            float extra=height-data.Height;float cursor=cy+cell.Margins.Top+(cell.VerticalAlignment=="bottom"?extra:cell.VerticalAlignment=="center"?extra/2:0),after=0;
+            check();
+            var cell=data.Cell;
+            float start=table.Offsets[cell.Row],height=table.Offsets[cell.Row+cell.RowSpan]-start;
+            float cut=table.Offsets[boundary]-start;
+            float cursor=cell.Margins.Top+CellAlignmentOffset(data,height),after=0;
+            bool keepWithNext=false;
+            foreach(var item in data.Paragraphs)
+            {
+                check();
+                cursor+=Math.Max(after,item.Paragraph.Properties.Before);
+                if(cursor>=cut-.01f)
+                {
+                    if(keepWithNext)return false;
+                    break;
+                }
+                cursor+=item.Height;
+                if(cursor>cut+.01f)return false;
+                after=item.Paragraph.Properties.After;
+                keepWithNext=item.Paragraph.Properties.KeepNext;
+            }
+        }
+        return true;
+    }
+
+    static void PlaceTableRows(MeasuredTable measured,int first,int last,float x,float y,bool repeated,List<PageLine> lines,List<PageCell> boxes,
+        LayoutFonts fonts,Action check,bool splitMerges=false)
+    {
+        var table=measured.Table;var offsets=measured.Offsets;
+        foreach(var data in measured.Cells.Values.Where(c=>c.Cell.Row<=last&&(splitMerges?c.Cell.Row+c.Cell.RowSpan>first:c.Cell.Row>=first))
+            .OrderBy(c=>c.Cell.Row).ThenBy(c=>c.Cell.Column))
+        {
+            check();var cell=data.Cell;
+            int end=cell.Row+cell.RowSpan;
+            int firstRow=splitMerges?Math.Max(cell.Row,first):cell.Row,afterRow=splitMerges?Math.Min(end,last+1):end;
+            float cx=x+table.Columns.Take(cell.Column).Sum(),wholeY=y+offsets[cell.Row]-offsets[first];
+            float cy=y+offsets[firstRow]-offsets[first],width=table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Sum();
+            float height=offsets[afterRow]-offsets[firstRow],wholeHeight=offsets[end]-offsets[cell.Row];
+            var borders=EffectiveBorders(table,cell);
+            TableCellFragment? fragment=null;
+            if(cell.Row!=firstRow||end!=afterRow)
+            {
+                fragment=new(firstRow,afterRow-1,cell.Row==firstRow,end==afterRow);
+                borders=borders with{Top=fragment.First?borders.Top:null,Bottom=fragment.Last?borders.Bottom:null};
+            }
+            boxes.Add(new(table.Id,cell.Id,cell.Source,cx,cy,width,height,borders,cell.Fill)
+            {IsRepeated=repeated,CellFragment=fragment,MergedSourceIds=table.Cells.Where(c=>c.MergeOrigin==cell.Id).Select(c=>c.Id).ToImmutableArray()});
+            float cursor=wholeY+cell.Margins.Top+CellAlignmentOffset(data,wholeHeight),after=0;
             foreach(var p in data.Paragraphs)
             {
                 cursor+=Math.Max(after,p.Paragraph.Properties.Before);int index=0;
@@ -68,6 +227,10 @@ public static partial class Composer
                 {
                     if(line.Native is not null)
                     {
+                        if(fragment is not null&&(cursor+line.Height<=cy+.01f||cursor>=cy+height-.01f))
+                        {cursor+=line.Height;index++;continue;}
+                        if(fragment is not null&&(cursor<cy-.01f||cursor+line.Height>cy+height+.01f))
+                            throw new LayoutFailure("PAGE_CELL_FRAGMENT_CUT",cell.Source);
                         lines.Add(PositionNative(line,p.Paragraph,cx+cell.Margins.Left,cursor,cx,cy,cx+width,cy+height,cell.Id,repeated));
                         cursor+=line.Height;index++;
                         continue;
@@ -103,7 +266,7 @@ public static partial class Composer
     static void DrawCells(SKCanvas canvas,ComposedPage page)
     {
         using var paint=new SKPaint{IsAntialias=true};
-        foreach(var cell in page.DisplayCells)
+        foreach(var cell in page.MainDisplayCells)
         {
             if(cell.Fill is {Length:6}){paint.Style=SKPaintStyle.Fill;paint.Color=SKColor.Parse("#"+cell.Fill);canvas.DrawRect(cell.X,cell.Y,cell.Width,cell.Height,paint);}
         }
@@ -111,7 +274,7 @@ public static partial class Composer
     static void DrawCellBorders(SKCanvas canvas,ComposedPage page)
     {
         using var paint=new SKPaint{IsAntialias=true,Style=SKPaintStyle.Stroke};
-        foreach(var cell in page.DisplayCells)
+        foreach(var cell in page.MainDisplayCells)
             DrawCellEdges(canvas,paint,cell.X,cell.Y,cell.Width,cell.Height,cell.Borders);
     }
 

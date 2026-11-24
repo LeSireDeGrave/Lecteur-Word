@@ -1,0 +1,11 @@
+name: Proposer une amélioration
+description: Décrire le besoin et l’amélioration proposée.
+title: "[Amélioration] "
+body:
+  - type: textarea
+    id: report
+    attributes:
+      label: Besoin et amélioration
+      description: Décrivez votre usage et le résultat souhaité. Vous pouvez coller le brouillon préparé dans l’application.
+    validations:
+      required: true

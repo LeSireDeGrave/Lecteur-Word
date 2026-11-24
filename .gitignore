@@ -89,6 +89,7 @@ Thumbs.db
 *.nova
 *.rtf
 *.zip
+*.lwext
 *.7z
 *.tar
 *.tar.gz

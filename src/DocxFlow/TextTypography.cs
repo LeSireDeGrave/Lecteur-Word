@@ -23,6 +23,7 @@ internal readonly record struct TextControl(SemanticSource Source, int Offset, s
 {
     internal TextStyle? Style { get; init; }
     internal TextFragment? Symbol { get; init; }
+    internal TextFragment? NonBreakingHyphen { get; init; }
 }
 internal readonly record struct TextInk(long Left, long Top, long Right, long Bottom);
 internal sealed record TextMetrics(long Width, long Ascent, long Descent, long LineGap, long Baseline, TextInk? Ink)
@@ -47,11 +48,15 @@ internal sealed record TextParagraph(string Id, string StoryId, bool RightToLeft
     internal SemanticSource? DirectionOrigin { get; init; }
     internal ImmutableArray<TextBreak> Breaks { get; init; } = [];
     internal ImmutableArray<TextControl> Controls { get; init; } = [];
+    internal GeneratedTocRow? TocRow {get;init;}
 }
 internal sealed record TextBudget(int MaxTokens=100_000, int MaxChars=500_000, int MaxParagraphChars=32768,
     int MaxGlyphs=500_000, int Ms=15000);
 internal sealed record TextProfileTimes(double StyleMs, double SegmentMs, double FontMs, double ShapeMs,
-    int StyleCacheHits, int ShapeCacheHits, int ShapeCacheEntries, int OpenFaces, long CachedGlyphs, long SnapshotBytes);
+    int StyleCacheHits, int ShapeCacheHits, int ShapeCacheEntries, int OpenFaces, long CachedGlyphs, long SnapshotBytes)
+{
+    internal double VisibilityMs {get;init;}
+}
 internal sealed record TypographyDocument(string SnapshotId, string IcuVersion, string UnicodeVersion,
     ImmutableArray<TextToken> Tokens, ImmutableArray<TextParagraph> Paragraphs, ImmutableArray<FlowIssue> Diagnostics,
     TextProfileTimes Timings)
@@ -122,6 +127,7 @@ internal sealed partial class TypographySession : IDisposable
         glyphCount = shapeHits = 0;
         styleTicks = segmentTicks = fontTicks = shapeTicks = 0;
         int styleHits = styles.CacheHits;
+        long visibilityStart=styles.VisibilityTicks;
         try
         {
             var tokens = CollectTokens();
@@ -141,7 +147,7 @@ internal sealed partial class TypographySession : IDisposable
             Check();
             return new(model.SnapshotId, unicode.Version,unicode.UnicodeVersion,tokens,paragraphs.ToImmutable(),diagnostics,
                 new(Ms(styleTicks),Ms(segmentTicks),Ms(fontTicks),Ms(shapeTicks),styles.CacheHits-styleHits,shapeHits,shapes.Count,faces.Count,cachedGlyphs,
-                    faces.Values.Sum(x=>(long)x.Bytes))) { Owner=owner };
+                    faces.Values.Sum(x=>(long)x.Bytes)) {VisibilityMs=Ms(styles.VisibilityTicks-visibilityStart)}) { Owner=owner };
         }
         finally { watch = null; token = default; }
     }
@@ -152,6 +158,8 @@ internal sealed partial class TypographySession : IDisposable
         if(!ReferenceEquals(document.Owner,owner)||!ReferenceEquals(semantic,model))
             throw new InvalidDataException("LINE_SNAPSHOT_MISMATCH");
     }
+
+    internal TextStyle PageFieldStyle(string runId)=>styles.Resolve(runId,false);
 
     static double Ms(long ticks) => ticks * 1000d / Stopwatch.Frequency;
     bool Word(string id, string name) => model.Name(id)==SemanticIndex.QName(W,name);
@@ -178,8 +186,8 @@ internal sealed partial class TypographySession : IDisposable
         {
             Check();
             bool text = e.Kind is SemanticKind.Text or SemanticKind.DeletedText or SemanticKind.FieldInstruction;
-            bool control = e.Kind is SemanticKind.Tab or SemanticKind.Break or SemanticKind.Symbol or SemanticKind.NoteCall
-                or SemanticKind.Drawing or SemanticKind.SoftHyphen or SemanticKind.NoBreakHyphen;
+            bool control = e.Kind is SemanticKind.Tab or SemanticKind.Break or SemanticKind.Symbol or SemanticKind.NoteCall or SemanticKind.NoteMark
+                or SemanticKind.NoteSeparatorRule or SemanticKind.NoteContinuationRule or SemanticKind.Drawing or SemanticKind.SoftHyphen or SemanticKind.NoBreakHyphen;
             if (!text && !control) continue;
             string? paragraph=null, run=null;
             for (string? id=model.ParentId(e.Id);id is not null && model.Element(id).StoryId==e.StoryId;id=model.ParentId(id))
@@ -202,7 +210,7 @@ internal sealed partial class TypographySession : IDisposable
             else role=stored.Contains(e.Id)?TextRole.StoredField:TextRole.Source;
 
             TextStyle? style=null;
-            if (run is not null && role is TextRole.Source or TextRole.StoredField or TextRole.Control)
+            if (run is not null && role is TextRole.Source or TextRole.StoredField or TextRole.Control or TextRole.FieldInstruction)
             {
                 long start=Stopwatch.GetTimestamp();
                 style=styles.Resolve(run,false);

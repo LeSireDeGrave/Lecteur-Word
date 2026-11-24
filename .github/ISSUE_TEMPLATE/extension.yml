@@ -1,0 +1,11 @@
+name: Signaler un problème d’extension
+description: Décrire un incident lié à une extension de Lecteur Word.
+title: "[Extension] "
+body:
+  - type: textarea
+    id: report
+    attributes:
+      label: Extension et étapes de reproduction
+      description: Indiquez l’identifiant et la version de l’extension, le build du lecteur, les étapes et le diagnostic autorisé. Retirez les chemins privés.
+    validations:
+      required: true

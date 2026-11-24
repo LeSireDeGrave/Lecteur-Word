@@ -7,15 +7,52 @@ namespace LecteurWord;
 
 public sealed partial class ReaderWindow
 {
-    readonly NativeSelectionOverlay nativeSelection=new(){Name="NativePageSelection",IsHitTestVisible=false,ClipToBounds=true};
     internal IReadOnlyList<SemanticSource> SelectedNativeSources {get;private set;}=[];
     int nativeSelectionPage;
-    bool ShowsNativePages=>nativePageLease is {} lease&&ReferenceEquals(composition,lease.Snapshot.Composition);
+    IReadOnlyList<PageRect> nativeSelectionRects=[];
+    bool ShowsNativePages=>nativePageLease?.Snapshot is {Coverage:PageCoverage.Complete,Composition.Available:true} snapshot&&
+        ReferenceEquals(composition,snapshot.Composition);
+    internal bool ShowsHistoricalPage=>composition is {Profile:PaginatedDocument.Profile,Available:true};
+    bool ShowsCalculatedPages=>ShowsNativePages||ShowsHistoricalPage;
+
+    bool FollowNativePageLink(Point point)
+    {
+        if(!ShowsNativePages||nativePageLease!.Snapshot is not {Semantic:{} semantic,PageLinkTargets:{Count:>0} links} snapshot)
+            return false;
+        var lines=composition!.Pages[page].DisplayLines.Where(l=>l.FrameTransform is not null||
+            point.Y>=l.NativeTop&&point.Y<=l.NativeTop+l.Height).ToArray();
+        var targetIds=new HashSet<string>(StringComparer.Ordinal);
+        foreach(var line in lines)
+        {
+            foreach(var (id,rect) in PageCoordinates.FieldLabels(line))
+                if(rect.Contains(point.X,point.Y)&&links.TryGetValue(id,out var bookmark))targetIds.Add(bookmark);
+            foreach(var cluster in PageCoordinates.Clusters(line).Where(c=>c.Rect.Contains(point.X,point.Y)))
+            {
+                if(line.Native?.TocRow is {} toc)
+                {
+                    if(toc.Hyperlink)targetIds.Add(toc.Destination.NodeId);
+                    continue;
+                }
+                foreach(var source in cluster.Sources)
+                    for(string? id=source.NodeId;id is not null;id=semantic.ParentId(id))
+                        if(links.TryGetValue(id,out var target)){targetIds.Add(target);break;}
+            }
+        }
+        if(targetIds.Count!=1||!snapshot.FieldBookmarks.TryGetValue(targetIds.Single(),out var destination))return false;
+        GoToPage(destination.Page-1);
+        CurrentBlockId=destination.ParagraphId;
+        SelectPageParagraph(destination.ParagraphId);
+        SetNativeSelection(CurrentPage,[]);
+        RevealPage(page,Math.Max(0,destination.Top-32),destination.Left);
+        UpdateNavigationPosition();
+        return true;
+    }
 
     void SelectNativeAt(Point point)
     {
         if(!ShowsNativePages||CurrentPage==0)return;
-        var selection=composition!.Pages[page].DisplayLines.SelectMany(PageCoordinates.Clusters)
+        var selection=composition!.Pages[page].DisplayLines.SelectMany(line=>
+                PageCoordinates.Images(line).Concat(PageCoordinates.Clusters(line)))
             .Where(c=>c.Rect.Contains(point.X,point.Y)).MinBy(c=>Math.Abs(point.Y-c.Rect.Top-c.Rect.Height/2));
         SetNativeSelection(CurrentPage,selection is null?[]:[selection]);
     }
@@ -24,14 +61,18 @@ public sealed partial class ReaderWindow
     {
         nativeSelectionPage=pageNumber;
         SelectedNativeSources=clusters.SelectMany(c=>c.Sources).Distinct().ToArray();
-        nativeSelection.Set(clusters.Select(c=>c.Rect).ToArray(),zoom);
+        nativeSelectionRects=clusters.Select(c=>c.Rect).ToArray();
         UpdateNativeSelection();
     }
 
     void UpdateNativeSelection()
     {
-        nativeSelection.IsVisible=ShowsNativePages&&CurrentPage>0&&CurrentPage==nativeSelectionPage;
-        nativeSelection.SetZoom(zoom);
+        foreach(var (index,visual) in pageVisuals)
+        {
+            bool selected=CurrentPage>0&&index+1==nativeSelectionPage&&nativeSelectionRects.Count>0;
+            visual.Selection.IsVisible=selected;
+            if(selected)visual.Selection.Set(nativeSelectionRects,zoom);
+        }
     }
 
     bool FillNativePageSearch(string needle)
@@ -58,7 +99,7 @@ public sealed partial class ReaderWindow
                 button.Click+=(_,_)=>
                 {
                     GoToPage(hit.Key-1);SetNativeSelection(hit.Key,clusters);
-                    viewport.Offset=new Vector(viewport.Offset.X,Math.Max(0,clusters.Min(c=>c.Rect.Top)*PointsToDip*zoom-44));
+                    RevealPage(page,Math.Max(0,clusters.Min(c=>c.Rect.Top)-32),clusters.Min(c=>c.Rect.Left));
                 };
                 navItems.Children.Add(button);count++;
             }
@@ -79,8 +120,12 @@ public sealed partial class ReaderWindow
         IReadOnlyList<PageRect> rectangles=[];
         double scale;
         static readonly IBrush Fill=new SolidColorBrush(Color.FromArgb(100,106,169,222));
-        internal void Set(IReadOnlyList<PageRect> items,double zoom){rectangles=items;SetZoom(zoom);}
-        internal void SetZoom(double zoom){scale=zoom*PointsToDip;InvalidateVisual();}
+        internal void Set(IReadOnlyList<PageRect> items,double zoom)
+        {
+            double requested=zoom*PointsToDip;
+            if(ReferenceEquals(rectangles,items)&&scale==requested)return;
+            rectangles=items;scale=requested;InvalidateVisual();
+        }
         public override void Render(DrawingContext context)
         {
             foreach(var r in rectangles)context.FillRectangle(Fill,new Rect(r.Left*scale,r.Top*scale,r.Width*scale,r.Height*scale));

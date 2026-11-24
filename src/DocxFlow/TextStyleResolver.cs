@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using LecteurWord.DocxCore;
 
@@ -6,20 +7,31 @@ namespace LecteurWord.Flow;
 
 internal sealed record TextStyle
 {
+    internal float HorizontalScale {get;init;}=100;
     internal bool Bold { get; init; }
     internal bool Italic { get; init; }
+    internal bool Caps { get; init; }
+    internal bool SmallCaps { get; init; }
     internal bool? ComplexBold { get; init; }
     internal bool? ComplexItalic { get; init; }
     internal bool RightToLeft { get; init; }
     internal bool Complex { get; init; }
     internal bool Hidden { get; init; }
+    internal bool WebHidden { get; init; }
+    internal bool SpecialVanish { get; init; }
+    internal bool VisibilityUncertain { get; init; }
+    internal bool SuppressText => Hidden || VisibilityUncertain;
     internal float Size { get; init; } = 12;
     internal float? ComplexSize { get; init; }
     internal float Tracking { get; init; }
     internal float? KernAt { get; init; }
     internal float BaselineShift { get; init; }
+    internal string VerticalAlignment { get; init; } = "baseline";
     internal string Color { get; init; } = "auto";
     internal string Underline { get; init; } = "none";
+    internal string UnderlineColor { get; init; } = "auto";
+    internal string? Background { get; init; }
+    internal TextShadow? Shadow { get; init; }
     internal string Language { get; init; } = "und";
     internal string? EastAsianLanguage { get; init; }
     internal string? BidiLanguage { get; init; }
@@ -28,10 +40,10 @@ internal sealed record TextStyle
     internal ImmutableDictionary<string, SemanticSource> Origins { get; init; } = ImmutableDictionary<string, SemanticSource>.Empty;
 }
 
-internal sealed class TextStyleResolver(SemanticDocument model, Action<string, string, string> issue,TableStyleCascade? tableStyles=null)
+internal sealed partial class TextStyleResolver(SemanticDocument model, Action<string, string, string> issue,TableStyleCascade? tableStyles=null)
 {
     const string W = SemanticIndex.W;
-    const string W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+    internal const string W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
     const string A = SemanticIndex.Drawing;
     readonly Dictionary<string, TextStyle> cache = new(StringComparer.Ordinal);
     readonly Dictionary<string, string[]> tableLayers = new(StringComparer.Ordinal);
@@ -45,10 +57,19 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
     });
 
     internal int CacheHits { get; private set; }
+    long visibilityTicks;
+    internal long VisibilityTicks => visibilityTicks;
+    internal static bool IsVisibility(string name)=>name is "{" + W + "}vanish" or "{" + W + "}webHidden" or "{" + W + "}specVanish";
+    internal static bool? OnOff(string? raw)=>raw switch
+    {
+        null or "1" or "true" or "on" => true,
+        "0" or "false" or "off" => false,
+        _ => null
+    };
     internal void Clear() { cache.Clear(); tableLayers.Clear(); }
     string? Attr(string id, string key, string ns = W) => model.Attribute(id, key, ns);
     bool Word(string id, string name) => model.Name(id) == SemanticIndex.QName(W,name);
-    bool ParentIs(string id, string name) => model.ParentId(id) is {} p && Word(p, name);
+    bool ParentIs(string id, string name) => model.StylePropertyParent(id) is {} p && Word(p, name);
 
     internal (bool Rtl, SemanticSource? Origin) ParagraphDirection(string paragraph)
     {
@@ -63,9 +84,9 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
         return direction;
     }
 
-    internal TextStyle Resolve(string runOrParagraph, bool mark,string? lastRoot=null)
+    internal TextStyle Resolve(string runOrParagraph, bool mark,string? lastRoot=null,string? paragraphStyleOverride=null)
     {
-        var roots = model.PresentationDeclarations(runOrParagraph, mark, Unresolved).ToList();
+        var roots = model.PresentationDeclarations(runOrParagraph, mark, Unresolved,paragraphStyleOverride:paragraphStyleOverride).ToList();
         string? table = Ancestor(runOrParagraph, "tbl");
         if (table is not null)
             roots.InsertRange(roots.Count > 0 && ParentIs(roots[0], "rPrDefault") ? 1 : 0, tableStyles is null?TableLayers(table):
@@ -79,12 +100,49 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
         foreach (string root in roots)
         {
             bool toggles = ParentIs(root,"style")&&
-                (tableStyles is null||model.ParentId(root) is not {} st||Attr(st,"type")!="table")||
+                (tableStyles is null||model.StylePropertyParent(root) is not {} st||Attr(st,"type")!="table")||
                 tableStyles is null&&ParentIs(root,"tblStylePr");
+            string? parent=model.StylePropertyParent(root);
+            bool inheritedMark=mark&&parent is not null&&Word(parent,"pPr")&&model.ParentId(parent)!=runOrParagraph;
+            bool visibilityToggle=ParentIs(root,"style")||ParentIs(root,"tblStylePr")||
+                inheritedMark&&ParentIs(parent!,"style");
+            HashSet<string>? visibilitySeen=null;
             foreach (var property in model.BlocksOf(root))
             {
                 string id = property.Id, name = model.Name(id);
                 string? raw = Attr(id, "val");
+                if(IsVisibility(name))
+                {
+                    long started=Stopwatch.GetTimestamp();
+                    visibilitySeen??=new(StringComparer.Ordinal);
+                    if(!visibilitySeen.Add(name)||Toggle(id) is not {} value||model.BlocksOf(id).Any()||
+                        model.Attributes(id).Any(a=>a.Key!="{" + W + "}val"&&!a.Key.StartsWith("{http://www.w3.org/2000/xmlns/}",StringComparison.Ordinal)))
+                    {
+                        style=style with {VisibilityUncertain=true};
+                        issue("TEXT_VISIBILITY_UNRESOLVED",id,"Propriété de visibilité irrégulière. Déclaration source conservée.");
+                    }
+                    else if(name=="{" + W + "}vanish")
+                    {
+                        if(!visibilityToggle||value)
+                        {
+                            style=style with {Hidden=visibilityToggle?!style.Hidden:value};
+                            Mark("hidden",id);
+                        }
+                    }
+                    else if(name=="{" + W + "}webHidden")
+                    {
+                        style=style with {WebHidden=value};
+                        Mark("webHidden",id);
+                    }
+                    else
+                    {
+                        style=style with {SpecialVanish=value};
+                        Mark("specVanish",id);
+                    }
+                    visibilityTicks+=Stopwatch.GetTimestamp()-started;
+                    continue;
+                }
+                if(inheritedMark)continue;
                 switch (name)
                 {
                     case "{" + W + "}rFonts":
@@ -95,16 +153,26 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
                         break;
                     case "{" + W + "}b": Boolean("bold",style.Bold,v=>style with {Bold=v}); break;
                     case "{" + W + "}i": Boolean("italic",style.Italic,v=>style with {Italic=v}); break;
+                    case "{" + W + "}caps": Boolean("caps",style.Caps,v=>style with {Caps=v,SmallCaps=!v&&style.SmallCaps}); break;
+                    case "{" + W + "}smallCaps": Boolean("smallCaps",style.SmallCaps,v=>style with {SmallCaps=v,Caps=!v&&style.Caps}); break;
                     case "{" + W + "}bCs": Boolean("complexBold",style.ComplexBold??false,v=>style with {ComplexBold=v}); break;
                     case "{" + W + "}iCs": Boolean("complexItalic",style.ComplexItalic??false,v=>style with {ComplexItalic=v}); break;
                     case "{" + W + "}rtl": Boolean("rtl",style.RightToLeft,v=>style with {RightToLeft=v},false); break;
                     case "{" + W + "}cs": Boolean("cs",style.Complex,v=>style with {Complex=v},false); break;
-                    case "{" + W + "}vanish": Boolean("hidden",style.Hidden,v=>style with {Hidden=v}); break;
                     case "{" + W + "}sz": Numeric("size",2,3276,2,v=>style with {Size=v}); break;
                     case "{" + W + "}szCs": Numeric("complexSize",2,3276,2,v=>style with {ComplexSize=v}); break;
                     case "{" + W + "}kern": Numeric("kernAt",0,3276,2,v=>style with {KernAt=v}); break;
                     case "{" + W + "}spacing": Numeric("tracking",-31680,31680,20,v=>style with {Tracking=v}); break;
+                    case "{" + W + "}w": Numeric("horizontalScale",1,600,1,v=>style with {HorizontalScale=v}); break;
                     case "{" + W + "}position": Numeric("baselineShift",-3168,3168,2,v=>style with {BaselineShift=v}); break;
+                    case "{" + W + "}vertAlign":
+                        if(raw is "baseline" or "superscript" or "subscript")
+                        {
+                            style=style with{VerticalAlignment=raw};
+                            Mark("verticalAlignment",id);
+                        }
+                        else Unknown(id);
+                        break;
                     case "{" + W + "}color":
                         string? color = Color(id, raw, out var target);
                         if (color is null) Unknown(id);
@@ -117,8 +185,38 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
                         }
                         break;
                     case "{" + W + "}u":
-                        if (raw is null || !Underlines.Contains(raw)) Unknown(id);
-                        else { style = style with { Underline=raw }; Mark("underline",id); }
+                        // MS-OI29500 §2.1.100: omitted type and color inherit independently.
+                        if (raw is not null)
+                        {
+                            if (!Underlines.Contains(raw)) Unknown(id);
+                            else { style = style with { Underline=raw }; Mark("underline",id); }
+                        }
+                        string? declaredUnderlineColor=Attr(id,"color");
+                        if (declaredUnderlineColor is not null||Attr(id,"themeColor") is not (null or "none"))
+                        {
+                            string? underlineColor=Color(id,declaredUnderlineColor,out var underlineTarget);
+                            if (underlineColor is null) Unknown(id);
+                            else
+                            {
+                                style=style with {UnderlineColor=underlineColor};
+                                Mark("underlineColor",id);
+                                if(underlineTarget is not null)Mark("underlineColorThemeValue",underlineTarget);
+                                else origins.Remove("underlineColorThemeValue");
+                            }
+                        }
+                        break;
+                    case "{" + W + "}strike" or "{" + W + "}dstrike" when Toggle(id)==false:break;
+                    case "{" + W + "}em" when raw=="none":break;
+                    case "{" + W + "}bdr" when raw is "none" or "nil":break;
+                    case "{" + W + "}shd" when raw is "clear" or "nil":
+                        string? fill=raw=="nil"?"auto":Color(id,Attr(id,"fill")??"auto",out _,
+                            "themeFill","themeFillTint","themeFillShade");
+                        if(fill is null)Unknown(id);
+                        else
+                        {
+                            style=style with{Background=fill=="auto"?null:fill};
+                            Mark("background",id);
+                        }
                         break;
                     case "{" + W + "}lang":
                         Language("val","language",v=>style with {Language=v});
@@ -127,9 +225,22 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
                         break;
                     case "{" + W14 + "}ligatures":
                         string? feature = Attr(id,"val",W14);
-                        if (feature is not null && LigatureValues.Contains(feature))
-                        { style = style with { Ligatures=feature }; Mark("ligatures",id); }
+                        if (IsLigatureValue(feature))
+                        { style = style with { Ligatures=feature! }; Mark("ligatures",id); }
                         else Unknown(id);
+                        break;
+                    case "{" + W14 + "}shadow":
+                        if(ReadShadow(id,out string? shadowTheme) is {} shadow)
+                        {
+                            style=style with{Shadow=shadow};
+                            Mark("shadow",id);
+                            if(shadowTheme is not null)Mark("shadowThemeValue",shadowTheme);
+                            else origins.Remove("shadowThemeValue");
+                        }
+                        else Unknown(id);
+                        break;
+                    case "{" + W14 + "}textOutline" when NoOutlineStroke(id):
+                        Mark("textOutline",id);
                         break;
                     case "{" + W + "}rStyle" or "{" + W + "}rPrChange" or "{" + W + "}noProof":
                         break;
@@ -175,12 +286,7 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
         void Mark(string property,string id) => origins[property] = model.Source(id);
     }
 
-    bool? Toggle(string id) => Attr(id,"val") switch
-    {
-        null or "1" or "true" or "on" => true,
-        "0" or "false" or "off" => false,
-        _ => null
-    };
+    bool? Toggle(string id) => OnOff(Attr(id,"val"));
 
     string? Ancestor(string id, string name)
     {
@@ -217,32 +323,34 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
         return result;
     }
 
-    string? Color(string id,string? value,out string? target)
+    string? Color(string id,string? value,out string? target,string themeKey="themeColor",
+        string tintKey="themeTint",string shadeKey="themeShade")
     {
         target=null;
-        string? key=Attr(id,"themeColor");
+        string? key=Attr(id,themeKey);
         if (key is not (null or "none"))
         {
-            if (tableStyles is null && (Attr(id,"themeTint") is not null || Attr(id,"themeShade") is not null)) return null;
-            key=theme.Value.Mapping is {} m ? Attr(m,key switch
-            { "text1"=>"t1","text2"=>"t2","background1"=>"bg1","background2"=>"bg2",_=>key })??key : key;
-            key=key switch { "text1" or "dark1"=>"dk1","text2" or "dark2"=>"dk2","background1" or "light1"=>"lt1",
-                "background2" or "light2"=>"lt2","hyperlink"=>"hlink","followedHyperlink"=>"folHlink",_=>key };
-            if (theme.Value.Scheme is not {} scheme) return null;
-            var entry=model.BlocksOf(scheme).Where(n=>model.Name(n.Id)==SemanticIndex.QName(A,key)).Select(n=>n.Id).SingleOrDefaultIfUnique();
-            if (entry is null) return null;
-            target=model.BlocksOf(entry).Select(n=>n.Id).SingleOrDefaultIfUnique();
-            if(target is null||model.BlocksOf(target).Any())return null;
-            value=model.Name(target) switch
-            {
-                "{" + A + "}srgbClr"=>Attr(target,"val",""),
-                "{" + A + "}sysClr"=>Attr(target,"lastClr",""),
-                _=>null
-            };
+            key=WordColor.ThemeSlot(theme.Value.Mapping is {} m?Attr(m,WordColor.MappingKey(key))??key:key);
+            value=ThemeRgb(key,out target);
+            if(value is not null)value=WordColor.ApplyLuminance(value,Attr(id,tintKey),Attr(id,shadeKey));
         }
-        if(tableStyles is not null&&value is not null&&key is not (null or "none"))
-            value=WordColor.ApplyLuminance(value,Attr(id,"themeTint"),Attr(id,"themeShade"));
         return value is "auto" || value is {Length:6} && value.All(Uri.IsHexDigit) ? value : null;
+    }
+
+    string? ThemeRgb(string key,out string? target)
+    {
+        target=null;
+        if(theme.Value.Scheme is not {} scheme)return null;
+        var entry=model.BlocksOf(scheme).Where(n=>model.Name(n.Id)==SemanticIndex.QName(A,key)).Select(n=>n.Id).SingleOrDefaultIfUnique();
+        if(entry is null)return null;
+        target=model.BlocksOf(entry).Select(n=>n.Id).SingleOrDefaultIfUnique();
+        if(target is null||model.BlocksOf(target).Any())return null;
+        return model.Name(target) switch
+        {
+            "{" + A + "}srgbClr"=>Attr(target,"val",""),
+            "{" + A + "}sysClr"=>Attr(target,"lastClr",""),
+            _=>null
+        };
     }
 
     void Unknown(string id) => issue("TEXT_PROPERTY_PARTIAL",id,"Propriété typographique inconnue, invalide ou hors profil. Déclaration conservée.");
@@ -260,6 +368,7 @@ internal sealed class TextStyleResolver(SemanticDocument model, Action<string, s
         "standardContextualHistorical","standardContextualDiscretionary","standardHistoricalDiscretionary",
         "contextualHistoricalDiscretionary","all"
     };
+    internal static bool IsLigatureValue(string? value) => value is not null&&LigatureValues.Contains(value);
 }
 
 internal static class TextStyleEnumerable

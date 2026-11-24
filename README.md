@@ -27,7 +27,7 @@ La référence est conservée sans conversion, en **1672 × 941 pixels**. Son [e
 | Composant | État réel du prototype |
 |---|---|
 | **Inspection DOCX** | Contrôles ZIP/OPC/XML, inventaire structuré avec provenance, diagnostics, manifeste JSON v1 et SHA-256 des médias. |
-| **Lecture** | Flux Unicode avec notes navigables et repères ; composition paginée expérimentale pour un profil de paragraphes latins, avec formats/marges DOCX, styles, justification simple, listes multiniveaux, tabulations, tableaux à grille/AutoFit simple et images PNG/JPEG baseline intégrées dans un périmètre qualifié. Les documents hors profil paginé gardent le flux continu. Les tableaux du profil natif y partagent la géométrie de composition. |
+| **Lecture** | Un DOCX dont les pages sont qualifiées ouvre en Page simple, avec Double page accessible dès l’ouverture. Le moteur couvre un profil expérimental de paragraphes latins, listes, tabulations, tableaux et images. Hors profil, le lecteur affiche un diagnostic et propose la lecture continue sur choix explicite si le contenu est lisible. L’import DOC binaire est prévu pour la V2. |
 | **Polices du document** | Familles Linux réellement chargées, thèmes latins, héritage et substitutions tracées ; fontes TTF incorporées dans un périmètre vérifié. Détails dans [la matrice typographique](docs/polices-et-typographie.md). |
 | **Interface Avalonia** | Clair/sombre/système, FR/EN, sommaire et signets dans le flux simplifié, recherche, diagnostics regroupés avec rapport détaillé. Pages/miniatures et zoom pour le profil composé. Aucun menu classique. |
 | **Version / À propos** | Version sémantique, heure UTC et locale, commit réel et état local détectables au build, cible et runtime ; informations embarquées et copiables sans Git à l’exécution. Crédits et notices tierces, licence du projet à définir. |
@@ -47,7 +47,7 @@ La note s’ouvre dans un espace réservé à droite ou en bas selon la largeur 
 
 ## Limites actuelles et suite prévue
 
-La [composition étendue](docs/composition-listes-tableaux-images.md) conserve tableaux à grille, fusions compatibles, lignes entières et en-têtes répétés. [LAYOUT-001C](docs/compatibilite-pagination.md) ajoute justification simple, espacement contextuel, marques de paragraphe, liens textuels, AutoFit mesuré, styles généraux de tableaux et JPEG baseline intégrés avec orientation EXIF contrôlée. [PAGE-001C](docs/composition-tableaux-page-001c.md) précise les styles conditionnels pris en charge et la géométrie commune à la lecture continue. AutoFit complexe, tableaux imbriqués, partage interne des lignes, habillage des flotteurs, colonnes multiples, placement des notes et recalcul des champs restent non qualifiés. Les corps de commentaires et objets spécialisés restent inventoriés ; les éléments non représentés portent des repères. Les listes et styles sont partiellement interprétés ; substitution de polices possible. Les PNG à palette, JPEG progressifs/CMYK et autres formats hors profil ne sont pas décodés.
+La [composition étendue](docs/composition-listes-tableaux-images.md) conserve tableaux à grille, fusions compatibles, lignes entières et en-têtes répétés. [LAYOUT-001C](docs/compatibilite-pagination.md) ajoute justification simple, espacement contextuel, marques de paragraphe, liens textuels, AutoFit mesuré, styles généraux de tableaux et JPEG baseline intégrés avec orientation EXIF contrôlée. AutoFit complexe, styles conditionnels, tableaux imbriqués, partage interne des lignes, habillage des flotteurs, colonnes multiples, placement des notes et recalcul des champs restent non qualifiés. Les corps de commentaires et objets spécialisés restent inventoriés ; les éléments non représentés portent des repères. Les listes et styles sont partiellement interprétés ; substitution de polices possible. Les PNG à palette, JPEG progressifs/CMYK et autres formats hors profil ne sont pas décodés.
 
 Restent à qualifier ou implémenter : navigation précise à l’intérieur des tableaux longs, impression, comparaison visuelle Word, lecteur d’écran et DPI physiques multiples, associations de fichiers et Native AOT. Aucune conformité Word, PDF/A ou PDF/UA n'est annoncée.
 
@@ -133,6 +133,7 @@ Chaque commande sélectionne un cas explicite. **Aucune suite complète sans aut
 | `tests` | Cas ciblés synthétiques et sonde de contrat Rust. |
 
 - [Architecture et couverture](docs/architecture-et-couverture.md)
+- [Récupération, support GitHub et extensions](docs/plateforme.md)
 - [Contrat OpusNova v1](docs/contrat-opusnova-v1.md) et [schéma JSON](docs/manifest-v1.schema.json)
 - [Sécurité et limites](docs/securite.md)
 - [UX et qualification](docs/ux.md)

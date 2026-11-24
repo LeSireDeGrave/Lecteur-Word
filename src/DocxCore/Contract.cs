@@ -50,11 +50,19 @@ public sealed record InventoryNode(string Id, string? ParentId, SourceLocation S
     public string? Text { get; set; }
     public string Revision { get; set; } = "unchanged";
     public string FieldRole { get; set; } = "none";
+    [JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceName { get; init; }
+    [JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]
+    public SortedDictionary<string,string>? SourceAttributes { get; init; }
 }
 public sealed record PartInventory(string PartUri, string ContentType, string Sha256, long Bytes,
     string Coverage, int NodeCount);
 public sealed record Relationship(string SourcePart, string Id, string Type, string Target,
-    string Mode, string? ResolvedPart);
+    string Mode, string? ResolvedPart)
+{
+    [JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceType { get; init; }
+}
 public sealed record MediaResource(string Id, string PartUri, string Sha256, long Bytes, string ContentType,
     string Coverage, int? Width, int? Height);
 public sealed record StyleChain(string NodeId, string StyleId, List<string> Ancestors, string Coverage);
@@ -63,6 +71,8 @@ public sealed record InspectionManifest
     public int SchemaVersion { get; init; } = 1;
     public string EngineVersion { get; init; } = "0.1.0";
     public string Format { get; set; } = "unknown";
+    [JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]
+    public string? Conformance { get; set; }
     public string Status { get; set; } = Coverage.Refused;
     public bool InspectionComplete { get; set; }
     public bool ImportReady { get; init; } = false;
@@ -80,6 +90,8 @@ public sealed record InspectionResult(InspectionManifest Manifest, IReadOnlyDict
 {
     // Quarantined font parts from the inspected snapshot. Never emitted as CLI assets.
     [JsonIgnore] public IReadOnlyDictionary<string,byte[]> FontParts {get;init;} = new Dictionary<string,byte[]>();
+    // Uninterpreted, bounded bytes. They never enter the CLI asset set.
+    [JsonIgnore] public IReadOnlyDictionary<string,byte[]> MetafileParts {get;init;} = new Dictionary<string,byte[]>();
 }
 
 [JsonSerializable(typeof(InspectionManifest))]

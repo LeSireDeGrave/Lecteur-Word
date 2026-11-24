@@ -19,14 +19,17 @@ internal sealed class LinePropertiesReader(SemanticDocument model,TableStyleCasc
         var stops=new SortedDictionary<long,LineTabStop>();
         long left=0,right=0,first=0,defaultTab=DefaultStop;
         SemanticSource? defaultSource=null;
-        bool keepNext=false,keepLines=false,widow=true,pageBefore=false,autoHyphen=false,suppressHyphen=false,noHangTab=false;
+        bool keepNext=false,keepLines=false,widow=true,pageBefore=false,suppressHyphen=false,noHangTab=false,forgetLastTab=false;
+        LineHyphenation? hyphenation=null;
         var alignment=paragraph.RightToLeft?LineAlignment.Right:LineAlignment.Left;
-        var table=tableStyles is null?TableProperties(paragraph.Id):default;
+        string sourceParagraph=paragraph.TocRow?.Paragraph.NodeId??paragraph.Id;
+        var table=tableStyles is null?TableProperties(sourceParagraph):default;
         if(tableStyles is null)issues.AddRange(table.Issues);
-        foreach(string root in model.PresentationDeclarations(paragraph.Id,
+        foreach(string root in model.PresentationDeclarations(sourceParagraph,
             unresolved:id=>Issue(id,"LINE_STYLE_UNRESOLVED","Chaîne de style incomplète."), tableParagraphProperties:
-            tableStyles is null?table.Properties:tableStyles.Text(paragraph.Id).Select(id=>model.ChildId(id,"pPr")).OfType<string>(),
-            numberingParagraphProperties:levelId is null?null:model.ChildId(levelId,"pPr")))
+            tableStyles is null?table.Properties:tableStyles.Text(sourceParagraph).Select(id=>model.ChildId(id,"pPr")).OfType<string>(),
+            numberingParagraphProperties:levelId is null?null:model.ChildId(levelId,"pPr"),
+            paragraphStyleOverride:paragraph.TocRow?.StyleId))
             foreach(var e in model.BlocksOf(root))
             {
                 string id=e.Id;
@@ -61,6 +64,8 @@ internal sealed class LinePropertiesReader(SemanticDocument model,TableStyleCasc
                         {
                             if(!Number(tab.Id,"pos",out long position))
                             {if(Attr(tab.Id,"pos") is null)Issue(tab.Id,"LINE_TAB_POSITION","Position de taquet absente.");continue;}
+                            if(position is < -31680L*EmuPerTwip or >31680L*EmuPerTwip)
+                            {Issue(tab.Id,"LINE_TAB_POSITION","La position dépasse les limites des taquets Word.");continue;}
                             string? align=Attr(tab.Id,"val");
                             if(align=="clear"){stops.Remove(position);continue;}
                             var kind=align switch
@@ -107,23 +112,55 @@ internal sealed class LinePropertiesReader(SemanticDocument model,TableStyleCasc
             }
             if(model.ChildId(s,"autoHyphenation") is {} hyphen)
             {
-                autoHyphen=Boolean(hyphen,false);
-                if(autoHyphen&&!suppressHyphen)Issue(hyphen,"LINE_AUTO_HYPHENATION_UNQUALIFIED","Césure automatique demandée, dictionnaire absent du profil.");
+                if(Boolean(hyphen,false)&&!suppressHyphen)
+                {
+                    long zone=360*EmuPerTwip;
+                    int consecutive=0;
+                    if(model.ChildId(s,"hyphenationZone") is {} zoneId)
+                    {
+                        if(Number(zoneId,"val",out long declaredZone)&&declaredZone>=0)zone=declaredZone;
+                        else Issue(zoneId,"LINE_HYPHENATION_ZONE","Zone de césure hors profil.");
+                    }
+                    if(model.ChildId(s,"consecutiveHyphenLimit") is {} limitId&&
+                        (!int.TryParse(Attr(limitId,"val"),NumberStyles.None,CultureInfo.InvariantCulture,out consecutive)||consecutive<0))
+                        Issue(limitId,"LINE_HYPHENATION_LIMIT","Limite de césure hors profil.");
+                    bool caps=model.ChildId(s,"doNotHyphenateCaps") is {} capsId&&Boolean(capsId,false);
+                    string? compatibilityLimitation=null;
+                    if(model.ChildId(s,"compat") is {} compatibility)
+                        foreach(var option in model.BlocksOf(compatibility).Where(e=>Local(e.Id)=="compatSetting"))
+                        {
+                            string? name=Attr(option.Id,"name"),uri=Attr(option.Id,"uri"),value=Attr(option.Id,"val");
+                            if(uri=="http://schemas.microsoft.com/office/word"&&
+                                (name=="compatibilityMode"&&value is not ("11" or "12" or "14")||
+                                 name=="useWord2013TrackBottomHyphenation"&&value is not ("0" or "off" or "false")))
+                                compatibilityLimitation=option.Id;
+                        }
+                    hyphenation=new(model.Source(hyphen),zone,consecutive,caps,compatibilityLimitation);
+                }
             }
-            if(model.ChildId(s,"compat") is {} compat&&model.ChildId(compat,"noTabHangIndent") is {} n)
-                noHangTab=Boolean(n,false);
+            if(model.ChildId(s,"compat") is {} compat)
+            {
+                if(model.ChildId(compat,"noTabHangIndent") is {} n)noHangTab=Boolean(n,false);
+                if(model.ChildId(compat,"forgetLastTabAlignment") is {} option&&
+                    paragraph.Controls.Any(c=>c.Kind=="Tab"))
+                {
+                    forgetLastTab=Boolean(option,false);
+                    Set("forgetLastTabAlignment",option);
+                }
+            }
         }
         if(first<0&&!noHangTab)
         {
             long position=paragraph.RightToLeft?right:left;
             stops.TryAdd(position,new(position,paragraph.RightToLeft?LineTabKind.Right:LineTabKind.Left,"none",origins.GetValueOrDefault("first")));
         }
-        if(model.ParentId(paragraph.Id) is {} parent&&Local(parent)=="tc"&&model.ChildId(parent,"tcPr") is {} cell&&
+        if(model.ParentId(sourceParagraph) is {} parent&&Local(parent)=="tc"&&model.ChildId(parent,"tcPr") is {} cell&&
             model.ChildId(cell,"noWrap") is {} nowrap&&Boolean(nowrap,false))
             Issue(nowrap,"LINE_CELL_WRAP_PENDING","Contrainte de largeur de cellule à résoudre avec la table.");
         if(paragraph.DirectionOrigin is {} direction)origins["direction"]=direction;
         return new(alignment,left,right,first,[..stops.Values],defaultTab,defaultSource,keepNext,keepLines,widow,pageBefore,
-            paragraph.RightToLeft,origins.ToImmutable(),issues.ToImmutable());
+            paragraph.RightToLeft,origins.ToImmutable(),issues.ToImmutable())
+            {Hyphenation=hyphenation,ForgetLastTabAlignment=forgetLastTab};
 
         string? Attr(string id,string key)=>model.Attribute(id,key);
         void Set(string key,string id)=>origins[key]=model.Source(id);

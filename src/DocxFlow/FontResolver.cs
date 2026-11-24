@@ -8,6 +8,22 @@ public static class FontResolver
 {
     static readonly Lazy<HashSet<string>> installed=new(()=>SKFontManager.Default.GetFontFamilies().ToHashSet(StringComparer.OrdinalIgnoreCase));
     public static bool IsInstalled(string family)=>family.Length is >0 and <=128&&installed.Value.Contains(family);
+    internal static string[] FallbackFamilies(string family,string classification)
+    {
+        if(family.Contains("Mono",StringComparison.OrdinalIgnoreCase)||
+            family.Contains("Courier",StringComparison.OrdinalIgnoreCase)||classification=="modern")
+            return ["Liberation Mono","DejaVu Sans Mono"];
+        // Microsoft documents these Aptos faces as sans serif and Aptos as Calibri's
+        // successor. Keep the requested family and report any resolved replacement.
+        if(family.Equals("Aptos",StringComparison.OrdinalIgnoreCase)||
+            family.Equals("Aptos Display",StringComparison.OrdinalIgnoreCase)||
+            family.Equals("Aptos Narrow",StringComparison.OrdinalIgnoreCase))
+            return ["Calibri","Carlito","Liberation Sans","DejaVu Sans"];
+        if(family.Contains("Arial",StringComparison.OrdinalIgnoreCase)||
+            family.Contains("Sans",StringComparison.OrdinalIgnoreCase)||family=="Calibri"||classification=="swiss")
+            return ["Carlito","Liberation Sans","DejaVu Sans"];
+        return ["Liberation Serif","DejaVu Serif","Noto Serif"];
+    }
     internal static SKTypeface Open(FontResolution resolution)
     {
         var source=resolution.Data??throw new InvalidDataException("LAYOUT_FONT_SNAPSHOT_MISSING");
@@ -82,12 +98,16 @@ public static class FontResolver
             using var requested=new SKFontStyle(bold?700:400,5,italic?SKFontStyleSlant.Italic:SKFontStyleSlant.Upright);
             using var face=SKFontManager.Default.MatchFamily(family,requested);
             if(face is null||!FaceMatches(face,bold,italic))return cache[key]=null;
-            using var stream=face.OpenStream(out int index);if(stream is null||stream.Length is <=0 or >8*1024*1024)return cache[key]=null;
+            // A trusted installed CJK collection or color emoji face may exceed the packet font limit.
+            // Keep the document-wide memory budget, including distinct variants opened from collections.
+            using var stream=face.OpenStream(out int index);
+            if(stream is null||stream.Length is <=0 or >20*1024*1024)return cache[key]=null;
+            if(bytesTotal+stream.Length>32*1024*1024)return cache[key]=null;
             byte[] bytes=new byte[stream.Length];int read=stream.Read(bytes,bytes.Length);if(read!=bytes.Length)return cache[key]=null;
             using var data=SKData.CreateCopy(bytes);using var frozen=SKTypeface.FromData(data,index);
             // Variable/collection instances must survive the snapshot without silently changing face.
             if(frozen is null||frozen.FamilyName!=face.FamilyName||frozen.FontWeight!=face.FontWeight||frozen.FontSlant!=face.FontSlant)return cache[key]=null;
-            bytesTotal+=bytes.Length;if(bytesTotal>32*1024*1024)throw new InvalidDataException("LAYOUT_FONT_BYTES_LIMIT");
+            bytesTotal+=bytes.Length;
             string hash=Convert.ToHexStringLower(SHA256.HashData(bytes));
             return cache[key]=new(family,frozen.FamilyName,"installed",true,frozen.FontWeight,frozen.FontSlant.ToString(),hash,index,"checked","Face Linux chargée et figée pour ce document."){Data=new(bytes,index,hash)};
         }
@@ -124,7 +144,7 @@ public static class FontResolver
                     if(CoversText(face))return face with{RequestedFamily=family};
             string reason=themeMissing?"Référence de thème non résolue.":candidate is not null?"La face demandée ne couvre pas les caractères du segment.":IsInstalled(family)?"La face demandée n’est pas exploitable sans transformation silencieuse.":"Famille demandée absente de Linux.";
             string kind=documentFonts.Declarations.FirstOrDefault(d=>d.Family.Equals(family,StringComparison.OrdinalIgnoreCase))?.Classification??"";
-            string[] fallbacks=family.Contains("Mono",StringComparison.OrdinalIgnoreCase)||family.Contains("Courier",StringComparison.OrdinalIgnoreCase)||kind=="modern"?["Liberation Mono","DejaVu Sans Mono"]:family.Contains("Arial",StringComparison.OrdinalIgnoreCase)||family.Contains("Sans",StringComparison.OrdinalIgnoreCase)||family=="Calibri"||kind=="swiss"?["Carlito","Liberation Sans","DejaVu Sans"]:["Liberation Serif","DejaVu Serif","Noto Serif"];
+            string[] fallbacks=FallbackFamilies(family,kind);
             foreach(string fallback in fallbacks)
             {
                 var face=Installed(fallback,bold,italic);if(face is not null&&CoversText(face))return face with{RequestedFamily=family,Status="substituted",Installed=IsInstalled(family),Reason=reason};
@@ -156,6 +176,24 @@ public static class FontResolver
         {
             if(ExactInstalled(family,bold,italic) is {} installed)yield return installed;
             foreach(var face in EmbeddedFaces(family,bold,italic))yield return face;
+        }
+
+        internal IEnumerable<FontResolution> SymbolFaces(string family,bool bold,bool italic)
+        {
+            bool found=false;
+            foreach(var face in ExactFaces(family,bold,italic))
+            {
+                found=true;
+                yield return face;
+            }
+            if(found||IsInstalled(family))yield break;
+            var declarations=documentFonts.Declarations.Where(f=>f.Family.Equals(family,StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
+            // Word treats altName as one name, including any comma in its value.
+            if(declarations is not [{Alternative.Length:>0 and <=31} declared]||
+                declared.Alternative.Equals(family,StringComparison.OrdinalIgnoreCase))yield break;
+            foreach(var face in ExactFaces(declared.Alternative,bold,italic))
+                yield return face with{RequestedFamily=family,Status="substituted",Installed=false,
+                    Reason="Nom de remplacement w:altName déclaré : « "+declared.Alternative+" »."};
         }
 
         IEnumerable<FontResolution> EmbeddedFaces(string family,bool bold,bool italic)

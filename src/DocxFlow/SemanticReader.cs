@@ -7,7 +7,8 @@ namespace LecteurWord.Flow;
 
 internal static partial class SemanticReader
 {
-    internal static SemanticResult Build(InspectionResult input, CancellationToken token = default)
+    internal static SemanticResult Build(InspectionResult input, CancellationToken token = default,
+        StyleCollectionKind styles = StyleCollectionKind.Ordinary)
     {
         token.ThrowIfCancellationRequested();
         var manifest = input.Manifest;
@@ -17,7 +18,7 @@ internal static partial class SemanticReader
             return Refused("SEMANTIC_NODE_LIMIT", "Inventaire hors budget du modèle sémantique.");
         try
         {
-            return new Builder(manifest, token).Build();
+            return new Builder(manifest, token).Build(styles);
         }
         catch (SemanticLimitException)
         {
@@ -61,7 +62,7 @@ internal static partial class SemanticReader
             else diagnosticsLimited = true;
         }
 
-        internal SemanticResult Build()
+        internal SemanticResult Build(StyleCollectionKind styles)
         {
             if (index.Body is not {} body) return Refused("SEMANTIC_BODY_MISSING", "Corps principal non rattaché à une relation interne unique.");
             int order = 0;
@@ -98,16 +99,27 @@ internal static partial class SemanticReader
                     alternatives.Add(new(node.Id, chosen?.Id, [..index.RawChildren(node)
                         .Where(n => n.Name is "{" + Mc + "}Choice" or "{" + Mc + "}Fallback").Select(n => n.Id)]));
                     if (!inactive && chosen is null)
-                        Issue("SEMANTIC_ALTERNATIVE_UNRESOLVED", node, "Aucune branche compatible. Toutes les branches restent consultables.");
+                    {
+                        if (index.IsEmptyStyleAlternative(node))
+                            Issue("SEMANTIC_STYLE_ALTERNATIVE_EMPTY", node,
+                                "Alternative de style sans branche comprise ni repli, vide dans la projection MCE. Sources conservées.");
+                        else
+                            Issue("SEMANTIC_ALTERNATIVE_UNRESOLVED", node, "Aucune branche compatible. Toutes les branches restent consultables.");
+                    }
                 }
                 var element = new SemanticElement(node.Id, order++, story, kind, coverage);
                 elements.Add(node.Id, element);
             }
 
-            var blocks = index.LogicalChildren(body).Where(n => !Word(n, "sectPr")).ToArray();
+            var blocks = index.LogicalChildren(body).Where(n => !Word(n, "sectPr")&&!index.IsStandaloneBookmark(n)).ToArray();
             var sections = BuildSections(body, blocks);
             var tables = BuildTables();
+            long fieldStart = Stopwatch.GetTimestamp();
             var fields = BuildFields();
+            double fieldMs = Stopwatch.GetElapsedTime(fieldStart).TotalMilliseconds;
+            long tocStart=Stopwatch.GetTimestamp();
+            var tocEntries=BuildTocEntries(fields);
+            double tocMs=Stopwatch.GetElapsedTime(tocStart).TotalMilliseconds;
             var references = BuildReferences();
             long dependencyStart = Stopwatch.GetTimestamp();
             var customXml = BuildCustomXml(fields);
@@ -116,13 +128,14 @@ internal static partial class SemanticReader
             var ordinary = ReadStyleCollection(R + "/styles", "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml");
             var effects = ReadStyleCollection(StylesEffectsRelation, "application/vnd.ms-word.stylesWithEffects+xml");
             var compatibility = ReadStyleCompatibility();
-            var (uses, numbering) = BuildStyles(ordinary, effects);
+            var effective = styles == StyleCollectionKind.Effects ? effects : ordinary;
+            var (uses, numbering) = BuildStyles(ordinary, effects, effective);
             double styleMs = Stopwatch.GetElapsedTime(styleStart).TotalMilliseconds;
             if (diagnosticsLimited)
                 issues.Add(new("SEMANTIC_DIAGNOSTIC_LIMIT", body.Source, "Détails limités. Le statut de couverture et l’inventaire restent consultables.", false));
             return new(new(manifest, index, [..OrderedElements], elements.AsReadOnly(), [..stories], [..blocks.Select(n => n.Id)], sections,
-                references, [..alternatives], tables, fields, ordinary, effects, compatibility, styleMs, uses, numbering, customXml)
-                { CustomXmlResolutionMs=dependencyMs }, [..issues]);
+                references, [..alternatives], tables, fields,tocEntries, ordinary, effects, effective, compatibility, styleMs, uses, numbering, customXml)
+                { CustomXmlResolutionMs=dependencyMs, FieldAnalysisMs=fieldMs,TocEntryAnalysisMs=tocMs }, [..issues]);
         }
 
         static string Local(InventoryNode n) => n.Name[(n.Name.IndexOf('}') + 1)..];
@@ -168,12 +181,15 @@ internal static partial class SemanticReader
                 "{" + W + "}style" or "{" + W + "}pStyle" or "{" + W + "}rStyle" or "{" + W + "}tblStyle" => SemanticKind.Style,
                 "{" + W + "}numPr" or "{" + W + "}num" or "{" + W + "}abstractNum" or "{" + W + "}lvl"
                     or "{" + W + "}lvlOverride" => SemanticKind.Numbering,
-                "{" + W + "}drawing" or "{" + W + "}pict" => SemanticKind.Drawing,
+                "{" + W + "}drawing" or "{" + W + "}pict" or "{" + W + "}object" => SemanticKind.Drawing,
                 "{" + Wp + "}inline" => SemanticKind.InlineDrawing,
                 "{" + Wp + "}anchor" => SemanticKind.FloatingDrawing,
                 "{" + Drawing + "}blip" or "{" + Vml + "}imagedata"
                     or "{http://schemas.microsoft.com/office/drawing/2016/SVG/main}svgBlip" => SemanticKind.ResourceReference,
                 "{" + W + "}footnoteReference" or "{" + W + "}endnoteReference" => SemanticKind.NoteCall,
+                "{" + W + "}footnoteRef" or "{" + W + "}endnoteRef" => SemanticKind.NoteMark,
+                "{" + W + "}separator" => SemanticKind.NoteSeparatorRule,
+                "{" + W + "}continuationSeparator" => SemanticKind.NoteContinuationRule,
                 "{" + W + "}headerReference" or "{" + W + "}footerReference" => SemanticKind.StoryReference,
                 "{" + W + "}bookmarkStart" => SemanticKind.BookmarkStart,
                 "{" + W + "}bookmarkEnd" => SemanticKind.BookmarkEnd,

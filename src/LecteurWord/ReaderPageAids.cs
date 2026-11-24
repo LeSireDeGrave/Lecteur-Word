@@ -17,14 +17,13 @@ public sealed partial class ReaderWindow
     const double PageInset=20;
     const double PointsToDip=96d/72;
     const double PointsPerMillimeter=72d/25.4;
+    static readonly IBrush ChocolateMarks=Brush("#795238");
     readonly PageRuler ruler=new(){Name="PageRuler",Height=31,ClipToBounds=true};
     readonly Border rulerBar=new(){Name="RulerBar"};
     readonly ComboBox rulerUnits=new(){Name="RulerUnits",ItemsSource=new[]{"cm","mm"},SelectedIndex=0,Padding=new Thickness(6,1),MinHeight=23};
     readonly TextBlock rulerInfo=new(){Name="RulerGeometry",FontSize=10,VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
-    readonly PageMarksOverlay pageMarks=new(){Name="PageNonprintingMarks",IsHitTestVisible=false,IsVisible=false,ClipToBounds=true};
     readonly Dictionary<string,PageLine> paragraphEnds=new(StringComparer.Ordinal);
     readonly Dictionary<string,LayoutParagraph> pageParagraphs=new(StringComparer.Ordinal);
-    ComposedPage? marksPage;
     LayoutParagraph? ruledParagraph;
     bool rulerRequested,marksRequested;
     internal bool MarksRequested=>marksRequested;
@@ -39,25 +38,35 @@ public sealed partial class ReaderWindow
         AutomationProperties.SetName(rulerUnits,"Unité de la règle / Ruler unit");
         rulerUnits.SelectionChanged+=(_,_)=>UpdateRuler();
         viewport.LayoutUpdated+=(_,_)=>AlignRuler();
-        paper.PointerPressed+=(_,e)=>
-        {
-            if(CurrentPage==0||e.GetCurrentPoint(paper).Properties.IsRightButtonPressed)return;
-            var point=e.GetPosition(paper);
-            var pt=new Point(point.X/(PointsToDip*zoom),point.Y/(PointsToDip*zoom));
-            SelectNativeAt(pt);
-            var current=composition!.Pages[page];
-            var cell=current.Cells.FirstOrDefault(c=>pt.X>=c.X&&pt.X<c.X+c.Width&&pt.Y>=c.Y&&pt.Y<c.Y+c.Height);
-            var candidates=current.Lines.Where(l=>l.CellId==cell?.CellId).ToArray();
-            var line=candidates.OrderBy(l=>Math.Abs(l.Baseline-pt.Y)).FirstOrDefault();
-            if(line is not null&&pageParagraphs.TryGetValue(line.ParagraphId,out var paragraph))
-            { ruledParagraph=paragraph;UpdateRuler(); }
-        };
         return rulerBar;
+    }
+
+    void PagePointerPressed(int index,Control sheet,PointerPressedEventArgs e)
+    {
+        if(CurrentPage==0||e.GetCurrentPoint(sheet).Properties.IsRightButtonPressed)return;
+        bool changed=page!=index;
+        if(changed)ActivatePage(index);
+        var point=e.GetPosition(sheet);
+        var pt=new Point(point.X/(PointsToDip*zoom),point.Y/(PointsToDip*zoom));
+        if(e.GetCurrentPoint(sheet).Properties.IsLeftButtonPressed&&FollowNativePageLink(pt))return;
+        SelectNativeAt(pt);
+        var current=composition!.Pages[index];
+        var cell=current.Cells.FirstOrDefault(c=>pt.X>=c.X&&pt.X<c.X+c.Width&&pt.Y>=c.Y&&pt.Y<c.Y+c.Height);
+        var line=current.Lines.Where(l=>l.CellId==cell?.CellId).MinBy(l=>Math.Abs(l.Baseline-pt.Y));
+        if(line is not null&&pageParagraphs.TryGetValue(line.ParagraphId,out var paragraph))
+        {
+            ruledParagraph=paragraph;
+            CurrentBlockId=paragraph.Id;
+            CurrentSection=paragraph.Section;
+        }
+        if(changed&&navMode=="pages")FillPanel();
+        UpdateActions();
+        UpdateNavigationPosition();
     }
 
     void PreparePageAids()
     {
-        paragraphEnds.Clear();pageParagraphs.Clear();marksPage=null;pageMarks.Set([],zoom);
+        paragraphEnds.Clear();pageParagraphs.Clear();
         if(composition?.Available!=true)return;
         foreach(var paragraph in pageModel?.Paragraphs??[])pageParagraphs[paragraph.Id]=paragraph;
         foreach(var pg in composition.Pages)
@@ -124,9 +133,8 @@ public sealed partial class ReaderWindow
 
     void AlignRuler()
     {
-        if(!rulerBar.IsVisible)return;
-        double x=paperFrame.TranslatePoint(new Point(),ruler)?.X??
-            Math.Max(PageInset,(viewport.Bounds.Width-paper.Width)/2)-viewport.Offset.X;
+        if(!rulerBar.IsVisible||page>=pageBoxes.Length)return;
+        double x=(pageDeck.TranslatePoint(new Point(),ruler)?.X??-viewport.Offset.X)+pageBoxes[page].X;
         ruler.Align(x);
     }
 
@@ -140,13 +148,17 @@ public sealed partial class ReaderWindow
 
     void UpdatePageMarks()
     {
-        pageMarks.IsVisible=marksRequested&&CurrentPage>0;
-        if(!pageMarks.IsVisible)return;
-        var pg=composition!.Pages[page];
-        if(ReferenceEquals(marksPage,pg)){pageMarks.SetScale(zoom);return;}
-        var marks=CollectPageMarks(pg,paragraphEnds);
-        marksPage=pg;pageMarks.Set(marks,zoom);
-        if(marks.Count==MaxPageMarks)status.Text=T("Limite d’affichage des marques atteinte sur cette page","Display limit for marks reached on this page");
+        foreach(var (index,visual) in pageVisuals)
+        {
+            visual.Marks.IsVisible=marksRequested&&CurrentPage>0;
+            if(!visual.Marks.IsVisible)continue;
+            visual.Marks.SetInk(ActualThemeVariant==ReaderPalette.BlueVariant?Palette.Accent:ChocolateMarks);
+            if(visual.MarksPrepared){visual.Marks.SetScale(zoom);continue;}
+            var marks=CollectPageMarks(composition!.Pages[index],paragraphEnds);
+            visual.Marks.Set(marks,zoom);
+            visual.MarksPrepared=true;
+            if(marks.Count==MaxPageMarks)status.Text=T("Limite d’affichage des marques atteinte sur cette page","Display limit for marks reached on this page");
+        }
     }
 
     const int MaxPageMarks=16_384;
@@ -283,16 +295,25 @@ public sealed partial class ReaderWindow
     }
 
     readonly record struct VisualMark(string Text,float X,float Baseline,SemanticSource Source,bool Centered=false);
-    internal IEnumerable<SemanticSource> PageMarkSources=>pageMarks.Sources;
+    internal IEnumerable<SemanticSource> PageMarkSources=>pageVisuals.TryGetValue(page,out var visual)?visual.Marks.Sources:[];
     sealed class PageMarksOverlay:Control
     {
         IReadOnlyList<VisualMark> marks=[];
         internal IEnumerable<SemanticSource> Sources=>marks.Select(m=>m.Source);
         IBrush ink=Brush("#795238");
         double scale=1;
-        internal void Set(IReadOnlyList<VisualMark> next,double zoom){marks=next;SetScale(zoom);}
-        internal void SetScale(double zoom){scale=zoom*PointsToDip;InvalidateVisual();}
-        internal void SetInk(IBrush color){ink=color;InvalidateVisual();}
+        internal void Set(IReadOnlyList<VisualMark> next,double zoom){marks=next;scale=zoom*PointsToDip;InvalidateVisual();}
+        internal void SetScale(double zoom)
+        {
+            double value=zoom*PointsToDip;
+            if(scale==value)return;
+            scale=value;InvalidateVisual();
+        }
+        internal void SetInk(IBrush color)
+        {
+            if(ReferenceEquals(ink,color))return;
+            ink=color;InvalidateVisual();
+        }
         public override void Render(DrawingContext context)
         {
             var text=new Dictionary<string,FormattedText>();

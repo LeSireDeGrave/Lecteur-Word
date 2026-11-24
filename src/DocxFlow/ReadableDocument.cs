@@ -44,19 +44,38 @@ public sealed record ReadableDocument(string SourceHash, bool Available, IReadOn
     public bool PaginationAvailable => false;
 }
 
+internal sealed record PreparedReadingModel(SemanticResult Result,double Milliseconds);
+
 public static class ReadableReader
 {
     const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    public static ReadableDocument Read(InspectionResult result, CancellationToken cancellationToken = default)
+    public static ReadableDocument Read(InspectionResult result, CancellationToken cancellationToken = default)=>
+        Read(result,cancellationToken,out _);
+
+    internal static ReadableDocument Read(InspectionResult result,CancellationToken cancellationToken,out PreparedReadingModel? prepared,
+        long request=0)
     {
+        prepared=null;
         if (!result.Manifest.InspectionComplete || result.Manifest.Status == Coverage.Refused)
             return new(result.Manifest.SourceSha256 ?? "", false, [], [new("READ_INSPECTION_REFUSED", null, "Lecture indisponible : inspection refusée ou incomplète.", true)], [], []);
-        try { return new Projection(result, cancellationToken).Build(); }
-        catch (ReadLimitException)
-        { return new(result.Manifest.SourceSha256 ?? "", false, [], [new("READ_RESOURCE_LIMIT", null, "Limite de lecture simplifiée atteinte ; inventaire complet conservé.", true)], [], []); }
+        var clock=new OpenClock();
+        try
+        {
+            var projection=new Projection(result,cancellationToken,request);
+            var document=projection.Build();
+            prepared=projection.PreparedModel;
+            clock.Report(request,"reading","ready");
+            return document;
+        }
+        catch (ReadLimitException error)
+        {
+            clock.Report(request,"reading",error.Message);
+            return new(result.Manifest.SourceSha256 ?? "", false, [],
+                [new("READ_RESOURCE_LIMIT",null,"Limite de lecture simplifiée atteinte ("+error.Message+"). Inventaire complet conservé.",true)],[],[]);
+        }
     }
-    sealed class ReadLimitException : Exception;
+    sealed class ReadLimitException(string cause="quota de structure") : Exception(cause);
     sealed record TextStyle(bool? Bold = null, bool? Italic = null, bool? Underline = null, bool? Hidden = null,
         double? FontSize = null, string? FontFamily = null, string? Alignment = null, int? HeadingLevel = null)
     {
@@ -78,13 +97,16 @@ public static class ReadableReader
         readonly HashSet<string> noteStack = new(StringComparer.Ordinal);
         readonly Dictionary<(string Num, int Level), int> listCounters = [];
         readonly Dictionary<string, byte[]> checkedImages = new(StringComparer.Ordinal);
+        TextStyleResolver? visibility;
+        internal PreparedReadingModel? PreparedModel {get;private set;}
         int count, noteExpansions;
         long characters, decodedImagePixels;
         string main = "";
         TextStyle defaults = new();
-        public Projection(InspectionResult input, CancellationToken token)
+        public Projection(InspectionResult input,CancellationToken token,long request)
         {
             this.input = input; this.token = token;
+            if(OpenTrace.Log.IsEnabled())OpenTrace.Log.Phase(request,"reading","started",0,0);
             if (input.Manifest.Nodes.Count > 150_000) throw new ReadLimitException();
             index = new(input.Manifest, Check);
             nodes = index.Nodes;
@@ -94,7 +116,8 @@ public static class ReadableReader
         void Check()
         {
             token.ThrowIfCancellationRequested();
-            if (watch.ElapsedMilliseconds > 10_000 || count > 30_000 || characters > 2_000_000 || noteExpansions > 512) throw new ReadLimitException();
+            if(watch.ElapsedMilliseconds>10_000)throw new ReadLimitException("READ_WALL_LIMIT");
+            if(count>30_000||characters>2_000_000||noteExpansions>512)throw new ReadLimitException();
         }
         static bool Is(InventoryNode n, string local) => n.Name == "{" + W + "}" + local;
         static string Attr(InventoryNode n, string local) => n.Attributes.GetValueOrDefault("{" + W + "}" + local) ?? "";
@@ -117,6 +140,22 @@ public static class ReadableReader
             main = index.Main;
             var body = index.Body;
             if (body is null) return new(input.Manifest.SourceSha256 ?? "", false, [], [new("READ_MAIN_MISSING", null, "Corps documentaire absent.", true)], [], []);
+            if(input.Manifest.Nodes.Any(n=>TextStyleResolver.IsVisibility(n.Name)))
+            {
+                long started=Stopwatch.GetTimestamp();
+                var interpretation=SemanticReader.Build(input,token);
+                if(interpretation.Document is not {} semantic)
+                    throw new ReadLimitException(interpretation.Issues.FirstOrDefault()?.Code??"READ_SEMANTIC_UNAVAILABLE");
+                PreparedModel=new(interpretation,Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                try
+                {
+                    visibility=new(semantic,(code,id,message)=>
+                    {
+                        if(code=="TEXT_VISIBILITY_UNRESOLVED")Issue(code,nodes[id],message);
+                    },new TableStyleCascade(semantic,token));
+                }
+                catch(InvalidDataException error){throw new ReadLimitException(error.Message);}
+            }
             var docDefaults = input.Manifest.Nodes.FirstOrDefault(n => Is(n, "docDefaults"));
             if (docDefaults is not null) defaults = ParseProperties(docDefaults, true);
             var blocks = index.Children(body).Select(n => Convert(n, defaults, n.Id, 0)).Where(b => b.Kind != "metadata").ToList();
@@ -204,10 +243,11 @@ public static class ReadableReader
                 var properties = Child(n, "rPr"); string id = properties is null ? "" : Child(properties, "rStyle") is {} rs ? Attr(rs, "val") : "";
                 var style = inherited.Over(ResolveStyle(id, new HashSet<string>(StringComparer.Ordinal)));
                 if (properties is not null) { style = style.Over(ParseProperties(properties));Issue("READ_FORMATTING_APPROXIMATE",properties,"Propriétés de caractères interprétées partiellement ; styles Word non garantis."); }
+                if(visibility is not null)style=style with {Hidden=visibility.Resolve(n.Id,false).SuppressText};
                 var runContent = index.Children(n).Where(c => !Is(c, "rPr")).Select(c => Convert(c, style, context, depth + 1)).Where(b => b.Kind != "metadata").ToList();
                 if(properties is not null && ImportantProperties(properties))runContent.Add(Make(properties,"placeholder","",ConvertChildren(properties,style,context,depth+1),style) with {Label="Propriétés de caractères avec révision ou contenu"});
                 var nested=runContent.ToArray();
-                if (style.Hidden == true) Issue("READ_HIDDEN_TEXT", n, "Texte masqué présenté avec son état ; il n’est pas supprimé.");
+                if (style.Hidden == true) Issue("READ_HIDDEN_TEXT", n, "Run masqué en lecture normale, conservé dans la source.");
                 var block = Make(n, "run", "", nested, style); return block with { Text = block.PlainText };
             }
             if (Is(n, "t") || Is(n, "delText"))
@@ -307,10 +347,20 @@ public static class ReadableReader
                 else if(media is not null&&input.SafeMedia.TryGetValue(media.Id,out var bytes))
                 {
                     if(checkedImages.ContainsKey(media.Id))resource=media.Id;
-                    else if(checkedImages.Count<64 && decodedImagePixels+(long)(media.Width??8192)*(media.Height??8192)<=24_000_000 && SafePng.TryGetRenderableBytes(bytes,out var renderable,out string reason,token))
+                    else if(media.ContentType=="image/png"&&checkedImages.Count<64&&
+                        decodedImagePixels+(long)(media.Width??8192)*(media.Height??8192)<=24_000_000)
                     {
-                        checkedImages.Add(media.Id,renderable);resource=media.Id;decodedImagePixels+=(long)(media.Width??0)*(media.Height??0);
-                        if(reason.Length>0)Issue("READ_PNG_METADATA_OMITTED",reference,reason);
+                        var admission=DocumentRasterCache.For(input).ReadAsync(media,bytes,token).GetAwaiter().GetResult();
+                        if(admission.Raster is {} raster)
+                        {
+                            // The public reading projection exposes byte arrays.
+                            checkedImages.Add(media.Id,(byte[])raster.Bytes.Clone());
+                            resource=media.Id;
+                            decodedImagePixels+=(long)raster.Width*raster.Height;
+                            if(raster.Notice.Length>0)Issue("READ_PNG_METADATA_OMITTED",reference,raster.Notice);
+                        }
+                        else Issue(admission.Failure??"READ_IMAGE_UNQUALIFIED",reference,
+                            "Ressource PNG indisponible dans le profil de décodage borné. Repère source conservé.");
                     }
                     else Issue("READ_IMAGE_UNQUALIFIED",reference,"Image hors profil de décodage borné ; repère conservé.");
                 }
@@ -359,8 +409,7 @@ public static class ReadableReader
                 string value = Attr(p, "val"); bool toggle = value is not ("0" or "false" or "off");
                 if (Is(p, "b")) style = style with { Bold = toggle };
                 else if (Is(p, "i")) style = style with { Italic = toggle };
-                else if (Is(p, "u")) style = style with { Underline = value is not ("none" or "0" or "false") };
-                else if (Is(p, "vanish") || Is(p, "webHidden")) style = style with { Hidden = toggle };
+                else if (Is(p, "u") && value.Length>0) style = style with { Underline = value is not ("none" or "0" or "false") };
                 else if (Is(p, "sz") && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double size) && size is >= 2 and <= 160) style = style with { FontSize = size / 2 };
                 else if (Is(p, "rFonts"))
                 {

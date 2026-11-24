@@ -17,10 +17,12 @@ public sealed class ReadablePresentation
     public IReadOnlyDictionary<string,ReadableNoteLink> Notes {get;init;}=new Dictionary<string,ReadableNoteLink>();
     public IReadOnlyDictionary<string,ReadableFieldValue> Fields {get;init;}=new Dictionary<string,ReadableFieldValue>();
     public IReadOnlySet<string> FieldDetailNodes {get;init;}=new HashSet<string>();
+    public IReadOnlySet<string> HiddenNodes {get;init;}=new HashSet<string>();
     public IReadOnlyList<ReadableSection> Sections {get;init;}=[];
     public IReadOnlyList<FlowIssue> Issues {get;init;}=[];
     public string TextFor(ReadableBlock block)
     {
+        if(block.Hidden)return "";
         if(block.Kind=="note"&&Notes.TryGetValue(block.Id,out var note)&&note.Verified)return "";
         if(FieldDetailNodes.Contains(block.Id))return "";
         if(block.Kind=="field")return Fields.GetValueOrDefault(block.Id) is {Matched:true}?string.Concat(block.Children.Select(TextFor)):"";
@@ -75,7 +77,8 @@ public sealed class ReadablePresentation
             // Parse fields per story, never across distinct note bodies.
             foreach(var root in input.Manifest.Nodes.Where(n=>Is(n,"body")||Is(n,"hdr")||Is(n,"ftr")||Is(n,"footnote")||Is(n,"endnote")))
                 if(!index.IsUnderInactiveBranch(root))ScanFields(root);
-            return new(){BodyBlocks=body,Notes=notes,Fields=fields,FieldDetailNodes=details,Sections=Sections(body),Issues=issues};
+            return new(){BodyBlocks=body,Notes=notes,Fields=fields,FieldDetailNodes=details,
+                HiddenNodes=blocks.Values.Where(b=>b.Hidden).Select(b=>b.Id).ToHashSet(StringComparer.Ordinal),Sections=Sections(body),Issues=issues};
         }
         sealed class Field(InventoryNode begin,bool simple)
         {

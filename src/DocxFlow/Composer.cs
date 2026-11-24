@@ -13,6 +13,14 @@ public sealed record PageLine(string ParagraphId, SourceLocation Source, string 
     public float Height {get;init;}
     public string SourceBreak {get;init;}="";
     internal bool HasExplicitPageBreak {get;init;}
+    internal PlacedFlowRegion? FlowRegion {get;init;}
+    internal PageRegion? SideExclusion {get;init;}
+    internal FootnoteRule? NoteRule {get;init;}
+    internal PlacedParagraphBorder? ParagraphBorder {get;init;}
+    internal PlacedParagraphBorder? ParagraphTopBorder {get;init;}
+    internal PlacedParagraphShading? ParagraphShading {get;init;}
+    internal PlacedParagraphSideBorder? LeftBorder {get;init;}
+    internal PlacedParagraphSideBorder? RightBorder {get;init;}
     public int Section {get;init;}=1;
     public string? CellId {get;init;}
     public bool IsRepeated {get;init;}
@@ -21,16 +29,28 @@ public sealed record PageLine(string ParagraphId, SourceLocation Source, string 
     internal ComposedLine? Native {get;init;}
     internal float NativeOffsetX {get;init;}
     internal float NativeTop {get;init;}
+    internal bool ClipToLineBox {get;init;}
+    internal FrameRotation? FrameTransform {get;init;}
 }
+internal sealed record PlacedParagraphBorder(ParagraphBorderStroke Border,float Left,float Right,float Top);
+internal sealed record PlacedParagraphSideBorder(ParagraphBorderStroke Border,float X,float ExtendedBottom=0,float ExtendedTop=0);
+internal sealed record PlacedParagraphShading(ParagraphShading Shading,float Left,float Right);
 public sealed record ComposedPage(int Number, IReadOnlyList<PageLine> Lines)
 {
     public IReadOnlyList<PageCell> Cells {get;init;}=[];
     public PageGeometry Geometry {get;init;}=new();
     public int Section {get;init;}=1;
     internal LineComposer? NativePainter {get;init;}
+    internal SemanticSource? IntercalarySectionBreak {get;init;}
+    internal int? PrintedPageNumber {get;init;}
     internal IReadOnlyList<PageStoryPlacement> RunningStories {get;init;}=[];
-    internal IEnumerable<PageLine> DisplayLines=>Lines.Concat(RunningStories.SelectMany(s=>s.Lines));
-    internal IEnumerable<PageCell> DisplayCells=>Cells.Concat(RunningStories.SelectMany(s=>s.Cells));
+    internal IReadOnlyList<PageFootnote> Footnotes {get;init;}=[];
+    internal IReadOnlyList<PlacedFloatingPicture> FloatingPictures {get;init;}=[];
+    internal IReadOnlyList<PlacedFloatingTextFrame> FloatingTextFrames {get;init;}=[];
+    internal IEnumerable<PageLine> MainDisplayLines=>Lines.Concat(Footnotes.SelectMany(n=>n.Lines)).Concat(RunningStories.SelectMany(s=>s.Lines));
+    internal IEnumerable<PageCell> MainDisplayCells=>Cells.Concat(RunningStories.SelectMany(s=>s.Cells));
+    internal IEnumerable<PageLine> DisplayLines=>MainDisplayLines.Concat(FloatingTextFrames.SelectMany(f=>f.Lines));
+    internal IEnumerable<PageCell> DisplayCells=>MainDisplayCells.Concat(FloatingTextFrames.SelectMany(f=>f.Cells));
 }
 public sealed record Composition(IReadOnlyList<ComposedPage> Pages, IReadOnlyList<FlowIssue> Issues)
 {
@@ -121,7 +141,9 @@ public static partial class Composer
     public static void DrawPage(SKCanvas canvas,ComposedPage page)
     {
         canvas.Clear(SKColors.White);
-        if(page.RunningStories.Count>0||page.Cells.Count>0||page.Lines.Any(l=>l.Native is not null||l.Fragments.Count>0||l.Images.Count>0)){DrawStyledPage(canvas,page);return;}
+        if(page.FloatingPictures.Count>0||page.FloatingTextFrames.Count>0||page.RunningStories.Count>0||page.Cells.Count>0||
+            page.Footnotes.Count>0||
+            page.Lines.Any(l=>l.Native is not null||l.Fragments.Count>0||l.Images.Count>0)){DrawStyledPage(canvas,page);return;}
         using var typeface=CreateTypeface();using var font=new SKFont(typeface,Composition.FontSize);
         using var paint=new SKPaint{Color=SKColors.Black,IsAntialias=true};
         foreach(var line in page.Lines)canvas.DrawText(line.Text,line.X,line.Baseline,font,paint);

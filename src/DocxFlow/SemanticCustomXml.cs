@@ -41,8 +41,19 @@ internal static partial class SemanticReader
             var tracked=links.Concat(manifest.Relationships.Where(r=>r.Type==PropertiesRelation))
                 .Select(r=>(r.SourcePart,r.Id)).ToHashSet();
             var bindings=new Dictionary<Guid,string>();
+            var inventoriedInstructions=new HashSet<string>(StringComparer.Ordinal);
+            foreach(var field in fields.Where(f=>f.StructureVerified))
+            {
+                Check();
+                if(field.Command is not ("PAGE" or "NUMPAGES" or "SECTIONPAGES" or "PAGEREF" or "REF" or
+                    "TOC" or "TC" or "DOCPROPERTY" or "SEQ" or "CITATION" or "BIBLIOGRAPHY"))continue;
+                inventoriedInstructions.Add(field.Id);
+                if(field.SeparatorId is {} separator)inventoriedInstructions.Add(separator);
+                if(field.EndId is {} end)inventoriedInstructions.Add(end);
+                foreach(string id in field.InstructionIds)
+                    if(index.Nodes[id].ParentId is {} parent)inventoriedInstructions.Add(parent);
+            }
 
-            if(bibliographies>0)
             foreach(var node in index.Ordered)
             {
                 Check();
@@ -54,31 +65,41 @@ internal static partial class SemanticReader
                 switch(node.Name.AsSpan(node.Name.IndexOf('}')+1))
                 {
                     case "dataBinding":
+                        if(!Active(node))break;
                         if(Active(node)&&index.Parent(node) is {} parent&&Word(parent,"sdtPr")&&
                             (Word(node,"dataBinding")||node.Name=="{http://schemas.microsoft.com/office/word/2012/wordml}dataBinding")&&
                             ParseGuid(Get(node,"storeItemID",Word(node,"dataBinding")?W:"http://schemas.microsoft.com/office/word/2012/wordml")) is {} storeId)
+                        {
                             bindings.TryAdd(storeId,node.Id);
-                        possibleConsumer??=node;
+                        }
+                        else possibleConsumer??=node;
                         break;
                     case "bibliography":
                         if(Active(node)&&Word(node,"bibliography")&&index.Parent(node) is {} control&&Word(control,"sdtPr"))
                             bibliographyConsumer??=node.Id;
-                        possibleConsumer??=node;
                         break;
                     case "fldSimple":
                     case "fldChar":
                     case "instrText":
                     case "delInstrText":
+                        if(Active(node)&&Word(node,node.Name[(node.Name.IndexOf('}')+1)..])&&!inventoriedInstructions.Contains(node.Id))
+                            possibleConsumer??=node;
+                        break;
                     case "docPartObj":
                     case "docPartList":
                     case "docPartGallery":
+                    case "docPartCategory":
+                    case "docPartUnique":
+                        if(Active(node)&&node.Name.StartsWith("{"+W+"}",StringComparison.Ordinal)&&!IsBuildingBlockSelector(node))
+                            possibleConsumer??=node;
+                        break;
                     case "customXml":
                     case "customXmlPr":
                     case "altChunk":
                     case "subDoc":
                     case "mailMerge":
                     case "attachedTemplate":
-                        possibleConsumer??=node;
+                        if(Active(node)&&node.Name.StartsWith("{"+W+"}",StringComparison.Ordinal))possibleConsumer??=node;
                         break;
                 }
             }
@@ -102,7 +123,7 @@ internal static partial class SemanticReader
                 if(link.SourcePart!=index.Main||link.Mode!="Internal"||target is null||
                     !uniqueTarget||index.Relation(link.SourcePart,link.Id)!=link)
                     decision=decision with{Reason="Relation customXml externe, ambiguë ou hors du document principal."};
-                else if(target.Name==BibliographyName+"Sources")
+                else
                     decision=Classify(decision,target,firstProps,properties);
                 decisions.Add(decision);
             }
@@ -110,20 +131,36 @@ internal static partial class SemanticReader
 
             InventoryNode? Root(string? part)=>part is null?null:Unique(rootNodes[part]);
 
+            bool IsBuildingBlockSelector(InventoryNode node)
+            {
+                var container=Word(node,"docPartObj")||Word(node,"docPartList")?node:index.Parent(node);
+                if(container is null||!(Word(container,"docPartObj")||Word(container,"docPartList"))||
+                    index.Parent(container) is not {} properties||!Word(properties,"sdtPr")||
+                    !AttributesAre(container,null))return false;
+                var selector=index.LogicalChildren(container).Take(4).ToArray();
+                if(selector.Length>3||selector.Select(n=>n.Name).Distinct(StringComparer.Ordinal).Count()!=selector.Length)
+                    return false;
+                return selector.All(n=>ChildrenAre(n,null)&&
+                    (Word(n,"docPartUnique")&&AttributesAre(n,null)||
+                     (Word(n,"docPartGallery")||Word(n,"docPartCategory"))&&
+                     AttributesAre(n,"{"+W+"}val")&&Get(n,"val").Length>0));
+            }
+
             SemanticCustomXml Classify(SemanticCustomXml value,InventoryNode target,Relationship? propertiesLink,InventoryNode? properties)
             {
-                if(bibliographies!=1||types.GetValueOrDefault(target.Source.PartUri) is not ("application/xml" or "text/xml")||
-                    !ValidBibliography(target,value.Entries))
+                bool bibliography=target.Name==BibliographyName+"Sources";
+                if(types.GetValueOrDefault(target.Source.PartUri) is not ("application/xml" or "text/xml")||
+                    bibliography&&(bibliographies!=1||!ValidBibliography(target,value.Entries)))
                     return value with{Reason="Collection bibliographique ambiguë ou structure hors profil."};
                 if(value.PartRelations.Length!=1||propertiesLink is not {Mode:"Internal"}||properties is null||
                     value.StoreId is not {} id||types.GetValueOrDefault(properties.Source.PartUri)!=PropertiesType||
                     byTarget[properties.Source.PartUri].Count()!=1||bySource.Contains(properties.Source.PartUri)||
-                    allStores[id].Count()!=1||!ValidProperties(properties))
-                    return value with{Reason="Propriétés, schéma ou identifiant du magasin bibliographique non établis."};
+                    allStores[id].Count()!=1||!ValidProperties(properties,bibliography))
+                    return value with{Reason="Propriétés, schéma ou identifiant du magasin XML non établis."};
 
                 if(bindings.TryGetValue(id,out var binding))
-                    return value with{Impact=DependencyImpact.AffectsLayout,Reason="Contrôle de contenu lié au magasin bibliographique.",ConsumerId=binding};
-                if(bibliographyConsumer is not null)
+                    return value with{Impact=DependencyImpact.AffectsLayout,Reason="Contrôle de contenu lié au magasin XML.",ConsumerId=binding};
+                if(bibliography&&bibliographyConsumer is not null)
                     return value with{Impact=DependencyImpact.AffectsLayout,Reason="Champ ou contrôle bibliographique présent.",ConsumerId=bibliographyConsumer};
                 if(explicitReferences.TryGetValue((value.Relation.SourcePart,value.Relation.Id),out var reference)||
                     explicitReferences.TryGetValue((propertiesLink.SourcePart,propertiesLink.Id),out reference))
@@ -160,14 +197,17 @@ internal static partial class SemanticReader
             return true;
         }
 
-        bool ValidProperties(InventoryNode properties)
+        bool ValidProperties(InventoryNode properties,bool bibliography)
         {
             if(properties.Name!=StoreName+"datastoreItem"||!ChildrenAre(properties,StoreName+"schemaRefs"))return false;
             var schemas=Unique(index.RawChildren(properties).Where(n=>n.Name==StoreName+"schemaRefs"));
-            if(schemas is null||!ChildrenAre(schemas,StoreName+"schemaRef"))return false;
-            var schema=Unique(index.RawChildren(schemas).Where(n=>n.Name==StoreName+"schemaRef"));
-            return schema is not null&&Get(schema,"uri",Store)==Bibliography&&ChildrenAre(schema,null)&&
-                AttributesAre(properties,StoreName+"itemID")&&AttributesAre(schemas,null)&&AttributesAre(schema,StoreName+"uri");
+            if(!AttributesAre(properties,StoreName+"itemID"))return false;
+            if(schemas is null)return !bibliography&&ChildrenAre(properties,null);
+            if(!ChildrenAre(schemas,StoreName+"schemaRef")||!AttributesAre(schemas,null))return false;
+            var references=index.RawChildren(schemas).Where(n=>n.Name==StoreName+"schemaRef").ToArray();
+            return (!bibliography||references is [var reference]&&Get(reference,"uri",Store)==Bibliography)&&
+                references.All(schema=>!string.IsNullOrWhiteSpace(Get(schema,"uri",Store))&&ChildrenAre(schema,null)&&
+                    AttributesAre(schema,StoreName+"uri"));
         }
 
         bool ChildrenAre(InventoryNode node,string? name)

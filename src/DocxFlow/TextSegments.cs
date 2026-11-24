@@ -16,7 +16,10 @@ internal sealed partial class TypographySession
     sealed record SegmentKey(TextStyle Style, byte Level, string Script, string Language, string Slot,
         string Family, FontRequest? Request, ThemeFont? Theme, bool Complex, bool CanShape)
     {
-        internal float Size => Complex ? Style.ComplexSize ?? Style.Size : Style.Size;
+        internal float? FittedSize {get;init;}
+        internal bool ReducedCapital {get;init;}
+        internal float Size => FittedSize ?? Math.Max(1,(Complex ? Style.ComplexSize ?? Style.Size : Style.Size)-
+            (ReducedCapital?2:0));
         internal bool Bold => Complex ? Style.ComplexBold ?? Style.Bold : Style.Bold;
         internal bool Italic => Complex ? Style.ComplexItalic ?? Style.Italic : Style.Italic;
     }
@@ -26,11 +29,15 @@ internal sealed partial class TypographySession
     static readonly HashSet<string> ComplexScripts =
         ["Arab","Hebr","Syrc","Thaa","Nkoo","Adlm","Deva","Beng","Taml","Telu","Knda","Mlym","Gujr","Guru","Orya","Sinh","Thai","Laoo","Mymr","Khmr","Tibt","Mong"];
 
-    TextParagraph BuildParagraph(SemanticElement paragraph,IEnumerable<TextToken> tokens)
+    TextParagraph BuildParagraph(SemanticElement paragraph,IEnumerable<TextToken> tokens,
+        TextStyle? generationStyle=null,GeneratedTocRow? tocRow=null)
     {
         long start=Stopwatch.GetTimestamp();
-        var mark=styles.Resolve(paragraph.Id,true);
-        var (rtl,directionOrigin)=styles.ParagraphDirection(paragraph.Id);
+        var mark=generationStyle??styles.Resolve(paragraph.Id,true);
+        if(mark.Hidden||mark.SpecialVanish||mark.VisibilityUncertain)
+            Issue("TEXT_HIDDEN_PARAGRAPH_MARK",paragraph.Id,"Jonction ou marque de paragraphe masquée hors profil paginé.");
+        var (rtl,directionOrigin)=tocRow is null?styles.ParagraphDirection(paragraph.Id):(false,(SemanticSource?)null);
+        string paragraphId=tocRow?.Id??paragraph.Id;
         styleTicks+=Stopwatch.GetTimestamp()-start;
 
         start=Stopwatch.GetTimestamp();
@@ -39,10 +46,17 @@ internal sealed partial class TypographySession
         foreach(var item in tokens)
         {
             Check();
+            if(item.Style?.SuppressText==true)
+            {
+                if(item.Style.VisibilityUncertain)
+                    Issue("TEXT_VISIBILITY_UNRESOLVED",paragraph.Id,"Visibilité du contenu source indéterminée.");
+                if(item.Role==TextRole.Control&&item.Control is not ("Symbol" or "SoftHyphen" or "NoBreakHyphen"))
+                    Issue("TEXT_HIDDEN_CONTROL_UNQUALIFIED",paragraph.Id,"Effet géométrique du contrôle masqué hors profil paginé.");
+                continue;
+            }
             string? text=item.Role switch
             {
-                TextRole.Source or TextRole.StoredField when item.Style?.Hidden!=true => item.Original,
-                TextRole.Control when item.Control=="Symbol"&&item.Style?.Hidden==true => null,
+                TextRole.Source or TextRole.StoredField => item.Original,
                 TextRole.Control => item.Control switch
                 {
                     "Tab"=>"\t","Break"=>"\n","SoftHyphen"=>"\u00ad","NoBreakHyphen"=>"\u2011",_=>"\ufffc"
@@ -60,9 +74,11 @@ internal sealed partial class TypographySession
         var fragments=new List<TextFragment>();
         var graphs=new List<Graph>();
         var keys=new List<SegmentKey>();
+        bool leftToRight=!rtl;
         if(context.Length>0)
         {
             var levels=unicode.Levels(context,rtl);
+            leftToRight&=levels.All(level=>level%2==0);
             var boundaries=new SortedSet<int>(unicode.Boundaries(context,true,"und",Check).Select(b=>b.Offset));
             foreach(var control in slices.Where(s=>s.Token.Role==TextRole.Control))
             {
@@ -120,7 +136,7 @@ internal sealed partial class TypographySession
             {
                 string original=context[graph.Start..graph.End];
                 var symbol=LegacySymbols.SingleScalar(original,out int code)?
-                    MeasureSymbol(paragraph.Id,graph.Start,original,code,key,Check,CountGlyphs):null;
+                    MeasureSymbol(paragraphId,graph.Start,original,code,key,Check,CountGlyphs):null;
                 Add(i,i+1,null,symbol);
                 i++;
                 continue;
@@ -157,8 +173,9 @@ internal sealed partial class TypographySession
             fragments[i]=fragments[i] with { Breaks=[..byCut[i].Select(b=>b with {Offset=b.Offset-fragments[i].ContextOffset})] };
         var order=VisualOrder(fragments);
         segmentTicks+=Stopwatch.GetTimestamp()-start;
-        return new(paragraph.Id,paragraph.StoryId!,rtl,mark,[..fragments],order)
+        return new(paragraphId,paragraph.StoryId!,rtl,mark,[..fragments],order)
         {
+            TocRow=tocRow,
             ContextLength=context.Length,
             Context=context,
             DirectionOrigin=directionOrigin,
@@ -170,6 +187,11 @@ internal sealed partial class TypographySession
         {
             var token=slice.Token;
             var control=new TextControl(token.Source,slice.Start,token.Control!){Style=token.Style};
+            if(token.Control=="NoBreakHyphen"&&leftToRight)
+            {
+                var hyphen=ShapeLineDecoration(paragraph.Id,"\u2011",token.Style??mark,token.Source,0,Check,CountGlyphs);
+                return control with{NonBreakingHyphen=hyphen};
+            }
             if(token.Control!="Symbol")return control;
             Check();
             string? family=model.Attribute(token.Source.NodeId,"font");
@@ -211,19 +233,29 @@ internal sealed partial class TypographySession
                 fragments.Add(symbol with {Sources=source.ToImmutable()});
                 return;
             }
+            string? limitation=null;
+            if(font is not null&&descriptor.Style.VerticalAlignment!="baseline")
+            {
+                if(FitScript(descriptor,GetFace(font)) is {} fitted)descriptor=fitted;
+                else
+                {
+                    limitation="TEXT_SCRIPT_METRICS_UNQUALIFIED";
+                    Issue(limitation,id,"La face ne fournit pas de métriques valides pour l’indice ou l’exposant.");
+                }
+            }
             if (font is null && descriptor.CanShape)
                 Issue("TEXT_MISSING_FACE",id,"Aucune face admise ne couvre ce fragment. Texte et étendue conservés.");
             else if (font?.Status=="substituted")
                 Issue("TEXT_FONT_SUBSTITUTION",id,font.RequestedFamily+" → "+font.UsedFamily+". "+font.Reason);
             var features=Features(descriptor);
             int[] starts=[..graphs.Skip(from).Take(to-from).Select(g=>g.Start-offset)];
-            TextMeasure? measured=font is null ? null : Shape(paragraph.Id,context,offset,end,descriptor,font,features,id,starts);
-            fragments.Add(new(paragraph.Id,offset,text,source.ToImmutable(),descriptor.Script,descriptor.Language,descriptor.Level,
+            TextMeasure? measured=font is null||limitation is not null ? null : Shape(paragraphId,context,offset,end,descriptor,font,features,id,starts);
+            fragments.Add(new(paragraphId,offset,text,source.ToImmutable(),descriptor.Script,descriptor.Language,descriptor.Level,
                 descriptor.Style,descriptor.Slot,descriptor.Family,descriptor.Request,descriptor.Theme?.Source,
                 font is null ? null : font with { Data=null },descriptor.Size,features,measured,[])
             {
                 GraphemeStarts=ImmutableCollectionsMarshal.AsImmutableArray(starts),
-                MeasurementIssue=font is not null?null:descriptor.CanShape?"TEXT_MISSING_FACE":"TEXT_SEGMENT_UNQUALIFIED"
+                MeasurementIssue=limitation??(font is not null?null:descriptor.CanShape?"TEXT_MISSING_FACE":"TEXT_SEGMENT_UNQUALIFIED")
             });
         }
     }
@@ -283,6 +315,13 @@ internal sealed partial class TypographySession
         ThemeFont? theme=request?.Theme==true?ResolveTheme(request.Value,graph.Script):null;
         string family=request is null?"DejaVu Serif":request.Theme?theme?.Family??"thème:"+request.Value:request.Value;
         bool canShape=graph.CanShape;
+        if(canShape&&(style.Caps||style.SmallCaps)&&
+            CapitalDisplay(context[graph.Start..graph.End],language) is null)
+        {
+            Issue("TEXT_CAPITAL_MAPPING_UNQUALIFIED",graph.Slice.Token.Source.NodeId,
+                "La capitale d’affichage ne conserve pas les limites UTF-16 du caractère source.");
+            canShape=false;
+        }
         if (family.Length is 0 or >128)
         {
             Issue("TEXT_FONT_REQUEST_INVALID",graph.Slice.Token.Source.NodeId,"Nom de face invalide. Requête conservée, mesure refusée.");
@@ -290,7 +329,8 @@ internal sealed partial class TypographySession
         }
         if(style.RightToLeft && (graph.Level&1)==0 && graph.Slice.Token.Source.NodeId is {} id && graph.CanShape)
             Issue("TEXT_WORD_RTL_PARTIAL",id,"Propriété rtl conservée. Réordonnancement Unicode effectué, règles de forçage Word non qualifiées.");
-        return new(style,graph.Level,graph.Script,language,slot,family,request,theme,complex,canShape);
+        return new(style,graph.Level,graph.Script,language,slot,family,request,theme,complex,canShape)
+            {ReducedCapital=style.SmallCaps&&Rune.IsLower(scalar)};
     }
 
     ThemeFont? ResolveTheme(string key,string script)
@@ -311,6 +351,11 @@ internal sealed partial class TypographySession
     FontResolution? Select(string text,SegmentKey key)
     {
         if(!key.CanShape)return null;
+        if(key.Style.Caps||key.Style.SmallCaps)
+        {
+            if(CapitalDisplay(text,key.Language) is not {} displayed)return null;
+            text=displayed;
+        }
         long start=Stopwatch.GetTimestamp();
         try
         {

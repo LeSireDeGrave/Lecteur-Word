@@ -183,6 +183,6 @@ public static partial class Composer
     {
         "center"=>geometry.Left+table.Indent+(geometry.Width-geometry.Left-geometry.Right-width-table.Indent)/2,
         "right"=>geometry.Width-geometry.Right-width,
-        _=>geometry.Left+table.Indent
+        _=>geometry.Left+table.Indent-table.LeadingCellPadding
     };
 }

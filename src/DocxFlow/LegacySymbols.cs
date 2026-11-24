@@ -12,6 +12,24 @@ internal static class LegacySymbols
 
     internal static bool Private(int value)=>value is >=0xe000 and <=0xf8ff or >=0xf0000 and <=0xffffd or >=0x100000 and <=0x10fffd;
 
+    // Names from the published Adobe Symbol Encoding. Delimiter components
+    // have distinct outlines and do not become full parenthesis characters.
+    internal static string? PostScriptGlyphName(byte code)=>code switch
+    {
+        0x20=>"space",0x28=>"parenleft",0x29=>"parenright",0x2b=>"plus",0x2d=>"minus",0x3d=>"equal",
+        0x61=>"alpha",0x62=>"beta",0x67=>"gamma",0x70=>"pi",0x71=>"theta",
+        0xa3=>"lessequal",0xa5=>"infinity",0xb0=>"degree",0xb1=>"plusminus",
+        0xb3=>"greaterequal",0xb4=>"multiply",0xb7=>"bullet",0xb8=>"divide",0xb9=>"notequal",
+        0xd5=>"product",0xd6=>"radical",0xe5=>"summation",0xf2=>"integral",
+        0xe6=>"parenlefttp",0xe7=>"parenleftex",0xe8=>"parenleftbt",
+        0xe9=>"bracketlefttp",0xea=>"bracketleftex",0xeb=>"bracketleftbt",
+        0xec=>"bracelefttp",0xed=>"braceleftmid",0xee=>"braceleftbt",0xef=>"braceex",
+        0xf6=>"parenrighttp",0xf7=>"parenrightex",0xf8=>"parenrightbt",
+        0xf9=>"bracketrighttp",0xfa=>"bracketrightex",0xfb=>"bracketrightbt",
+        0xfc=>"bracerighttp",0xfd=>"bracerightmid",0xfe=>"bracerightbt",
+        _=>null
+    };
+
     internal static (int Code,string Face,string Source)? Mapping(string family,int sourceCode)
     {
         int code=sourceCode is >=0xf020 and <=0xf0ff?sourceCode-0xf000:sourceCode;
@@ -51,7 +69,8 @@ internal static class SymbolCmap
     internal enum Status { Absent, Present, Invalid }
     static int U16(ReadOnlySpan<byte> table,int offset)=>BinaryPrimitives.ReadUInt16BigEndian(table[offset..]);
 
-    internal static (Status Status,ushort Glyph) Lookup(ReadOnlySpan<byte> cmap,int code,int glyphCount,Action check)
+    internal static (Status Status,ushort Glyph) Lookup(ReadOnlySpan<byte> cmap,int code,int glyphCount,Action check,
+        int firstSymbol=0xf020)
     {
         if(cmap.Length<4||U16(cmap,0)!=0)return (Status.Invalid,0);
         int entries=U16(cmap,2);
@@ -76,8 +95,9 @@ internal static class SymbolCmap
         int starts=16+segmentsTwice,deltas=starts+segmentsTwice,ranges=deltas+segmentsTwice;
         int glyphArray=ranges+segmentsTwice,previous=-1;
         ushort glyph=0;
-        // The OOXML byte form uses the same symbol slots at F020…F0FF.
-        int alias=code is >=0x20 and <=0xff?code+0xf000:-1;
+        // A legacy byte starts at OS/2.usFirstCharIndex in a symbol subtable.
+        // A private Unicode scalar continues to use its own code.
+        int alias=code is >=0x20 and <=0xff?firstSymbol+code-0x20:-1;
         ushort aliasGlyph=0;
         for(int i=0;i<segmentsTwice;i+=2)
         {

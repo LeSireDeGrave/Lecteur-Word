@@ -6,6 +6,21 @@ namespace LecteurWord.Flow;
 
 public static partial class Composer
 {
+    internal static PageLine? PlaceFloatingTextLine(FloatingTextFrame frame,LayoutParagraph paragraph,ComposedLine source)
+    {
+        try
+        {
+            var spacing=paragraph.Properties;
+            var line=MeasureNative(paragraph,source);
+            float height=line.Height+spacing.Before+spacing.After;
+            float available=frame.Height-frame.Top-frame.Bottom;
+            if(height>available+.01f)return null;
+            float top=frame.Top+spacing.Before+(frame.Center?(available-height)/2:0);
+            return PositionNative(line,paragraph,frame.Left,top,frame.Left,frame.Top,frame.Width-frame.Right,frame.Height-frame.Bottom);
+        }
+        catch(LayoutFailure){return null;}
+    }
+
     internal static LayoutTable FitPageTable(LayoutTable table,Dictionary<string,LayoutParagraph> paragraphs,Action check,
         Func<LayoutParagraph,(float Minimum,float Preferred)> intrinsic)
     {
@@ -22,12 +37,17 @@ public static partial class Composer
     }
 
     internal static Composition PlaceNativeLayout(PaginatedDocument document,
-        IReadOnlyDictionary<string,ImmutableArray<ComposedLine>> source,LineComposer painter,Action check,Action firstPage)
+        IReadOnlyDictionary<string,ImmutableArray<ComposedLine>> source,LineComposer painter,Action check,Action firstPage,
+        IReadOnlyList<PageSection>? paper=null,Func<LayoutParagraph,LineRegion,LineResume,ImmutableArray<ComposedLine>>? reflow=null,
+        FootnoteLayout? footnotes=null,PageRegionReplay? replay=null,List<PageRegionCheckpoint>? checkpoints=null,
+        IReadOnlySet<string>? regionalTables=null,Func<string,long,RegionalTable>? fitRegion=null,
+        IReadOnlyDictionary<int,EndnoteGroup>? endnotes=null,bool completeBody=false,bool textBoxBorders=false)
     {
         document=ApplyContextualSpacing(document);
         var measured=new List<MeasuredParagraph>();
         try
         {
+            if(textBoxBorders)document=JoinTextBoxBorders(document);
             foreach(var p in document.Paragraphs)
             {
                 check();
@@ -36,13 +56,78 @@ public static partial class Composer
                 measured.Add(new(p,lines.Select(l=>MeasureNative(p,l)).ToImmutableArray()));
             }
             using var fonts=new LayoutFonts();
-            var placed=PlaceMeasured(document,measured,fonts,check,native:true,firstPage:firstPage);
-            return placed with {Pages=placed.Pages.Select(p=>p with {NativePainter=painter}).ToImmutableArray()};
+            var placed=PlaceMeasured(document,measured,fonts,check,native:true,firstPage:firstPage,paper:paper,
+                reflow:reflow is null?null:(p,region,start)=>reflow(p,region,start).Select(l=>MeasureNative(p,l)).ToArray(),
+                footnotes:footnotes,replay:replay,checkpoints:checkpoints,regionalTables:regionalTables,tableAt:fitRegion is null?null:TableAt,
+                endnotes:endnotes,completeBody:completeBody,textBoxBorders:textBoxBorders);
+            return placed with {Pages=placed.Pages.Select(p=>p.NativePainter==painter?p:p with {NativePainter=painter}).ToImmutableArray()};
+
+            MeasuredTable TableAt(string id,long width)
+            {
+                var fitted=fitRegion!(id,width);
+                var region=ApplyContextualSpacing(fitted.Layout);
+                var cells=new Dictionary<string,MeasuredParagraph>(StringComparer.Ordinal);
+                foreach(var paragraph in region.Paragraphs)
+                {
+                    check();
+                    var start=source[paragraph.Id][0];
+                    var bounds=new LineRegion(paragraph.CellOwner!,0,PageComposer.Emu(paragraph.Geometry.Width)-
+                        PageComposer.Emu(paragraph.Geometry.Left)-PageComposer.Emu(paragraph.Geometry.Right));
+                    var lines=reflow!(paragraph,bounds,start.Resume);
+                    if(lines.Any(l=>l.Diagnostics.Any(issue=>issue.Code=="LINE_OVERFLOW")))
+                        throw new LayoutFailure("LINE_OVERFLOW",paragraph.Source);
+                    cells.Add(paragraph.Id,new(paragraph,lines.Select(l=>MeasureNative(paragraph,l)).ToImmutableArray()));
+                }
+                return MeasureTable(fitted.Table,cells,check);
+            }
         }
         catch(LayoutFailure failure)
         {
             return new([], [new(failure.Message,failure.SourceLocation,"Contraintes de placement incompatibles. Provenance et texte conservés.",true)]);
         }
+        catch(TableWidthFailure failure)
+        {
+            return new([], [new(failure.Message,failure.Location,failure.Detail,true)]);
+        }
+    }
+
+    // ISO/IEC 29500-1 §17.3.1.4: compare the whole set on adjoining paragraphs.
+    // The auxiliary compositor subsequently requires the whole story on one sheet.
+    static PaginatedDocument JoinTextBoxBorders(PaginatedDocument document)
+    {
+        if(!document.Paragraphs.Any(p=>p.Properties.HasBorders))return document;
+        var original=document.Paragraphs;
+        var paragraphs=original.ToArray();
+        for(int i=0;i<paragraphs.Length;i++)
+        {
+            var p=original[i];
+            var props=p.Properties;
+            if(!props.HasBorders||p.TableId is not null||p.CellOwner is not null)continue;
+            bool fromPrevious=i>0&&Join(original[i-1],p);
+            bool toNext=i+1<original.Count&&Join(p,original[i+1]);
+            paragraphs[i]=p with{Properties=props with
+            {
+                TopBorder=fromPrevious?null:props.TopBorder,
+                BottomBorder=toNext?props.BetweenBorder is {} between?between with{Space=props.After}:null:props.BottomBorder,
+                ContinuesSideBorders=fromPrevious
+            }};
+        }
+        return document with{Paragraphs=paragraphs};
+
+        static bool Join(LayoutParagraph previous,LayoutParagraph next)
+        {
+            if(previous.TableId is not null||previous.CellOwner is not null||next.Properties.PageBreakBefore)return false;
+            var a=previous.Properties;var b=next.Properties;
+            if(!Same(a.TopBorder,b.TopBorder)||!Same(a.BottomBorder,b.BottomBorder)||
+                !Same(a.LeftBorder,b.LeftBorder)||!Same(a.RightBorder,b.RightBorder)||!Same(a.BetweenBorder,b.BetweenBorder))
+                return false;
+            if(a.Left!=b.Left||a.Right!=b.Right||Math.Min(0,a.FirstLine)!=Math.Min(0,b.FirstLine))
+                throw new LayoutFailure("PAGE_PARAGRAPH_BORDER_GROUP_INDENT_UNQUALIFIED",next.Source);
+            return true;
+        }
+
+        static bool Same(ParagraphBorderStroke? a,ParagraphBorderStroke? b)=>
+            a is null?b is null:b is not null&&a==(b with{Source=a.Source});
     }
 
     internal static ComposedPage PlaceContinuousTable(LayoutTable table,
@@ -85,7 +170,7 @@ public static partial class Composer
 
     static MeasuredLine MeasureNative(LayoutParagraph paragraph,ComposedLine line)
     {
-        if(line.Height is not {} heightEmu||line.Ascent is not {} ascent||line.Occupied is not {} width)
+        if(line.Height is not {} heightEmu||line.Ascent is not {} ascent||line.Descent is not {} descent||line.Occupied is not {} width)
             throw new LayoutFailure("PAGE_LINE_WITHOUT_MEASUREMENT",paragraph.Source);
         float natural=PageComposer.Points(heightEmu);
         var p=paragraph.Properties;
@@ -96,13 +181,21 @@ public static partial class Composer
             "auto"=>natural*p.Line/240,
             _=>throw new LayoutFailure("PAGE_LINE_SPACING_UNQUALIFIED",paragraph.Source)
         };
-        if(!float.IsFinite(height)||height<natural-.01f)
+        bool clipped=p.LineRule=="exact"&&height<natural;
+        if(!float.IsFinite(height)||height<=0||!clipped&&height<natural-.01f)
             throw new LayoutFailure("PAGE_LINE_SPACING_CLIPS",paragraph.Source);
         string text=string.Concat(line.Parts.Select(part=>part.Text??(part.Control?.Kind switch
             {"Tab"=>"\t","NoBreakHyphen"=>"\u2011","SoftHyphen"=>"\u00ad",_=>""})));
         string sourceBreak=line.Cut is LineCutKind.Line or LineCutKind.Mandatory?"\n":"";
-        return new([],text,PageComposer.Points(width),height,PageComposer.Points(ascent)+(height-natural)/2,sourceBreak,line.Cut==LineCutKind.Page)
-        {Native=line};
+        float baseline=clipped?height-PageComposer.Points(descent):PageComposer.Points(ascent)+(height-natural)/2;
+        if(line.Index==0&&p.TopBorder is {} top)
+        {
+            if(clipped)throw new LayoutFailure("PAGE_PARAGRAPH_BORDER_REGION_UNQUALIFIED",top.Source);
+            height+=top.Height;
+            baseline+=top.Height;
+        }
+        return new([],text,PageComposer.Points(width),height,baseline,sourceBreak,line.Cut==LineCutKind.Page)
+        {Native=line,ClipToLineBox=clipped};
     }
 
     static PageLine PositionNative(MeasuredLine line,LayoutParagraph paragraph,float origin,float top,
@@ -110,6 +203,8 @@ public static partial class Composer
     {
         var native=line.Native!;
         float baseline=top+line.Ascent;
+        if(line.ClipToLineBox&&(top<upper-.01f||top+line.Height>bottom+.01f))
+            throw new LayoutFailure("PAGE_LINE_BOX_OUTSIDE",paragraph.Source);
         foreach(var placement in native.Visual)
         {
             if(placement.Cluster<0)continue;
@@ -125,18 +220,30 @@ public static partial class Composer
                 Check(ink,decoration.X,0);
                 Check(ink,decoration.X+(decoration.Count-1)*decoration.Step,0);
             }
+        foreach(var underline in native.Underlines)Check(underline.Ink,0,0);
         foreach(var box in native.Boxes)
         {
             float x=origin+PageComposer.Points(box.X),y=baseline-PageComposer.Points(box.Height);
-            if(x<left-.01f||y<upper-.01f||x+PageComposer.Points(box.Width)>right+.01f||baseline>bottom+.01f)
+            if(x-box.Image.Effects.Left<left-.01f||x+PageComposer.Points(box.Width)+box.Image.Effects.Right>right+.01f||
+                !line.ClipToLineBox&&(y<upper-.01f||baseline>bottom+.01f))
                 throw new LayoutFailure("PAGE_INLINE_OUTSIDE",box.Source.Location);
+        }
+        PlacedParagraphShading? shading=null;
+        if(paragraph.Properties.Shading is {} shade)
+        {
+            float start=Math.Max(left,origin+PageComposer.Points(native.Region.Left+native.Properties.Left));
+            float end=Math.Min(right,origin+PageComposer.Points(native.Region.Left+native.Region.Width-native.Properties.Right));
+            if(end<=start)throw new LayoutFailure("PAGE_PARAGRAPH_SHADING_REGION_UNQUALIFIED",shade.Source);
+            shading=new(shade,start-origin,end-origin);
         }
         return new(paragraph.Id,paragraph.Source,line.Text,origin+PageComposer.Points(native.ContentLeft),baseline)
         {
-            Native=native,NativeOffsetX=origin,NativeTop=top,Height=line.Height,SourceBreak=line.SourceBreak,
+            Native=native,NativeOffsetX=origin,NativeTop=top,Height=line.Height,ClipToLineBox=line.ClipToLineBox,SourceBreak=line.SourceBreak,
             HasExplicitPageBreak=line.PageBreak,Section=paragraph.Section,CellId=cell,IsRepeated=repeated,
-            Images=native.Boxes.Select(b=>new PageImage(b.Source.NodeId,b.Image,origin+PageComposer.Points(b.X),
-                baseline-PageComposer.Points(b.Height)){IsRepeated=repeated}).ToImmutableArray(),
+            ParagraphShading=shading,
+            Images=native.Boxes.Select(b=>new PageImage(b.Source.NodeId,b.Image,
+                origin+PageComposer.Points(b.X),
+                baseline-PageComposer.Points(b.Height)+b.Image.Effects.Top){IsRepeated=repeated}).ToImmutableArray(),
             Tabs=native.Tabs.Select(t=>new PageTab(t.Source.NodeId,t.Source.Location,origin+PageComposer.Points(t.From),
                 origin+PageComposer.Points(t.To),t.Stop.Kind.ToString().ToLowerInvariant())).ToImmutableArray()
         };
@@ -144,7 +251,7 @@ public static partial class Composer
         void Check(TextInk ink,long x,long y)
         {
             if(origin+PageComposer.Points(x+ink.Left)<left-.01f||origin+PageComposer.Points(x+ink.Right)>right+.01f||
-               baseline+PageComposer.Points(y+ink.Top)<upper-.01f||baseline+PageComposer.Points(y+ink.Bottom)>bottom+.01f)
+               !line.ClipToLineBox&&(baseline+PageComposer.Points(y+ink.Top)<upper-.01f||baseline+PageComposer.Points(y+ink.Bottom)>bottom+.01f))
                 throw new LayoutFailure("PAGE_GLYPH_OUTSIDE",paragraph.Source);
         }
     }

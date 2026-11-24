@@ -23,10 +23,11 @@ public static partial class LayoutReader
             return result;
         }
         IEnumerable<InventoryNode> Elements(InventoryNode n)=>children[n.Id].Where(c=>!c.Name.StartsWith('#'));
+        static bool IsRowScopedCellProperty(InventoryNode n)=>Is(n,"tcMar")||Is(n,"vAlign")||Is(n,"noWrap");
         CellMargins Margins(InventoryNode? n,CellMargins inherited)
         {
             if(n is null)return inherited;WAttributes(n);var result=inherited;
-            foreach(var c in Elements(n))
+            foreach(var c in PropertyChildren(n).Where(c=>!c.Name.StartsWith('#')))
             {
                 WAttributes(c,"type","w");if(A(c,"type") is not ("" or "dxa"))Issue("LAYOUT_CELL_MARGIN_UNIT_UNQUALIFIED",c,"Marge interne hors profil.");
                 float value=Number(c,"w",0,0,144,20);
@@ -37,7 +38,7 @@ public static partial class LayoutReader
         CellBorders Borders(InventoryNode? n,CellBorders inherited)
         {
             if(n is null)return inherited;WAttributes(n);var result=inherited;
-            foreach(var c in Elements(n))
+            foreach(var c in PropertyChildren(n).Where(c=>!c.Name.StartsWith('#')))
             {
                 if(tableCascade is null&&Is(n,"tcBorders")&&(Is(c,"insideH")||Is(c,"insideV")))Issue("LAYOUT_CELL_INTERNAL_BORDER_UNQUALIFIED",c,"Bordure interne à une cellule hors profil.");
                 if(tableCascade is null)WAttributes(c,"val","sz","color","space");
@@ -115,7 +116,7 @@ public static partial class LayoutReader
             foreach(var style in tableStyles){tableParagraph=Paragraph(Child(style,"pPr"),tableParagraph);tableCharacter=Character(Child(style,"rPr"),tableCharacter,true);}
             foreach(var propertySet in propertySets)
             {
-                WAttributes(propertySet);foreach(var c in Elements(propertySet))
+                WAttributes(propertySet);foreach(var c in PropertyChildren(propertySet).Where(c=>!c.Name.StartsWith('#')))
                 {
                     if(Is(c,"tblW")){WAttributes(c,"type","w");string unit=A(c,"type");if(tableCascade is not null)nativeWidth=WidthPreference(c);else if(unit=="dxa")preferredWidth=width=Number(c,"w",natural,1,1440,20);else if(unit=="pct")preferredWidth=width=(geometry.Width-geometry.Left-geometry.Right)*Number(c,"w",5000,1,5000)/5000;else if(unit is "auto" or "nil" or "")preferredWidth=null;else Issue("LAYOUT_TABLE_WIDTH_UNQUALIFIED",c,"Largeur de tableau hors profil.");}
                     else if(Is(c,"tblInd")){WAttributes(c,"type","w");if(A(c,"type") is not ("" or "dxa"))Issue("LAYOUT_TABLE_INDENT_UNQUALIFIED",c,"Retrait hors profil.");indent=Number(c,"w",0,tableCascade is null?0:-720,720,20);}
@@ -137,21 +138,28 @@ public static partial class LayoutReader
             if(alignment!="left"&&indent!=0)Issue("LAYOUT_TABLE_ALIGNMENT_INDENT_UNQUALIFIED",table,"Retrait combiné à un alignement non gauche hors profil.");
             float ratio=tableCascade is null?width/natural:1;var scaled=columns.Select(w=>w*ratio).ToArray();
             var rows=new List<LayoutRow>();var cells=new List<LayoutCell>();var active=new Dictionary<int,LayoutCell>();bool bodySeen=false;
+            var terminalKeeps=new List<(LayoutParagraph Paragraph,int Row)>();
             // Sentinel preserves the table's exact position among body paragraphs.
+            int sentinel=output.Count;
             output.Add(new(table.Id,table.Source,[],new(),section,geometry,start){TableId=table.Id});
             foreach(var row in Elements(table).Where(c=>!Is(c,"tblPr")&&!Is(c,"tblGrid")))
             {
                 token.ThrowIfCancellationRequested();if(!Is(row,"tr")){Issue("LAYOUT_TABLE_BLOCK_UNQUALIFIED",row,"Bloc de tableau hors profil.");continue;}
                 if(rows.Count>=2048){Issue("LAYOUT_TABLE_ROW_LIMIT",row,"Budget de lignes dépassé.");break;}
-                WAttributes(row,"rsidR","rsidRPr","rsidTr");float rowHeight=0;string rule="atLeast";bool header=false;
+                WAttributes(row,"rsidR","rsidRPr","rsidTr");float rowHeight=0;string rule="atLeast";bool header=false,cantSplit=false;
                 var directRow=Child(row,"trPr");
                 foreach(var rp in PropertyLayers(tableCascade?.Row(row.Id)??[],"trPr",directRow))
                 {
-                    WAttributes(rp);foreach(var c in Elements(rp))
+                    WAttributes(rp);foreach(var c in PropertyChildren(rp).Where(c=>!c.Name.StartsWith('#')))
                     {
                         if(Is(c,"trHeight")){WAttributes(c,"val","hRule");rowHeight=Number(c,"val",0,0,1440,20);rule=A(c,"hRule");if(rule=="")rule="atLeast";if(rule is not ("auto" or "atLeast" or "exact"))Issue("LAYOUT_ROW_HEIGHT_UNQUALIFIED",c,"Hauteur de ligne hors profil.");}
                         else if(Is(c,"tblHeader")){WAttributes(c,"val");header=Toggle(c);}
-                        else if(Is(c,"cantSplit")){WAttributes(c,"val");}
+                        else if(Is(c,"cantSplit"))
+                        {
+                            WAttributes(c,"val");
+                            if(TextStyleResolver.OnOff(c.Attributes.GetValueOrDefault("{"+W+"}val")) is {} value)cantSplit=value;
+                            else Issue("LAYOUT_ROW_SPLIT_INVALID",c,"Autorisation de fragmentation invalide.");
+                        }
                         else if(tableCascade is not null&&(Is(c,"gridBefore")||Is(c,"gridAfter")))
                         {
                             WAttributes(c,"val");
@@ -175,19 +183,37 @@ public static partial class LayoutReader
                 }
                 if(header&&bodySeen)Issue("LAYOUT_HEADER_NONCONTIGUOUS",row,"Les en-têtes doivent former un préfixe contigu.");if(!header)bodySeen=true;
                 if(rule=="auto")rowHeight=0;
-                int rowIndex=rows.Count;rows.Add(new(rowIndex,rowHeight,rule,header));int column=tableCascade is null?0:GridOmissions(row,"gridBefore");var nextActive=new Dictionary<int,LayoutCell>();
+                int rowIndex=rows.Count;rows.Add(new(rowIndex,rowHeight,rule,header)
+                    {CantSplit=cantSplit,SourceId=row.Id,Source=row.Source});int column=tableCascade is null?0:GridOmissions(row,"gridBefore");var nextActive=new Dictionary<int,LayoutCell>();
+                var rowMargins=margins;
+                var exceptions=Elements(row).Where(n=>Is(n,"tblPrEx")).Take(2).ToArray();
+                if(nativeComposition&&exceptions.Length>0)
+                {
+                    var exception=exceptions[0];
+                    WAttributes(exception);
+                    if(exceptions.Length==1&&Elements(exception).Take(2).ToArray() is [var marginDeclaration]&&Is(marginDeclaration,"tblCellMar"))
+                        rowMargins=Margins(marginDeclaration,margins);
+                    else
+                        Issue("PAGE_TABLE_ROW_EXCEPTION_UNQUALIFIED",exception,"Seule une exception de marges de cellules par rangée est qualifiée.");
+                }
                 foreach(var cell in Elements(row).Where(c=>!Is(c,"trPr")))
                 {
+                    if(nativeComposition&&Is(cell,"tblPrEx"))continue;
                     if(!Is(cell,"tc")){Issue("LAYOUT_ROW_CONTENT_UNQUALIFIED",cell,"Contenu de ligne hors profil.");continue;}WAttributes(cell,"id");
-                    int span=1;string? merge=null;var cellMargins=margins;var cellBorders=new CellBorders();string valign="top";string? fill=tableFill;float? declaredWidth=null;
+                    int span=1;string? merge=null;var cellMargins=rowMargins;var cellBorders=new CellBorders();string valign="top";string? fill=tableFill;float? declaredWidth=null;
                     TableWidthPreference? cellWidthPreference=null;
                     var applied=tableCascade is null?tableStyles.Select(s=>s.Id):tableCascade.Cell(cell.Id);
                     var directCell=Child(cell,"tcPr");
-                    foreach(var cp in PropertyLayers(applied,"tcPr",directCell))
+                    var rowCellDeclarations=tableCascade is null?[]:ReadCellProperties(
+                        PropertyLayers(tableCascade.RowCells(row.Id),"tcPr",null)).Where(IsRowScopedCellProperty).ToArray();
+                    var cellDeclarations=ReadCellProperties(PropertyLayers(applied,"tcPr",null));
+                    if(tableCascade is not null)
+                        cellDeclarations=cellDeclarations.Where(c=>!IsRowScopedCellProperty(c)).Concat(rowCellDeclarations);
+                    InventoryNode? noWrap=null;
+                    foreach(var (c,direct) in cellDeclarations.Select(c=>(c,false)).Concat(
+                        ReadCellProperties(directCell is null?[]:[directCell]).Select(c=>(c,true))))
                     {
-                        WAttributes(cp);foreach(var c in Elements(cp))
-                        {
-                            if(tableCascade is not null&&cp!=directCell&&
+                            if(tableCascade is not null&&!direct&&
                                 (Is(c,"gridSpan")||Is(c,"vMerge")||Is(c,"hMerge")||Is(c,"tcW")||Is(c,"cnfStyle")))
                             {Issue("PAGE_TABLE_STYLE_TOPOLOGY",c,"La topologie de grille requiert une déclaration directe.");continue;}
                             if(Is(c,"gridSpan")){WAttributes(c,"val");span=(int)Number(c,"val",1,1,32);}
@@ -197,10 +223,17 @@ public static partial class LayoutReader
                             else if(Is(c,"tcBorders"))cellBorders=Borders(c,cellBorders);
                             else if(Is(c,"vAlign")){WAttributes(c,"val");valign=A(c,"val");if(valign is not ("top" or "center" or "bottom"))Issue("LAYOUT_CELL_ALIGNMENT_UNQUALIFIED",c,"Alignement vertical hors profil.");}
                             else if(Is(c,"shd"))fill=Fill(c);
+                            else if(tableCascade is not null&&Is(c,"noWrap"))
+                            {
+                                WAttributes(c,"val");
+                                var flag=TextStyleResolver.OnOff(c.Attributes.GetValueOrDefault("{"+W+"}val"));
+                                if(flag is null)Issue("LAYOUT_CELL_PROPERTY_UNQUALIFIED",c,"Valeur noWrap invalide.");
+                                noWrap=flag==true?c:null;
+                            }
                             else if(tableCascade is not null&&Is(c,"cnfStyle")){}
                             else Issue("LAYOUT_CELL_PROPERTY_UNQUALIFIED",c,"Propriété de cellule non qualifiée : "+c.Name);
-                        }
                     }
+                    if(noWrap is not null)Issue("LAYOUT_CELL_PROPERTY_UNQUALIFIED",noWrap,"Absence d’habillage de la cellule hors profil.");
                     if(column+span>scaled.Length){Issue("LAYOUT_GRID_SPAN_INVALID",cell,"Cellule hors grille.");continue;}
                     float cellWidth=scaled.Skip(column).Take(span).Sum();if(tableCascade is null&&!autoFit&&declaredWidth.HasValue&&Math.Abs(declaredWidth.Value*ratio-cellWidth)>.5f)Issue("LAYOUT_CELL_WIDTH_CONFLICT",cell,"Largeur de cellule incompatible avec la grille.");
                     if(tableCascade is null&&!autoFit&&cellWidth-cellMargins.Left-cellMargins.Right<12)Issue("LAYOUT_CELL_BODY_INVALID",cell,"Zone de cellule trop étroite.");
@@ -212,16 +245,17 @@ public static partial class LayoutReader
                         if(tableCascade is not null)
                             foreach(var layer in tableCascade.Text(block.Id))
                                 paragraphStyle=Paragraph(Child(nodes[layer],"pPr"),paragraphStyle);
-                        var p=ReadParagraph(block,section,new(cellWidth,geometry.Height,cellMargins.Left,0,cellMargins.Right,0),start,paragraphStyle,tableCharacter) with{CellOwner=cell.Id};
+                        var p=ReadParagraph(block,section,new(cellWidth,geometry.Height,cellMargins.Left,0,cellMargins.Right,0),start,paragraphStyle,tableCharacter,inCell:true) with{CellOwner=cell.Id};
                         if(p.Properties.KeepNext&&semantic is null)Issue("LAYOUT_CELL_KEEP_NEXT_UNQUALIFIED",block,"Solidarité avec le paragraphe suivant dans/au-delà des cellules à qualifier séparément.");
                         if(p.Properties.PageBreakBefore||p.Runs.Any(r=>r.Kind=="pageBreak")||Child(Child(block,"pPr")??block,"sectPr") is not null)Issue("LAYOUT_CELL_BREAK_UNQUALIFIED",block,"Saut de page/section interne à une cellule hors profil.");
                         paragraphIds.Add(p.Id);output.Add(p);
                     }
                     if(semantic is not null&&paragraphIds.Count>0&&output[^1].Properties.KeepNext)
-                        Issue("LAYOUT_CELL_KEEP_NEXT_UNQUALIFIED",nodes[output[^1].Id],"Solidarité franchissant une limite de cellule hors profil.");
+                        terminalKeeps.Add((output[^1],rowIndex));
                     if(paragraphIds.Count==0)Issue("LAYOUT_CELL_PARAGRAPH_MISSING",cell,"Cellule sans paragraphe qualifié.");
                     var model=new LayoutCell(cell.Id,cell.Source,rowIndex,column,span,1,null,cellMargins,cellBorders,valign,fill,paragraphIds)
-                    {PreferredWidth=declaredWidth,NativeWidth=cellWidthPreference,AppliedTableStyles=tableCascade?.Cell(cell.Id)??[]};
+                    {PreferredWidth=declaredWidth,NativeWidth=cellWidthPreference,AppliedTableStyles=tableCascade?.Cell(cell.Id)??[],
+                        RowCellStyleProperties=[..rowCellDeclarations.Select(c=>c.Id)]};
                     if(merge=="continue")
                     {
                         if(!active.TryGetValue(column,out var origin)||origin.ColumnSpan!=span)Issue("LAYOUT_VERTICAL_MERGE_INVALID",cell,"Fusion verticale sans origine compatible.");
@@ -239,13 +273,42 @@ public static partial class LayoutReader
                 if(column+after!=scaled.Length)Issue("LAYOUT_GRID_ROW_INVALID",row,"La ligne ne couvre pas exactement la grille.");active=nextActive;
             }
             if(rows.Count==0)Issue("LAYOUT_TABLE_EMPTY",table,"Tableau sans ligne.");
+            if(terminalKeeps.Count>0)
+            {
+                int last=rows.Count-1;
+                var lastCells=cells.Where(c=>c.Row==last).ToArray();
+                // A unanimous final row can be kept as one block with the following paragraph.
+                if(nativeComposition&&!readingStory&&rows[last] is {CantSplit:true,Header:false}&&
+                    terminalKeeps.Count==lastCells.Length&&terminalKeeps.All(k=>k.Row==last)&&
+                    lastCells.All(c=>c.MergeOrigin is null&&c.RowSpan==1))
+                    output[sentinel]=output[sentinel] with{Properties=output[sentinel].Properties with{KeepNext=true}};
+                else
+                    foreach(var (paragraph,_) in terminalKeeps)
+                        Issue("LAYOUT_CELL_KEEP_NEXT_UNQUALIFIED",nodes[paragraph.Id],"Solidarité franchissant une limite de cellule hors profil.");
+            }
             foreach(var c in cells.Where(c=>c.MergeOrigin is null&&c.RowSpan>1))if(rows.Skip(c.Row).Take(c.RowSpan).Select(r=>r.Header).Distinct().Count()>1)Issue("LAYOUT_HEADER_MERGE_UNQUALIFIED",table,"Fusion traversant la limite d’en-tête non qualifiée.");
-            tables.Add(new(table.Id,table.Source,scaled,rows,cells,alignment,indent){Borders=borders,AutoFit=autoFit,PreferredWidth=preferredWidth,AvailableWidth=geometry.Width-geometry.Left-geometry.Right-indent,NativeWidth=nativeWidth,PhysicalPage=tableCascade is null?null:geometry});
-            Issue("LAYOUT_ATOMIC_TABLE_ROWS",table,"Lignes et groupes fusionnés conservés entiers ; partage interne d’une ligne non qualifié.",false);
+            // In the Word 2010 compatibility layout, indentation locates the text edge
+            // of a left-aligned table. The cell and its border extend into the margin.
+            float leadingCellPadding=nativeComposition&&semantic?.StyleCompatibility is {Mode:14,DeclarationIds.Length:1}&&
+                alignment=="left"?cells.FirstOrDefault(c=>c.Row==0&&c.Column==0)?.Margins.Left??0:0;
+            tables.Add(new(table.Id,table.Source,scaled,rows,cells,alignment,indent){Borders=borders,AutoFit=autoFit,
+                PreferredWidth=preferredWidth,AvailableWidth=geometry.Width-geometry.Left-geometry.Right-indent,
+                NativeWidth=nativeWidth,PhysicalPage=tableCascade is null?null:geometry,LeadingCellPadding=leadingCellPadding});
+            if(!nativeComposition)
+                Issue("LAYOUT_ATOMIC_TABLE_ROWS",table,"Lignes et groupes fusionnés conservés entiers.",false);
         }
 
         IEnumerable<InventoryNode> PropertyLayers(IEnumerable<string> layers,string name,InventoryNode? direct) =>
             layers.Select(id=>Child(nodes[id],name)).Append(direct).OfType<InventoryNode>();
+
+        IEnumerable<InventoryNode> ReadCellProperties(IEnumerable<InventoryNode> sets)
+        {
+            foreach(var set in sets)
+            {
+                WAttributes(set);
+                foreach(var property in PropertyChildren(set).Where(c=>!c.Name.StartsWith('#')))yield return property;
+            }
+        }
 
         int GridOmissions(InventoryNode row,string name)=>
             Child(row,"trPr") is {} properties&&Child(properties,name) is {} declared?(int)Number(declared,"val",0,0,32):0;

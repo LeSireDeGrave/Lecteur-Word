@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 
 namespace LecteurWord.DocxCore;
@@ -12,6 +13,8 @@ public static class DocumentInspector
 {
     internal const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     internal const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const string StrictWord = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+    const string StrictRel = "http://purl.oclc.org/ooxml/officeDocument/relationships";
     const string Rel = "http://schemas.openxmlformats.org/package/2006/relationships";
     const string Ct = "http://schemas.openxmlformats.org/package/2006/content-types";
     const string MainType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
@@ -58,6 +61,8 @@ public static class DocumentInspector
         options.Validate();
         var manifest = new InspectionManifest { Budgets = options };
         var media = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+        var metafiles = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        long metafileBytes=0;
         var fontParts = new SortedDictionary<string,byte[]>(StringComparer.Ordinal);
         var budget = new Budget(options, cancellationToken);
         try
@@ -159,12 +164,26 @@ public static class DocumentInspector
                     ReadRelationships(name, bytes[name], manifest, entries, options, budget);
                 }
             }
-            var mains = manifest.Relationships.Where(r => r.SourcePart == "/" && r.Type == R + "/officeDocument").ToList();
+            var mains = manifest.Relationships.Where(r => r.SourcePart == "/" &&
+                r.Type is R + "/officeDocument" or StrictRel + "/officeDocument").ToList();
             if (mains.Count != 1 || mains[0].Mode != "Internal" || mains[0].ResolvedPart is null)
                 throw new Refusal("INVALID_MAIN_RELATIONSHIP");
             string main = mains[0].ResolvedPart![1..];
             if (TypeOf(main) != MainType) throw new Refusal("NOT_WORD_DOCUMENT_TYPE");
             manifest.Format = "docx";
+            bool strict=mains[0].Type==StrictRel+"/officeDocument";
+            if(strict)
+            {
+                manifest.Conformance="strict";
+                for(int i=0;i<manifest.Relationships.Count;i++)
+                {
+                    var relation=manifest.Relationships[i];
+                    if(relation.Type.StartsWith(StrictRel+"/",StringComparison.Ordinal))
+                        manifest.Relationships[i]=relation with{Type=R+relation.Type[StrictRel.Length..],SourceType=relation.Type};
+                    else if(relation.Type.StartsWith(R+"/",StringComparison.Ordinal))
+                        throw new Refusal("DOCX_MIXED_RELATIONSHIP_NAMESPACES");
+                }
+            }
             ValidateKnownRelationships(manifest, TypeOf);
             foreach (var (name, data) in bytes)
             {
@@ -172,7 +191,7 @@ public static class DocumentInspector
                 string type = TypeOf(name);
                 bool xml = type.EndsWith("+xml", StringComparison.Ordinal) || type is "application/xml" or "text/xml";
                 int before = manifest.Nodes.Count;
-                if (xml) InventoryXml(name, data, manifest, options, budget);
+                if (xml) InventoryXml(name, data, manifest, options, budget, strict, name==main);
                 else
                 {
                     if (type is "application/vnd.openxmlformats-officedocument.obfuscatedFont" or "application/x-font-ttf")
@@ -196,6 +215,9 @@ public static class DocumentInspector
                         if (safe) media.TryAdd(id, data);
                         else Add(manifest, "MEDIA_QUARANTINED", Coverage.Unrepresented, new("/" + name, "/"),
                             "Unsupported or inconsistent media signature; asset not exposed.");
+                        if(type is "image/wmf" or "image/x-wmf" or "image/emf" or "image/x-emf" &&
+                            data.Length<=1024*1024&&metafileBytes+data.Length<=8*1024*1024&&metafiles.TryAdd("/"+name,data))
+                            metafileBytes+=data.Length;
                     }
                 }
                 manifest.Parts.Add(new("/" + name, type, Hash(data), data.Length,
@@ -207,7 +229,11 @@ public static class DocumentInspector
             // SDK verifies the OPC/Word document identity. DOM access follows bounded XML scanning.
             using (var sdkStream = new MemoryStream(snapshot, false))
             using (var sdk = WordprocessingDocument.Open(sdkStream, false, new OpenSettings
-            { AutoSave = false, MaxCharactersInPart = options.MaxPartBytes }))
+            {
+                AutoSave = false,
+                MaxCharactersInPart = options.MaxPartBytes,
+                MarkupCompatibilityProcessSettings = new(MarkupCompatibilityProcessMode.NoProcess,FileFormatVersions.Office2007)
+            }))
             {
                 var mainPart = sdk.MainDocumentPart;
                 if (sdk.DocumentType != DocumentFormat.OpenXml.WordprocessingDocumentType.Document ||
@@ -231,8 +257,8 @@ public static class DocumentInspector
         catch (UnauthorizedAccessException) { Fail(manifest, "ACCESS_REFUSED"); }
         catch (OverflowException) { Fail(manifest, "RESOURCE_OVERFLOW"); }
         catch (ArgumentException) { Fail(manifest, "INVALID_PACKAGE_ARGUMENT"); }
-        if (!manifest.InspectionComplete) {media.Clear();fontParts.Clear();}
-        return new(manifest, media){FontParts=fontParts};
+        if (!manifest.InspectionComplete) {media.Clear();fontParts.Clear();metafiles.Clear();}
+        return new(manifest, media){FontParts=fontParts,MetafileParts=metafiles};
     }
 
     static void Fail(InspectionManifest m, string code)
@@ -351,7 +377,8 @@ public static class DocumentInspector
         public bool SimpleField { get; } = simpleField;
         public int ChildCount { get; set; }
     }
-    static void InventoryXml(string name, byte[] bytes, InspectionManifest m, InspectionOptions options, Budget budget)
+    static void InventoryXml(string name, byte[] bytes, InspectionManifest m, InspectionOptions options, Budget budget,
+        bool strict,bool main)
     {
         using var reader = Reader(bytes, options);
         var stack = new Stack<Frame>();
@@ -374,8 +401,14 @@ public static class DocumentInspector
             var location = new SourceLocation("/" + name, (parent?.Node.Source.Path ?? "") + "/" + index);
             string id = "n" + (m.Nodes.Count + 1).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
             var attrs = new SortedDictionary<string, string>(StringComparer.Ordinal);
-            string local = reader.LocalName, ns = reader.NamespaceURI;
+            var sourceAttributes=strict?new SortedDictionary<string,string>(StringComparer.Ordinal):null;
+            string local = reader.LocalName, originalNamespace=reader.NamespaceURI;
             bool element = reader.NodeType == XmlNodeType.Element;
+            if(element&&main&&reader.Depth==0&&originalNamespace!=(strict?StrictWord:W))
+                throw new Refusal("DOCX_MAIN_NAMESPACE_MISMATCH");
+            if(strict&&element&&originalNamespace==W)
+                throw new Refusal("DOCX_MIXED_WORD_NAMESPACES");
+            string ns=strict?CanonicalNamespace(originalNamespace):originalNamespace;
             string kind = element ? Kind(local, ns) : reader.NodeType switch
             {
                 XmlNodeType.Text or XmlNodeType.CDATA or XmlNodeType.SignificantWhitespace or XmlNodeType.Whitespace => "textValue",
@@ -388,8 +421,13 @@ public static class DocumentInspector
                 while (reader.MoveToNextAttribute())
                 {
                     if (reader.Value.Length > options.MaxValueChars) throw new Refusal("VALUE_SIZE_LIMIT");
-                    string key = "{" + reader.NamespaceURI + "}" + reader.LocalName;
-                    attrs.Add(key, reader.Value);
+                    string attrNs=reader.NamespaceURI;
+                    string value=reader.Value;
+                    sourceAttributes?.Add("{"+attrNs+"}"+reader.LocalName,value);
+                    if(strict&&attrNs is W or R)throw new Refusal("DOCX_MIXED_WORD_NAMESPACES");
+                    string canonicalNs=strict?CanonicalNamespace(attrNs):attrNs;
+                    string key = "{" + canonicalNs + "}" + reader.LocalName;
+                    attrs.Add(key,strict&&attrNs=="http://www.w3.org/2000/xmlns/"?CanonicalNamespace(value):value);
                     if (coverage == Coverage.Read && reader.NamespaceURI != "http://www.w3.org/2000/xmlns/" && !QualifiedAttributes.Contains(key))
                         Add(m, "ATTRIBUTE_SEMANTICS_UNQUALIFIED", Coverage.Inventory, location, "Attribute retained: " + key);
                 }
@@ -402,7 +440,9 @@ public static class DocumentInspector
             {
                 Text = element ? null : reader.Value,
                 Revision = parent?.Node.Revision ?? "unchanged",
-                FieldRole = fields.Count > 0 ? fields[^1] : "none"
+                FieldRole = fields.Count > 0 ? fields[^1] : "none",
+                SourceName = element&&ns!=originalNamespace?"{"+originalNamespace+"}"+local:null,
+                SourceAttributes = sourceAttributes is not null&&!sourceAttributes.SequenceEqual(attrs)?sourceAttributes:null
             };
             if (ns == W)
             {
@@ -434,6 +474,8 @@ public static class DocumentInspector
             else if (element && ns == W && local == "fldSimple") fields.RemoveAt(fields.Count - 1);
         }
         if (fields.Count > 0) Add(m, "UNBALANCED_FIELD", Coverage.Unrepresented, new("/" + name, "/"), "Unclosed complex field.");
+
+        static string CanonicalNamespace(string value)=>value switch{StrictWord=>W,StrictRel=>R,_=>value};
     }
     static string Kind(string local, string ns) => ns != W ? "extensionElement" : local switch
     {

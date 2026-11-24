@@ -8,7 +8,24 @@ namespace LecteurWord;
 
 public sealed partial class ReaderWindow
 {
-    public DocumentFonts CurrentFonts=>composition?.Fonts??new();
+    DocumentFonts? displayedFonts;
+    public DocumentFonts CurrentFonts
+    {
+        get
+        {
+            var fonts=composition?.Fonts??new();
+            if(nativePageLease?.Snapshot.Typography is not {} typography)return fonts;
+            return displayedFonts??=fonts with
+            {
+                ResolutionAttempted=true,
+                Uses=typography.Paragraphs.SelectMany(p=>p.Fragments.Concat(
+                    p.Controls.Where(c=>c.Symbol is not null).Select(c=>c.Symbol!)))
+                    .SelectMany(f=>f.Sources.Select(s=>new FontUse(s.RunId??s.Source.NodeId,s.Source.Location,
+                        f.FontSlot,f.Request,f.Face,f.MeasurementIssue??(f.Face is null?"unresolved":"resolved"))))
+                    .Distinct().ToArray()
+            };
+        }
+    }
     void FillProperties()
     {
         if(inspection is null){navItems.Children.Add(Explain(T("Aucun document","No document")));return;}

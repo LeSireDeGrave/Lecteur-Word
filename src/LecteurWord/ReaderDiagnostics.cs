@@ -34,7 +34,7 @@ public sealed partial class ReaderWindow
         var tableFallbacks=readable?.Presentation.BodyBlocks.Where(b=>b.Kind=="table"&&
             ReadingTableSnapshot?.ReadingTables.ContainsKey(b.Id)!=true).Select(b=>new FlowIssue("READ_TABLE_GRID_FALLBACK",b.Source,
                 "Grille en lecture de secours ; certaines dimensions ou propriétés graphiques restent non qualifiées.",false,false)).ToArray()??[];
-        var groups=DiagnosticSummary.Group(inspection,(composition?.Issues??flow?.Issues??[]).Concat(nativePageIssues),
+        var groups=DiagnosticSummary.Group(inspection,composition?.Issues??flow?.Issues??[],
             readingIssues.Concat(tableFallbacks),readable?.Available==true||composition?.Available==true);
         bool canRead=readable?.Available==true||composition?.Available==true;
         navItems.Children.Add(new TextBlock{Name="DiagnosticUserSummary",Text=canRead?T("Lecture possible","Reading available"):T("Lecture indisponible","Reading unavailable"),FontSize=17,FontWeight=FontWeight.SemiBold,TextWrapping=TextWrapping.Wrap});
@@ -69,7 +69,8 @@ public sealed partial class ReaderWindow
                     gap.Reason+" · "+gap.Source.Location.PartUri+" "+gap.Source.Location.Path+
                     (gap.ContextRange is {} span?$" · UTF-16 [{span.Start}, {span.EndExclusive})":"")))};
             var go=new Button{Content=T("Aller au passage","Go to passage"),IsEnabled=false};
-            gaps.SelectionChanged+=(_,_)=>go.IsEnabled=gaps.SelectedItem is PagePlacementGap gap&&documentIndex?.BodyIndices.ContainsKey(gap.Source.NodeId)==true;
+            gaps.SelectionChanged+=(_,_)=>go.IsEnabled=IsSimplifiedReading&&
+                gaps.SelectedItem is PagePlacementGap gap&&documentIndex?.BodyIndices.ContainsKey(gap.Source.NodeId)==true;
             go.Click+=(_,_)=>{if(gaps.SelectedItem is PagePlacementGap gap)NavigateToBlock(gap.Source.NodeId);};
             navItems.Children.Add(new Expander{Header=T("Sources sans position de page","Sources without a page position"),
                 Content=new StackPanel{Children={gaps,go}}});

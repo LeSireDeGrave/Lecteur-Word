@@ -1,0 +1,8 @@
+{
+  "metrics": [
+    { "label": "Blocs de corps", "expression": ["bodyBlocks"] },
+    { "label": "Nombre de titres", "expression": ["headings"] },
+    { "label": "Nombre de tableaux", "expression": ["tables"] },
+    { "label": "Part de titres (%)", "expression": ["headings", "100", "*", "paragraphs", "headings", "+", "1", "max", "/"] }
+  ]
+}
