@@ -51,7 +51,6 @@ public sealed partial class ReaderWindow:Window
     PageCompositionLease? nativePageLease;
     internal string? NativePageStatus {get;private set;}
     IReadOnlyList<PagePlacementGap> nativePageGaps=[];
-    Dictionary<ExportFormat,ExportPreflight> preflights=[];
     int page;double zoom=1;bool english,navVisible=true,initialized,closed;
     readonly ThemePreference? themePreference;
     ReaderTheme themeChoice;
@@ -64,7 +63,12 @@ public sealed partial class ReaderWindow:Window
     public double Zoom=>IsSimplifiedReading?readingZoom:zoom;
     public string Language=>english?"en":"fr";
     public bool NavigationVisible=>navVisible;
-    public bool ExportAvailable(ExportFormat format)=>preflights.TryGetValue(format,out var check)&&check.Allowed;
+    public bool ExportAvailable(ExportFormat format)
+    {
+        if(inspection is null||nativePageLease is not {} lease)return false;
+        try{return Publications.Prepare(new(inspection,lease.Snapshot,fileName),new(format),default).Allowed;}
+        catch(InvalidDataException){return false;}
+    }
     string T(string fr,string en)=>english?en:fr;
     public ReaderWindow():this(null){}
 
@@ -78,7 +82,8 @@ public sealed partial class ReaderWindow:Window
         var open=IconButton("open","Ouvrir un DOCX (Ctrl+O)","Open DOCX (Ctrl+O)",ChooseOpen);
         var properties=IconButton("info","Propriétés du document","Document properties",()=>{ShowPanel("properties");return Task.CompletedTask;});
         properties.Name="DocumentProperties";
-        export=IconButton("export","Exporter","Export",()=>Task.CompletedTask);
+        export=IconButton("export","Exporter","Export",ShowPublicationAsync);
+        export.Name="OpenPublication";
         AddGroup(open,properties,export);
 
         var outline=IconButton("nav","Sommaire","Outline",()=>{ShowPanel("outline");return Task.CompletedTask;});
@@ -204,8 +209,7 @@ public sealed partial class ReaderWindow:Window
                     if(proposed?.RulerModel is {} nativeLayout)
                         foreach(var p in nativeLayout.Paragraphs)readingLayout.TryAdd(p.Id,p);
                     var index=ReaderDocumentIndex.Build(result,reading,layout,cancellation.Token,proposed?.Semantic);
-                    var checks=Enum.GetValues<ExportFormat>().ToDictionary(f=>f,f=>DocumentExports.Preflight(result,f));
-                    return(result,model,layout,pageModel,reading,readingLayout,index,checks,nativeStatus:proposed?.Coverage.ToString(),
+                    return(result,model,layout,pageModel,reading,readingLayout,index,nativeStatus:proposed?.Coverage.ToString(),
                         gaps:proposed?.Gaps??[]);
                 },cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
@@ -216,7 +220,7 @@ public sealed partial class ReaderWindow:Window
                 NativePageStatus=data.nativeStatus;SetNativeSelection(0,[]);
                 nativePageGaps=data.gaps;
                 displayedFonts=null;inspection=data.result;flow=data.model;composition=data.layout;pageModel=data.layout.Available?data.pageModel:null;
-                readable=data.reading;readingParagraphs=data.readingLayout;typographyDiagnostics=null;documentIndex=data.index;preflights=data.checks;fileName=Path.GetFileName(path);
+                readable=data.reading;readingParagraphs=data.readingLayout;typographyDiagnostics=null;documentIndex=data.index;fileName=Path.GetFileName(path);
                 page=0;collapsedOutline.Clear();visibleBlockId=null;CurrentBlockId=null;CurrentNoteReferenceId=null;CurrentSection=1;ActiveReadingContext=null;
                 readingView=data.layout.Available?ReadingView.SinglePage:ReadingView.Unavailable;
                 fittingWidth=false;
@@ -412,34 +416,6 @@ public sealed partial class ReaderWindow:Window
         status.Text="";
         if(available&&!simplified)SelectPageParagraph(CurrentBlockId);
         UpdateActions();FillPanel();
-        var choices=new StackPanel{Spacing=5,MinWidth=250};
-        foreach(var format in Enum.GetValues<ExportFormat>())
-        {
-            bool allowed=ExportAvailable(format);
-            var b=new Button{Content=format+" — "+(allowed?T("profil texte simple","plain text profile")+(format==ExportFormat.Pdf?T(" · pagination distincte"," · separate pagination"):""):T("Non qualifié","Not qualified")),HorizontalAlignment=HorizontalAlignment.Stretch,IsEnabled=allowed};
-            AutomationProperties.SetName(b,b.Content.ToString());ToolTip.SetTip(b,allowed?T("Nouveau dossier de sortie, après précontrôle","New output folder, after preflight"):T("Contenu ou propriétés hors profil ; ouvrez les diagnostics","Content or properties outside profile; open diagnostics"));
-            b.Click+=async(_,_)=>await SaveExport(format);choices.Children.Add(b);
-        }
-        export.Flyout=new Flyout{Content=choices};
-    }
-    async Task SaveExport(ExportFormat format)
-    {
-        if(inspection is null||!ExportAvailable(format)||exportCancellation is not null)return;
-        // Capture the inspected source before the asynchronous destination picker.
-        var source=inspection;
-        using var cancellation=new CancellationTokenSource();exportCancellation=cancellation;export.IsEnabled=false;
-        try
-        {
-            var folders=await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions{Title=T("Choisir un dossier de sortie","Choose an output folder"),AllowMultiple=false});
-            if(folders.Count==0||folders[0].TryGetLocalPath() is not {} parent)return;
-            cancel.IsVisible=true;
-            string output=Path.Combine(parent,"LecteurWord-"+format+"-"+Guid.NewGuid().ToString("N")[..8]);
-            string path=await Task.Run(()=>DocumentExports.Export(source,format,output,cancellation.Token));
-            if(!closed)status.Text=T("Export créé : ","Export created: ")+path;
-        }
-        catch(OperationCanceledException){if(!closed)status.Text=T("Export annulé ; original conservé","Export cancelled; original preserved");}
-        catch(Exception error){RecordIncident(error,SessionStage.ExportDocument);if(!closed)status.Text=T("Export refusé ; aucune sortie finale créée","Export refused; no final output created");}
-        finally{exportCancellation=null;cancel.IsVisible=pending is not null;if(!closed)UpdateActions();}
     }
     void UpdateActions()
     {

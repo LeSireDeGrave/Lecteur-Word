@@ -76,7 +76,19 @@ internal sealed record PageCompositionSnapshot(string? SnapshotId,SemanticDocume
 /// <summary>Owns the faces used to draw one immutable composition. The caller releases the lease on document close.</summary>
 internal sealed class PageCompositionLease(PageCompositionSnapshot snapshot,TypographySession? typography=null,LineComposer? painter=null) : IDisposable
 {
+    readonly object lifetime=new();
+    int references=1;
+    bool disposed;
     internal PageCompositionSnapshot Snapshot {get;private set;}=snapshot;
+    internal IDisposable Retain()
+    {
+        lock(lifetime)
+        {
+            ObjectDisposedException.ThrowIf(disposed,this);
+            references++;
+            return new Reference(this);
+        }
+    }
     internal void PublishStyleComparison(PageStyleDecision decision,IEnumerable<FlowIssue> evidence)
     {
         Snapshot=Snapshot with { StyleDecision=decision,
@@ -84,8 +96,26 @@ internal sealed class PageCompositionLease(PageCompositionSnapshot snapshot,Typo
     }
     public void Dispose()
     {
-        painter?.Dispose();
-        typography?.Dispose();
+        lock(lifetime)
+        {
+            if(disposed)return;
+            disposed=true;
+            Release();
+        }
+    }
+    void Release()
+    {
+        lock(lifetime)
+        {
+            if(--references!=0)return;
+            painter?.Dispose();
+            typography?.Dispose();
+        }
+    }
+    sealed class Reference(PageCompositionLease lease):IDisposable
+    {
+        PageCompositionLease? owner=lease;
+        public void Dispose()=>Interlocked.Exchange(ref owner,null)?.Release();
     }
 }
 

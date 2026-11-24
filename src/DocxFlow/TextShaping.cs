@@ -495,6 +495,13 @@ internal sealed partial class TypographySession
         void Set(string tag,string name) => result.Add(tag+"="+(ligatures=="all"||ligatures.Contains(name,StringComparison.OrdinalIgnoreCase)?"1":"0"));
     }
 
+    internal bool PermitsPdfEmbedding(FontResolution identity)
+    {
+        if(!faces.TryGetValue((identity.Sha256,identity.FaceIndex),out var face)||face.Os2.Length<10)return false;
+        ushort rights=BinaryPrimitives.ReadUInt16BigEndian(face.Os2.AsSpan(8,2));
+        return rights is 0 or 4 or 8;
+    }
+
     internal SKTextBlob? TextBlob(TextFragment fragment)
     {
         ObjectDisposedException.ThrowIf(disposed,this);

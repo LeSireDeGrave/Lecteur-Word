@@ -1,0 +1,197 @@
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+using System.Xml;
+using System.Xml.Linq;
+using static LecteurWord.Flow.StructuredPublication;
+
+namespace LecteurWord.Flow;
+
+internal static class PublicationPackages
+{
+    static readonly XNamespace Manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0",
+        Meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0",Dc="http://purl.org/dc/elements/1.1/",
+        Opf="http://www.idpf.org/2007/opf",Container="urn:oasis:names:tc:opendocument:xmlns:container";
+    static readonly DateTimeOffset ZipDate=new(2000,1,1,0,0,0,TimeSpan.Zero);
+    internal sealed record Entry(string Path,byte[] Data,bool Store=false);
+    internal static Entry XmlEntry(string name,XElement tree)=>StringEntry(name,Xml(tree));
+    internal static Entry StringEntry(string name,string text,bool store=false)=>new(name,Encoding.UTF8.GetBytes(text),store);
+
+    internal static void Write(string path,PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format,
+        ExportBudget budget,IProgress<PublicationProgress>? progress,CancellationToken token)=>
+        WriteEntries(path,Entries(source,book,body,format),budget,progress,token);
+
+    internal static void WriteEntries(string path,IReadOnlyList<Entry> entries,ExportBudget budget,
+        IProgress<PublicationProgress>? progress,CancellationToken token)
+    {
+        using var file=budget.Create(path);
+        using var zip=new ZipArchive(file,ZipArchiveMode.Create);
+        for(int i=0;i<entries.Count;i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var item=entries[i];
+            var entry=zip.CreateEntry(item.Path,item.Store?CompressionLevel.NoCompression:CompressionLevel.Optimal);
+            entry.LastWriteTime=ZipDate;
+            using(var output=entry.Open())
+                for(int written=0;written<item.Data.Length;)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int count=Math.Min(64*1024,item.Data.Length-written);
+                    output.Write(item.Data.AsSpan(written,count));
+                    written+=count;
+                }
+            progress?.Report(new("write",i+1,entries.Count));
+        }
+    }
+
+    internal static void Verify(string path,PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format,
+        CancellationToken token)
+    {
+        var expected=Entries(source,book,body,format);
+        using var file=File.OpenRead(path);
+        using var zip=new ZipArchive(file,ZipArchiveMode.Read);
+        if(zip.Entries.Count!=expected.Count)throw new InvalidDataException("EXPORT_PACKAGE_INDEX");
+        Span<byte> buffer=stackalloc byte[4096];
+        for(int i=0;i<expected.Count;i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var actual=zip.Entries[i];
+            var item=expected[i];
+            if(actual.FullName!=item.Path||actual.Length!=item.Data.Length||item.Store&&actual.CompressedLength!=actual.Length)
+                throw new InvalidDataException("EXPORT_PACKAGE_ENTRY");
+            using var stream=actual.Open();
+            if(item.Path.EndsWith(".xml",StringComparison.Ordinal)||item.Path.EndsWith(".xhtml",StringComparison.Ordinal)||
+                item.Path.EndsWith(".opf",StringComparison.Ordinal)||item.Path.EndsWith(".svg",StringComparison.Ordinal))
+            {
+                using var xml=XmlReader.Create(stream,new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,
+                    XmlResolver=null,MaxCharactersInDocument=source.Inspection.Manifest.Budgets.MaxOutputBytes});
+                var read=XDocument.Load(xml,LoadOptions.PreserveWhitespace);
+                var reference=XDocument.Parse(Encoding.UTF8.GetString(item.Data),LoadOptions.PreserveWhitespace);
+                if(!XNode.DeepEquals(read,reference))throw new InvalidDataException("EXPORT_PACKAGE_XML_ROUNDTRIP");
+            }
+            else
+            {
+                for(int position=0;position<item.Data.Length;)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int length=Math.Min(buffer.Length,item.Data.Length-position);
+                    stream.ReadExactly(buffer[..length]);
+                    if(!buffer[..length].SequenceEqual(item.Data.AsSpan(position,length)))
+                        throw new InvalidDataException("EXPORT_PACKAGE_BINARY_ROUNDTRIP");
+                    position+=length;
+                }
+            }
+        }
+    }
+
+    static List<Entry> Entries(PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format)=>
+        format==ExportFormat.Odt?Odt(source,book,body):Epub3(source,book,body);
+
+    static List<Entry> Odt(PublicationSource source,StructuredPublication book,XElement[] body)
+    {
+        const string mime="application/vnd.oasis.opendocument.text";
+        XElement Root(string kind,params object[] values)=>new(Office+kind,new XAttribute(XNamespace.Xmlns+"office",Office),
+            new XAttribute(Office+"version","1.3"),values);
+        var result=new List<Entry>{StringEntry("mimetype",mime,true),
+            XmlEntry("content.xml",Root("document-content",book.Automatic,new XElement(Office+"body",new XElement(Office+"text",body))))};
+        var geometry=source.Pagination!.Sections[0].Format;
+        var page=new XElement(Style+"page-layout-properties",
+            new XAttribute(Fo+"page-width",Pt(geometry.Width)),new XAttribute(Fo+"page-height",Pt(geometry.Height)),
+            new XAttribute(Fo+"margin-top",Pt(geometry.Top)),new XAttribute(Fo+"margin-bottom",Pt(geometry.Bottom)),
+            new XAttribute(Fo+"margin-left",Pt(geometry.Left)),new XAttribute(Fo+"margin-right",Pt(geometry.Right)),
+            new XAttribute(Style+"print-orientation",geometry.Width>geometry.Height?"landscape":"portrait"));
+        result.Add(XmlEntry("styles.xml",Root("document-styles",new XElement(Office+"styles"),
+            new XElement(Office+"automatic-styles",new XElement(Style+"page-layout",new XAttribute(Style+"name","SourcePage"),page)),
+            new XElement(Office+"master-styles",new XElement(Style+"master-page",new XAttribute(Style+"name","Standard"),
+                new XAttribute(Style+"page-layout-name","SourcePage"))))));
+        var m=book.Metadata;
+        result.Add(XmlEntry("meta.xml",Root("document-meta",new XElement(Office+"meta",
+            Property(Dc+"title",m.Title),Property(Meta+"initial-creator",m.Author),Property(Dc+"creator",m.Author),
+            Property(Dc+"subject",m.Subject),Property(Dc+"description",m.Description),Property(Meta+"keyword",m.Keywords),
+            Property(Dc+"language",Language(m)),Property(Meta+"creation-date",Date(m.Created)),Property(Dc+"date",Date(m.Modified))))));
+        result.AddRange(book.Assets.Select(asset=>new Entry(asset.Path,asset.Data)));
+        var declarations=new[]{("/",mime),("content.xml","text/xml"),("styles.xml","text/xml"),("meta.xml","text/xml")}
+            .Concat(book.Assets.Select(asset=>(asset.Path,asset.Mime)));
+        result.Add(XmlEntry("META-INF/manifest.xml",new XElement(Manifest+"manifest",
+            new XAttribute(XNamespace.Xmlns+"manifest",Manifest),new XAttribute(Manifest+"version","1.3"),
+            declarations.Select(p=>new XElement(Manifest+"file-entry",new XAttribute(Manifest+"full-path",p.Item1),
+                new XAttribute(Manifest+"media-type",p.Item2))))));
+        return result;
+    }
+
+    static List<Entry> Epub3(PublicationSource source,StructuredPublication book,XElement[] body)
+    {
+        var metadata=book.Metadata;
+        string language=Language(metadata);
+        XElement Xhtml(string title,params object[] contents)=>new(Html+"html",
+            new XAttribute(XNamespace.Xmlns+"epub",Epub),new XAttribute(XNamespace.Xml+"lang",language),new XAttribute("lang",language),
+            new XElement(Html+"head",new XElement(Html+"title",title),new XElement(Html+"link",
+                new XAttribute("rel","stylesheet"),new XAttribute("href","style.css"))),new XElement(Html+"body",contents));
+        var noteLinks=body.SelectMany(b=>b.DescendantsAndSelf(Html+"a")).Where(a=>(string?)a.Attribute(Epub+"type")=="noteref")
+            .ToDictionary(a=>(string)a.Attribute("href")!,a=>(string)a.Attribute("id")!,StringComparer.Ordinal);
+        foreach(var n in book.Notes)
+            foreach(var a in n.Blocks.SelectMany(b=>b.DescendantsAndSelf(Html+"a")).Where(a=>(string?)a.Attribute(Epub+"type")=="noteref"))
+                noteLinks.Add((string)a.Attribute("href")!,(string)a.Attribute("id")!);
+        var notes=book.Notes.Select(n=>new XElement(Html+"aside",new XAttribute(Epub+"type",n.End?"endnote":"footnote"),
+            new XAttribute("role",n.End?"doc-endnote":"doc-footnote"),new XAttribute("id",n.Id),n.Blocks,
+            new XElement(Html+"p",new XElement(Html+"a",new XAttribute("href","#"+noteLinks["#"+n.Id]),
+                new XAttribute("aria-label",language.StartsWith("fr",StringComparison.Ordinal)?"Retour à l’appel":"Back to note reference"),"↩")))).ToArray();
+        var content=Xhtml(metadata.Title,body,notes);
+        var contentIds=content.Descendants().Attributes("id").Select(a=>a.Value).ToHashSet(StringComparer.Ordinal);
+        foreach(var link in content.Descendants(Html+"a").Attributes("href").Where(a=>a.Value.StartsWith('#')))
+            if(!contentIds.Contains(link.Value[1..]))throw new InvalidDataException("EXPORT_EPUB_LINK_TARGET");
+        var navigation=new XElement(Html+"nav",new XAttribute(Epub+"type","toc"),
+            new XAttribute("id","toc"),new XElement(Html+"h1",metadata.Title),Contents());
+        XElement Contents()
+        {
+            var root=new XElement(Html+"ol");
+            if(book.Headings.Count==0)
+            {
+                root.Add(new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href","content.xhtml"),metadata.Title)));
+                return root;
+            }
+            var hierarchy=new Stack<(int Level,XElement Item)>();
+            foreach(var heading in book.Headings)
+            {
+                while(hierarchy.TryPeek(out var current)&&current.Level>=heading.Level)hierarchy.Pop();
+                XElement list=root;
+                if(hierarchy.TryPeek(out var previous))
+                {
+                    list=previous.Item.Element(Html+"ol")??new XElement(Html+"ol");
+                    if(list.Parent is null)previous.Item.Add(list);
+                }
+                var item=new XElement(Html+"li",new XElement(Html+"a",new XAttribute("href","content.xhtml#"+heading.Id),heading.Title));
+                list.Add(item);
+                hierarchy.Push((heading.Level,item));
+            }
+            return root;
+        }
+        var package=new XElement(Opf+"package",new XAttribute("version","3.0"),new XAttribute("unique-identifier","uid"),
+            new XElement(Opf+"metadata",new XAttribute(XNamespace.Xmlns+"dc",Dc),
+                new XElement(Dc+"identifier",new XAttribute("id","uid"),"urn:sha256:"+source.SourceHash),
+                Property(Dc+"title",metadata.Title),Property(Dc+"language",language),Property(Dc+"creator",metadata.Author),
+                Property(Dc+"subject",metadata.Subject),Property(Dc+"description",metadata.Description),Property(Dc+"date",Date(metadata.Created)),
+                new XElement(Opf+"meta",new XAttribute("property","dcterms:modified"),Date(metadata.Modified??metadata.Created??ZipDate))),
+            new XElement(Opf+"manifest",Item("body","content.xhtml","application/xhtml+xml"),Item("nav","nav.xhtml","application/xhtml+xml","nav"),
+                Item("styles","style.css","text/css"),book.Assets.Select((a,i)=>Item("asset"+i.ToString(CultureInfo.InvariantCulture),a.Path,a.Mime,a==book.Cover?"cover-image":null))),
+            new XElement(Opf+"spine",new XElement(Opf+"itemref",new XAttribute("idref","body"))));
+        var entries=new List<Entry>
+        {
+            StringEntry("mimetype","application/epub+zip",true),
+            XmlEntry("META-INF/container.xml",new XElement(Container+"container",new XAttribute("version","1.0"),
+                new XElement(Container+"rootfiles",new XElement(Container+"rootfile",new XAttribute("full-path","EPUB/package.opf"),
+                    new XAttribute("media-type","application/oebps-package+xml"))))),
+            XmlEntry("EPUB/package.opf",package),XmlEntry("EPUB/content.xhtml",content),
+            XmlEntry("EPUB/nav.xhtml",Xhtml(metadata.Title,navigation)),
+            StringEntry("EPUB/style.css","body { line-height: 1.4; } p, h1, h2, h3, h4, h5, h6 { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; } table { border-collapse: collapse; } img { max-width: 100%; }")
+        };
+        entries.AddRange(book.Assets.Select(a=>new Entry("EPUB/"+a.Path,a.Data)));
+        return entries;
+    }
+
+    static XElement Item(string id,string path,string type,string? properties=null)=>new(Opf+"item",
+        new XAttribute("id",id),new XAttribute("href",path),new XAttribute("media-type",type),
+        properties is null?null:new XAttribute("properties",properties));
+    static XElement? Property(XName name,string? value)=>string.IsNullOrWhiteSpace(value)?null:new(name,value);
+    static string? Date(DateTimeOffset? value)=>value?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",CultureInfo.InvariantCulture);
+}

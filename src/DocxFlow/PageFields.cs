@@ -231,17 +231,18 @@ internal static partial class PageComposer
     }
 
     static Dictionary<string,PageBookmark> IndexPageBookmarks(SemanticDocument model,
-        IReadOnlyDictionary<string,TextParagraph> text,IEnumerable<BodyPageField> bodyFields,Action check)
+        IReadOnlyDictionary<string,TextParagraph> text,IEnumerable<BodyPageField> bodyFields,Action check,IEnumerable<string>? extra=null)
     {
         var result=new Dictionary<string,PageBookmark>(StringComparer.Ordinal);
         var running=model.Stories.Where(s=>s.Kind is "hdr" or "ftr").Select(s=>s.RootId).ToHashSet(StringComparer.Ordinal);
         var fields=bodyFields.Select(f=>f.Field).Concat(model.Fields.Where(f=>running.Contains(f.StoryId)&&
                 f is {StructureVerified:true,Locked:false,StoredResultIds.IsEmpty:true,ParentFieldId:null,InstructionAttribute:not null}))
             .Where(f=>f.Command is ("PAGEREF" or "REF")&&f.BookmarkId is not null).ToArray();
-        var requested=fields.Select(f=>f.BookmarkId!).ToHashSet(StringComparer.Ordinal);
+        var requested=fields.Select(f=>f.BookmarkId!).Concat(extra??[]).ToHashSet(StringComparer.Ordinal);
         var textTargets=fields.Where(f=>f.Command=="REF").Select(f=>f.BookmarkId!).ToHashSet(StringComparer.Ordinal);
         if(requested.Count==0)return result;
-        if(requested.Count>MaxBodyPageFields+MaxStoryTemplates)throw new InvalidDataException("PAGE_BOOKMARK_INDEX_LIMIT");
+        if(requested.Count>(extra is null?MaxBodyPageFields+MaxStoryTemplates:4096))
+            throw new InvalidDataException("PAGE_BOOKMARK_INDEX_LIMIT");
         var ends=model.References.Where(r=>r.Kind=="bookmarkEnd"&&r.Status==ReferenceStatus.Resolved&&r.TargetId is not null)
             .ToLookup(r=>r.TargetId!,StringComparer.Ordinal);
         string? body=model.Stories.FirstOrDefault(s=>s.Kind=="body")?.RootId;
@@ -315,6 +316,17 @@ internal static partial class PageComposer
         if(bookmark?.Text is not {} text)return null;
         return (text.Style with{Origins=ImmutableDictionary<string,SemanticSource>.Empty})==
             (style with{Origins=ImmutableDictionary<string,SemanticSource>.Empty})?text.Value:null;
+    }
+
+    internal static Dictionary<string,PlacedPageBookmark> PublicationBookmarks(PageCompositionSnapshot snapshot,Action check)
+    {
+        if(snapshot.Semantic is not {} semantic||snapshot.Typography is not {} typography)return new(StringComparer.Ordinal);
+        var placed=IndexPageBookmarks(semantic,typography.Paragraphs.ToDictionary(p=>p.Id,StringComparer.Ordinal),
+            [],check,semantic.Elements.Where(e=>e.Kind==SemanticKind.BookmarkStart&&e.Coverage==SemanticCoverage.Represented&&
+                semantic.Attribute(e.Id,"name") is {} name&&name!="_GoBack").Select(e=>e.Id));
+        var result=PlaceBookmarks(snapshot.Composition,placed,check);
+        foreach(var (id,position) in snapshot.FieldBookmarks)result[id]=position;
+        return result;
     }
 
     static Dictionary<string,PlacedPageBookmark> PlaceBookmarks(Composition pages,IReadOnlyDictionary<string,PageBookmark> bookmarks,Action check)

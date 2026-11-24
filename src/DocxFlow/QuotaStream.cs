@@ -14,7 +14,12 @@ internal sealed class ExportBudget(InspectionOptions options,CancellationToken t
         if(written+bytes>options.MaxOutputBytes)throw new OutputLimitException("EXPORT_SIZE_LIMIT");
         written+=bytes;
     }
-    public Stream Create(string path,bool deferFailures=false)=>new QuotaStream(new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None),this,deferFailures);
+    public Stream Create(string path,bool deferFailures=false)
+    {
+        var options=new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None};
+        if(!OperatingSystem.IsWindows())options.UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite;
+        return new QuotaStream(new FileStream(path,options),this,deferFailures);
+    }
     sealed class QuotaStream(Stream file,ExportBudget budget,bool deferFailures):Stream
     {
         public override bool CanRead=>false;public override bool CanSeek=>file.CanSeek;public override bool CanWrite=>true;

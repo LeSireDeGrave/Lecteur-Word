@@ -7,6 +7,7 @@ namespace LecteurWord.Flow;
 
 internal sealed partial class LineComposer
 {
+    internal bool PermitsPdfEmbedding(FontResolution face)=>session.PermitsPdfEmbedding(face);
     internal void PaintDiagramLabel(SKCanvas canvas,DiagramTextLine line)=>
         session.Paint(canvas,line.Fragment,line.X,line.Baseline,SKColors.Black);
     readonly record struct Slot(int Part,int Cluster,byte Level,long Width,long Height,long PenX,long PenY,
