@@ -1435,14 +1435,14 @@ public static partial class Composer
             line.NativeTop+line.Height),paint);
     }
 
-    static void DrawFloatingDrawings(SKCanvas canvas,ComposedPage page,bool behind)
+    static void DrawFloatingDrawings(SKCanvas canvas,ComposedPage page,bool behind,bool clipToSheet=true)
     {
         if(page.FloatingPictures.Count==0&&page.FloatingTextFrames.Count==0)return;
         int save=canvas.Save();
         var images=new Dictionary<string,SKBitmap>(StringComparer.Ordinal);
         try
         {
-            canvas.ClipRect(new(0,0,page.Geometry.Width,page.Geometry.Height));
+            if(clipToSheet)canvas.ClipRect(new(0,0,page.Geometry.Width,page.Geometry.Height));
             var drawing=page.FloatingPictures.Where(p=>p.Picture.BehindText==behind)
                 .Select(p=>(Order:p.Picture.Order,ChildOrder:0,Picture:(PlacedFloatingPicture?)p,Frame:(PlacedFloatingTextFrame?)null));
             drawing=drawing.Concat(page.FloatingTextFrames.Where(f=>f.Frame.BehindText==behind)

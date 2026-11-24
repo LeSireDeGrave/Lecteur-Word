@@ -15,7 +15,8 @@ namespace LecteurWord;
 
 public sealed partial class ReaderWindow
 {
-    sealed record PublicationPreferences(ExportFormat Format,string Directory,int PdfImageQuality=101);
+    sealed record PublicationPreferences(ExportFormat Format,string Directory,int PdfImageQuality=101,
+        PublicationPolicy Policy=PublicationPolicy.Compatible);
     PublicationPreferences? publicationPreferences;
     internal Window? ActivePublicationDialog {get;private set;}
 
@@ -57,10 +58,17 @@ public sealed partial class ReaderWindow
             ItemsSource=new[]{T("Sans perte","Lossless"),T("JPEG haute qualité","High-quality JPEG"),T("JPEG compact","Compact JPEG")},
             SelectedIndex=preferences?.PdfImageQuality switch{92=>1,72=>2,_=>0}};
         var qualityRow=Row(T("Images PDF","PDF images"),imageQuality);
+        var policy=new ComboBox{Name="PublicationPolicy",HorizontalAlignment=HorizontalAlignment.Stretch,
+            ItemsSource=new[]{T("Export compatible","Compatible export"),T("Conservation intégrale","Full preservation")},
+            SelectedIndex=preferences?.Policy==PublicationPolicy.Complete?1:0};
+        var policyRow=Row(T("Politique","Policy"),policy);
         var range=new StackPanel{Spacing=8,Orientation=Orientation.Horizontal,Children=
             {new TextBlock{Text=T("De","From"),VerticalAlignment=VerticalAlignment.Center},first,
                 new TextBlock{Text=T("à","to"),VerticalAlignment=VerticalAlignment.Center},last}};
         var diagnostic=new TextBlock{Name="PublicationDiagnostics",TextWrapping=TextWrapping.Wrap};
+        var details=new TextBlock{Name="PublicationDetails",TextWrapping=TextWrapping.Wrap};
+        var technical=new Expander{Name="PublicationTechnicalDetails",Header=T("Détails de conservation","Preservation details"),
+            Content=new ScrollViewer{MaxHeight=175,Content=details},IsVisible=false};
         var feedback=new TextBlock{Name="PublicationFeedback",TextWrapping=TextWrapping.Wrap};
         var progress=new ProgressBar{Name="PublicationProgress",Minimum=0,Maximum=1,IsVisible=false};
         var publish=new Button{Name="PublicationWrite",Content=T("Exporter","Export"),IsEnabled=false};
@@ -68,9 +76,9 @@ public sealed partial class ReaderWindow
         var openFile=new Button{Name="PublicationOpenFile",Content=T("Ouvrir le fichier","Open file"),IsVisible=false};
         var openFolder=new Button{Name="PublicationOpenFolder",Content=T("Ouvrir le dossier","Open folder"),IsVisible=false};
         var fields=new StackPanel{Spacing=12,Children={Row(T("Format","Format"),format),
-            Row(T("Destination","Destination"),output,browse),selectRange,range,qualityRow,provenance,cover,coverRow,
+            Row(T("Destination","Destination"),output,browse),policyRow,selectRange,range,qualityRow,provenance,cover,coverRow,
             new ScrollViewer{MaxHeight=196,HorizontalScrollBarVisibility=Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-                Content=diagnostic}}};
+                Content=new StackPanel{Spacing=6,Children={diagnostic,technical}}}}};
         var controls=new StackPanel{Spacing=8,Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,
             Children={openFile,openFolder,cancelOrClose,publish}};
         var bottom=new StackPanel{Spacing=9,Children={feedback,progress,controls}};
@@ -101,6 +109,7 @@ public sealed partial class ReaderWindow
         chooseCover.Click+=async(_,_)=>await ChooseCoverAsync();
         clearCover.Click+=(_,_)=>{selectedCover=null;coverName.Text=null;_=PreviewAsync();};
         provenance.IsCheckedChanged+=(_,_)=>_=PreviewAsync();
+        policy.SelectionChanged+=(_,_)=>_=PreviewAsync();
         imageQuality.SelectionChanged+=(_,_)=>_=PreviewAsync();
         first.ValueChanged+=(_,_)=>_=PreviewAsync();
         last.ValueChanged+=(_,_)=>_=PreviewAsync();
@@ -148,7 +157,8 @@ public sealed partial class ReaderWindow
         PublicationRequest Request()
         {
             if(Selected()!=ExportFormat.Pdf)return new(Selected(),UseCoverImage:Selected()==ExportFormat.Epub3&&cover.IsChecked==true,
-                Cover:Selected()==ExportFormat.Epub3?selectedCover:null);
+                Cover:Selected()==ExportFormat.Epub3?selectedCover:null,
+                Policy:policy.SelectedIndex==1?PublicationPolicy.Complete:PublicationPolicy.Compatible);
             return new(ExportFormat.Pdf,selectRange.IsChecked==true?(int?)first.Value:null,
                 selectRange.IsChecked==true?(int?)last.Value:null,
                 PdfImageQuality:imageQuality.SelectedIndex switch{1=>92,2=>72,_=>101},IncludePdfProvenance:provenance.IsChecked==true);
@@ -169,6 +179,7 @@ public sealed partial class ReaderWindow
             plan=null;
             publish.IsEnabled=false;
             bool pdf=Selected()==ExportFormat.Pdf;
+            policyRow.IsVisible=!pdf;
             selectRange.IsVisible=qualityRow.IsVisible=provenance.IsVisible=pdf;
             range.IsVisible=pdf&&selectRange.IsChecked==true;
             coverRow.IsVisible=cover.IsVisible=Selected()==ExportFormat.Epub3;
@@ -176,6 +187,7 @@ public sealed partial class ReaderWindow
             clearCover.IsEnabled=selectedCover is not null;
             PublicationRequest requested=Request();
             diagnostic.Text=T("Vérification du contenu…","Checking the document…");
+            technical.IsVisible=false;
             try
             {
                 if(preceding is not null)await preceding;
@@ -183,8 +195,19 @@ public sealed partial class ReaderWindow
                 var check=await Task.Run(()=>Publications.Prepare(source,requested,cancellation.Token),cancellation.Token);
                 if(finished||preview!=cancellation)return;
                 plan=check;
-                diagnostic.Text=check.Issues.IsEmpty?T("Le contenu est prêt pour ce format.","The document is ready for this format."):
-                    Summarize(check.Issues);
+                string status=check.Status switch
+                {
+                    PublicationStatus.Ready=>T("Export sans adaptation identifiée","Export with no identified adaptations"),
+                    PublicationStatus.Converted=>T("Export avec conversions","Export with conversions"),
+                    PublicationStatus.Reserved=>T("Export avec réserves","Export with limitations"),
+                    _=>T("Export impossible avec ce réglage","Export unavailable with these settings")
+                };
+                var visible=check.Status==PublicationStatus.Reserved?check.Reservations:check.Issues;
+                diagnostic.Text=visible.IsEmpty?status:status+"\n"+Summarize(visible,4);
+                details.Text=string.Join("\n",check.Features.Select(f=>f.Detail).Concat(check.Issues.Select(i=>
+                    i.Code+" · "+i.Message+(i.Source is {} location?" · "+location.PartUri+location.Path:""))));
+                technical.IsVisible=details.Text.Length>0;
+                publish.Content=check.Status==PublicationStatus.Reserved?T("Exporter avec réserves","Export with limitations"):T("Exporter","Export");
                 publish.IsEnabled=check.Allowed&&!writing&&!string.IsNullOrWhiteSpace(output.Text);
             }
             catch(OperationCanceledException){}
@@ -196,9 +219,9 @@ public sealed partial class ReaderWindow
             finally{if(preview==cancellation)preview=null;cancellation.Dispose();}
         }
 
-        string Summarize(IEnumerable<FlowIssue> issues)=>string.Join("\n",issues.GroupBy(i=>i.Message,StringComparer.Ordinal)
-            .OrderByDescending(g=>g.Any(i=>i.BlocksExport)).Take(12)
-            .Select(g=>(g.Any(i=>i.BlocksExport)?T("Refus · ","Blocked · "):T("Adaptation · ","Adaptation · "))+g.Key+
+        string Summarize(IEnumerable<FlowIssue> issues,int limit=12)=>string.Join("\n",issues.GroupBy(i=>i.Message,StringComparer.Ordinal)
+            .OrderByDescending(g=>g.Any(i=>i.BlocksExport)).Take(limit)
+            .Select(g=>"• "+g.Key+
                 (g.Count()>1?$" ({g.Count().ToString(CultureInfo.CurrentCulture)})":"")));
 
         async Task ChooseCoverAsync()
@@ -268,7 +291,7 @@ public sealed partial class ReaderWindow
             exportCancellation=cancellation;
             writing=true;
             completedPath=null;
-            browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=cover.IsEnabled=coverRow.IsEnabled=
+            browse.IsEnabled=format.IsEnabled=policy.IsEnabled=output.IsEnabled=selectRange.IsEnabled=cover.IsEnabled=coverRow.IsEnabled=
                 range.IsEnabled=qualityRow.IsEnabled=provenance.IsEnabled=publish.IsEnabled=false;
             openFile.IsVisible=openFolder.IsVisible=false;
             cancelOrClose.Content=T("Annuler","Cancel");
@@ -288,7 +311,8 @@ public sealed partial class ReaderWindow
                 openFile.IsVisible=openFolder.IsVisible=true;
                 feedback.Text=T("Fichier exporté.","File exported.");
                 publicationPreferences=new(request.Format,Path.GetDirectoryName(completedPath)!,
-                    request.Format==ExportFormat.Pdf?request.PdfImageQuality:preferences?.PdfImageQuality??101);
+                    request.Format==ExportFormat.Pdf?request.PdfImageQuality:publicationPreferences?.PdfImageQuality??preferences?.PdfImageQuality??101,
+                    request.Format==ExportFormat.Pdf?publicationPreferences?.Policy??preferences?.Policy??PublicationPolicy.Compatible:request.Policy);
                 SavePublicationPreferences(publicationPreferences);
             }
             catch(OperationCanceledException){feedback.Text=T("Export annulé. La destination a été préservée.","Export cancelled. The destination was preserved.");}
@@ -308,7 +332,7 @@ public sealed partial class ReaderWindow
                 writing=false;
                 exportCancellation=null;
                 progress.IsVisible=false;
-                browse.IsEnabled=format.IsEnabled=output.IsEnabled=selectRange.IsEnabled=coverRow.IsEnabled=
+                browse.IsEnabled=format.IsEnabled=policy.IsEnabled=output.IsEnabled=selectRange.IsEnabled=coverRow.IsEnabled=
                     range.IsEnabled=qualityRow.IsEnabled=provenance.IsEnabled=true;
                 cover.IsEnabled=selectedCover is null;
                 publish.IsEnabled=plan?.Allowed==true;

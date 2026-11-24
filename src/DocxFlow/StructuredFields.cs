@@ -13,7 +13,13 @@ internal sealed partial class StructuredPublication
         .Where(value=>value.Diagnostic is null&&value.Text is not null).GroupBy(value=>value.FieldId,StringComparer.Ordinal)
         .Where(values=>values.Count()==1).ToDictionary(values=>values.Key,values=>values.Single(),StringComparer.Ordinal);
     readonly HashSet<string> knownContents=new(StringComparer.Ordinal);
+    readonly HashSet<string> visibleFieldResults=(source.Pagination?.Typography?.Tokens??[])
+        .Where(item=>item.Role==TextRole.StoredField&&Visible(item)&&!string.IsNullOrEmpty(item.Original))
+        .Select(item=>item.Source.NodeId).ToHashSet(StringComparer.Ordinal);
+    internal SortedDictionary<string,string> OdtDocumentProperties {get;}=new(StringComparer.Ordinal);
     IReadOnlyDictionary<string,string>? documentProperties;
+
+    bool HasVisibleFieldResult(SemanticField field)=>field.StoredResultIds.Any(visibleFieldResults.Contains);
 
     bool TryStructuredField(SemanticField field,TextToken[] items,List<(int Index,Inline Item)> parts,HashSet<string> replaced)
     {
@@ -31,16 +37,19 @@ internal sealed partial class StructuredPublication
                 parts.Add((order,new(origin,null,null,null,Anchor:destination)));
                 Headings.Add((destination,entry.Level,entry.Label));
             }
-            else return false;
+            else
+                Reserve("EXPORT_NOVA_TOC_MARK",origin,"Le titre et le résultat du sommaire restent lisibles. La marque Word n’est plus dynamique.");
             return true;
         }
         if(tocOperands.Contains(field.Id))return true;
-        if(field.Command=="TOC"&&snapshot.FieldStability=="Stable"&&format!=ExportFormat.Nova)
+        if(nativeContents?.Field==field.Id)return true;
+        if(field.Command=="TOC"&&snapshot.FieldStability=="Stable")
         {
+            if(format==ExportFormat.Nova&&!HasVisibleFieldResult(field))return false;
             if(knownContents.Add(field.Id))
-                Issue("EXPORT_TOC_RETAINED_ENTRIES",origin,
+                Reserve("EXPORT_TOC_RETAINED_ENTRIES",origin,
                     Odt?"Les entrées et renvois sont conservés sous forme éditable avec les titres et marques de sommaire.":
-                    "Les entrées du sommaire sont conservées dans la lecture et la navigation est recalculée à partir des titres.",false);
+                    format==ExportFormat.Nova?"Les entrées du sommaire sont conservées sous forme éditable.":"Les entrées du sommaire sont conservées dans la lecture et la navigation est recalculée à partir des titres.");
             Feature("contents",PublicationRetention.Structured,origin.Location,"Sommaire et destinations conservés.");
             return true;
         }
@@ -53,19 +62,36 @@ internal sealed partial class StructuredPublication
             return true;
         }
         bool folio=field.Command is "PAGE" or "NUMPAGES" or "SECTIONPAGES" or "PAGEREF";
-        if(format==ExportFormat.Epub3&&folio&&syntax is not null&&
-            (reflowStory||field.Command=="PAGEREF"&&field.ParentFieldId is {} parent&&model.Fields.Any(f=>f.Id==parent&&f.Command=="TOC")))
+        if(!Odt&&folio&&syntax is not null&&
+            (reflowStory||format==ExportFormat.Nova&&IsRunningStory(field)||format==ExportFormat.Epub3&&
+                field.Command=="PAGEREF"&&field.ParentFieldId is {} parent&&model.Fields.Any(f=>f.Id==parent&&f.Command=="TOC")))
         {
             replaced.UnionWith(field.StoredResultIds);
-            Issue("EXPORT_EPUB_REFLOW_FOLIO",origin,"Folio de la source retiré de la publication redistribuable.",false);
+            Issue("EXPORT_REFLOW_FOLIO",origin,"Le folio papier est écarté de la lecture redistribuable.",false);
             return true;
         }
         if(field.Command=="DOCPROPERTY"&&field.ParentFieldId is null&&
             PagePropertyName(field) is {} property&&
             (documentProperties??=model.TextDocumentProperties(token.ThrowIfCancellationRequested)).TryGetValue(property,out var value))
         {
+            if(Odt)
+            {
+                string name=OdtDocumentProperties.Keys.FirstOrDefault(
+                    key=>StringComparer.OrdinalIgnoreCase.Equals(key,property))??property;
+                OdtDocumentProperties[name]=value;
+                Add("DOCPROPERTY",value,numbering:name);
+                Feature("fields",PublicationRetention.Native,origin.Location,"Propriété personnalisée et champ ODT actualisable.");
+                return true;
+            }
             Add(null,value);
-            Issue("EXPORT_FIELD_VALUE_SNAPSHOT",origin,"La valeur vérifiée de la propriété est reprise comme texte éditable.",false);
+            Reserve("EXPORT_FIELD_VALUE_SNAPSHOT",origin,"La valeur vérifiée de la propriété est reprise comme texte éditable sans actualisation.");
+            return true;
+        }
+        if(folio&&!Odt&&snapshot.FieldStability=="Stable"&&calculatedFields.GetValueOrDefault(field.Id) is {Text:{} folioText}&&
+            field.Command!="PAGEREF")
+        {
+            Add(null,folioText);
+            Reserve("EXPORT_FIELD_VALUE_SNAPSHOT",origin,"Le numéro calculé dans la source est conservé comme texte, sans actualisation.");
             return true;
         }
         if(field.Command is not ("REF" or "PAGEREF")||syntax is not {Relative:false,DecimalPlaces:0}||field.BookmarkId is not {} target)
@@ -79,18 +105,9 @@ internal sealed partial class StructuredPublication
             Feature("fields",PublicationRetention.Native,origin.Location,"Champs ODT de page et de référence.");
             return true;
         }
-        if(format==ExportFormat.Epub3||field.Command=="REF")
-        {
-            if(field.Command=="PAGEREF")
-            {
-                // Retain a useful EPUB link and its historical display value when it is outside the running matter.
-                Issue("EXPORT_EPUB_PAGE_REFERENCE",origin,"Le renvoi garde sa destination et son libellé d’origine, selon la mise en page source.",false);
-            }
-            else Issue("EXPORT_FIELD_VALUE_SNAPSHOT",origin,"Le renvoi garde sa destination et le texte résolu. Le libellé reste éditable.",false);
-            Add(null,text,target);
-            return true;
-        }
-        return false;
+        Reserve("EXPORT_FIELD_VALUE_SNAPSHOT",origin,"Le renvoi garde sa destination et le libellé d’origine sans actualisation.");
+        Add(null,text,target);
+        return true;
 
         void Add(string? command,string? value,string? destination=null,string? numbering=null)
         {
@@ -114,6 +131,8 @@ internal sealed partial class StructuredPublication
 
     XElement WriteOdtField(Inline item,string field)
     {
+        if(field=="DOCPROPERTY")
+            return new XElement(Text+"user-defined",new XAttribute(Text+"name",item.NumberFormat!),item.Value??"");
         if(field=="TC")
             return new XElement(Text+"toc-mark",new XAttribute(Text+"outline-level",item.NumberFormat??"1"),
                 new XAttribute(Text+"string-value",item.Value??""));
@@ -127,7 +146,6 @@ internal sealed partial class StructuredPublication
             if(field=="PAGE")result.SetAttributeValue(Text+"select-page","current");
             if(item.NumberFormat is {} number)result.SetAttributeValue(Style+"num-format",number);
         }
-        return item.Style is {} style?new XElement(Text+"span",
-            new XAttribute(Text+"style-name",Register("text",OdtStyle(style,Family(item)))),result):result;
+        return result;
     }
 }

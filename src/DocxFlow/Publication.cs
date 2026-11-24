@@ -5,9 +5,14 @@ using LecteurWord.DocxCore;
 namespace LecteurWord.Flow;
 
 internal enum PublicationRetention { Native, Structured, Vector, Raster, Unsupported }
+internal enum PublicationPolicy { Compatible, Complete }
+internal enum PublicationStatus { Ready, Converted, Reserved, Blocked }
 internal sealed record PublicationFeature(string Kind,PublicationRetention Retention,SourceLocation? Source,string Detail);
+internal enum PublicationRepresentation { Native, Compatible, Presentation, Residual }
+internal sealed record PublicationContent(SemanticKind Kind,SourceLocation Source,PublicationRepresentation Representation);
 internal sealed record PublicationRequest(ExportFormat Format,int? FirstPage=null,int? LastPage=null,bool UseCoverImage=false,
-    int PdfImageQuality=101,bool IncludePdfProvenance=false,PublicationCover? Cover=null);
+    int PdfImageQuality=101,bool IncludePdfProvenance=false,PublicationCover? Cover=null,
+    PublicationPolicy Policy=PublicationPolicy.Compatible);
 internal sealed class PublicationCover
 {
     internal const int MaxBytes=8*1024*1024;
@@ -30,10 +35,17 @@ internal sealed record PublicationProgress(string Phase,int Completed,int Total)
 internal sealed record PublicationPlan(string Profile,ImmutableArray<PublicationFeature> Features,ImmutableArray<FlowIssue> Issues)
 {
     internal bool Allowed=>!Issues.Any(i=>i.BlocksExport);
+    internal ImmutableArray<FlowIssue> Reservations {get;init;}=[];
+    internal ImmutableArray<PublicationContent> Contents {get;init;}=[];
+    internal PublicationStatus Status=>!Allowed?PublicationStatus.Blocked:!Reservations.IsEmpty?PublicationStatus.Reserved:
+        !Issues.IsEmpty||Features.Any(f=>f.Retention is PublicationRetention.Vector or PublicationRetention.Raster)?
+            PublicationStatus.Converted:PublicationStatus.Ready;
 }
 internal sealed record PublicationMetadata(string Title,string? Author,string? Subject,string? Description,
     string? Keywords,string? Language,DateTimeOffset? Created,DateTimeOffset? Modified)
 {
+    internal SourceLocation? Origin {get;init;}
+
     internal static PublicationMetadata Read(InspectionManifest manifest,string title)
     {
         const string core="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
@@ -54,7 +66,7 @@ internal sealed record PublicationMetadata(string Title,string? Author,string? S
         DateTimeOffset? Date(string name)=>DateTimeOffset.TryParse(Value(terms,name),CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal,out var date)?date:null;
         return new(Value(dc,"title")??title,Value(dc,"creator"),Value(dc,"subject"),Value(dc,"description"),
-            Value(cp,"keywords"),Value(dc,"language"),Date("created"),Date("modified"));
+            Value(cp,"keywords"),Value(dc,"language"),Date("created"),Date("modified")){Origin=root?.Source};
     }
 }
 
@@ -79,6 +91,13 @@ internal static class Publications
 
     internal static PublicationPlan Prepare(PublicationSource source,PublicationRequest request,CancellationToken token)
     {
+        if(Invalid(source,request,token) is {} invalid)return invalid;
+        return request.Format==ExportFormat.Pdf?PdfPublication.Prepare(source,request,token):
+            StructuredPublication.Compile(source,request,token).Plan;
+    }
+
+    static PublicationPlan? Invalid(PublicationSource source,PublicationRequest request,CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         if(!source.Inspection.Manifest.InspectionComplete||source.Semantic?.SnapshotId!=source.SourceHash)
             return Blocked("EXPORT_SOURCE_UNAVAILABLE","Le modèle de publication du document est indisponible.");
@@ -89,12 +108,9 @@ internal static class Publications
             return Blocked("EXPORT_PDF_OPTIONS","Les options de qualité et de provenance demandées sont hors profil.");
         if((request.UseCoverImage||request.Cover is not null)&&request.Format!=ExportFormat.Epub3)
             return Blocked("EXPORT_COVER_FORMAT","Le choix d’une couverture est réservé à l’EPUB.");
-        return request.Format switch
-        {
-            ExportFormat.Pdf=>PdfPublication.Prepare(source,request,token),
-            ExportFormat.Odt or ExportFormat.Epub3 or ExportFormat.Nova=>StructuredPublication.Prepare(source,request.Format,token,request.UseCoverImage,request.Cover),
-            _=>Blocked("EXPORT_FORMAT_UNSUPPORTED","Format de publication inconnu.")
-        };
+        if(!Enum.IsDefined(request.Format)||!Enum.IsDefined(request.Policy))
+            return Blocked("EXPORT_FORMAT_UNSUPPORTED","Format ou politique de publication inconnus.");
+        return null;
     }
 
     internal static PublicationPlan Blocked(string code,string detail)=>new("unavailable",[],
@@ -109,7 +125,9 @@ internal static class Publications
     internal static string Write(PublicationSource source,PublicationRequest request,string destination,bool overwrite=false,
         IProgress<PublicationProgress>? progress=null,CancellationToken token=default)
     {
-        var plan=Prepare(source,request,token);
+        if(Invalid(source,request,token) is {} invalid)throw new PublicationRefusal(invalid.Issues);
+        var package=request.Format==ExportFormat.Pdf?null:StructuredPublication.Compile(source,request,token);
+        var plan=package?.Plan??PdfPublication.Prepare(source,request,token);
         if(!plan.Allowed)throw new PublicationRefusal(plan.Issues);
         string path=Path.GetFullPath(destination);
         if(!Path.GetExtension(path).Equals("."+Extension(request.Format),StringComparison.OrdinalIgnoreCase))
@@ -127,10 +145,10 @@ internal static class Publications
         try
         {
             if(request.Format==ExportFormat.Pdf)PdfPublication.Write(stage,source,request,budget,progress,token);
-            else StructuredPublication.Write(stage,source,request.Format,budget,progress,token,request.UseCoverImage,request.Cover);
+            else PublicationPackages.WriteEntries(stage,package!.Entries,budget,progress,token);
             progress?.Report(new("verify",0,1));
             if(request.Format==ExportFormat.Pdf)PdfPublication.Verify(stage,source,request,token);
-            else StructuredPublication.Verify(stage,source,request.Format,token,request.UseCoverImage,request.Cover);
+            else PublicationPackages.Verify(stage,package!.Entries,source.Inspection.Manifest.Budgets.MaxOutputBytes,token);
             budget.Check(0);
             target.Refresh();
             if(target.LinkTarget is not null||original is {} known&&

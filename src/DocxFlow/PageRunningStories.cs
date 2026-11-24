@@ -10,6 +10,8 @@ internal sealed record PageStoryRegion(int Section,string Kind,string Variant,Ru
     internal int FloatingFrames {get;init;}
     internal long? FlowHeight {get;init;}
     internal long DrawingMargin {get;init;}
+    internal ComposedPage? FrameTemplate {get;init;}
+    internal long TemplateTopInk {get;init;}
 }
 internal sealed record PageStoryPlacement(RunningStory Selection,PageRegion Region,IReadOnlyList<PageLine> Lines,IReadOnlyList<PageCell> Cells);
 
@@ -26,6 +28,37 @@ internal static partial class PageComposer
 
         internal StoryTemplate FitHeader(long available)=>Height>available&&StructuralHeight is {} minimum?
             this with{Height=minimum}:this;
+    }
+
+    internal static ComposedPage? PlaceMeasuredStoryFrames(PageStoryRegion region,PageSection section)
+    {
+        if(region.FrameTemplate is not {} template)return null;
+        int parity=region.Variant=="even"?2:1;
+        var geometry=section.GeometryOn(parity,region.Variant=="first",parity);
+        var output=ImmutableArray.CreateBuilder<PlacedFloatingTextFrame>();
+        foreach(var placement in template.FloatingTextFrames)
+        {
+            var frame=placement.Frame;
+            if(frame.RunningDrawing is {} drawing)
+            {
+                var declared=geometry with{Top=section.Format.Top,Bottom=section.Format.Bottom};
+                foreach(var leaf in drawing.Place(frame,declared,parity).Leaves)
+                    output.Add(new(leaf,new(1,[]){Geometry=leaf.Geometry,NativePainter=template.NativePainter}));
+                continue;
+            }
+            float paragraphTop=0;
+            if(frame.VerticalReference=="paragraph")
+            {
+                var anchor=template.Lines.FirstOrDefault(l=>l.Native?.Parts.Any(p=>p.Control?.Source.NodeId==frame.Id)==true);
+                if(anchor is null||region.AvailableRegion is not {} anchorRegion)continue;
+                var firstLine=template.Lines.First(l=>l.ParagraphId==anchor.ParagraphId);
+                long origin=region.Kind=="header"?anchorRegion.Top:anchorRegion.Top+anchorRegion.Height-(region.FlowHeight??0);
+                paragraphTop=firstLine.NativeTop+Points(origin-region.TemplateTopInk);
+            }
+            var (x,y)=frame.PageOrigin(geometry,parity,paragraphTop);
+            output.Add(new(frame with{X=x,Y=y},MoveFrame(placement.Content,x,y,region.Section,geometry)));
+        }
+        return new(parity,[]){Geometry=geometry,NativePainter=template.NativePainter,FloatingTextFrames=output.ToImmutable()};
     }
 
     static ImmutableArray<PageSection> MeasureRunningMargins(ImmutableArray<PageSection> sections,SemanticDocument model,
@@ -348,6 +381,8 @@ internal static partial class PageComposer
         var regions=plan.Select(kv=>kv.Value.Region with
         {
             PhysicalPages=used.TryGetValue(kv.Key,out var hits)?[..hits]:[],
+            FrameTemplate=hits is not {Count:>0}&&kv.Value.Template?.Page is {FloatingTextFrames.Count:>0} template?template:null,
+            TemplateTopInk=kv.Value.Template?.TopInk??0,
             Status=unresolvedRegions.Contains(kv.Key)?"FieldUnresolved":
                 generatedRegions.Contains(kv.Key)?"FieldCalculated":kv.Value.Region.Status
         }).ToImmutableArray();

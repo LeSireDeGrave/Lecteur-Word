@@ -9,7 +9,7 @@ using LecteurWord.DocxCore;
 namespace LecteurWord.Flow;
 
 internal sealed partial class StructuredPublication(PublicationSource source,ExportFormat format,CancellationToken token,
-    bool useCover=false,PublicationCover? selectedCover=null)
+    bool useCover=false,PublicationCover? selectedCover=null,PublicationPolicy policy=PublicationPolicy.Compatible)
 {
     internal const string HtmlNamespace="http://www.w3.org/1999/xhtml";
     internal static readonly XNamespace Html=HtmlNamespace, Epub="http://www.idpf.org/2007/ops",
@@ -24,9 +24,10 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
     internal sealed record Asset(string Path,string Mime,byte[] Data);
     internal sealed record Inline(SemanticSource Source,string? Value,TextStyle? Style,FontResolution? Font,
         string? Anchor=null,SemanticReference? Link=null,SemanticReference? Note=null,InlineImage? Image=null,string? Field=null,
-        string? AnchorEnd=null,string? Target=null,string? NumberFormat=null,string? DeclaredFont=null);
+        string? AnchorEnd=null,string? Target=null,string? NumberFormat=null,string? DeclaredFont=null,FloatingTextFrame? TextFrame=null);
 
     internal readonly List<FlowIssue> Issues=[];
+    readonly List<FlowIssue> reservations=[];
     internal readonly List<PublicationFeature> Features=[];
     readonly HashSet<(string,string?)> seen=[];
     internal readonly List<Asset> Assets=[];
@@ -74,39 +75,31 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
     internal PublicationMetadata Metadata=>source.Metadata;
     internal SemanticDocument Model=>model;
 
-    internal static PublicationPlan Prepare(PublicationSource source,ExportFormat format,CancellationToken token,
-        bool useCover=false,PublicationCover? selectedCover=null)
+    internal sealed record Package(PublicationPlan Plan,IReadOnlyList<PublicationPackages.Entry> Entries);
+
+    internal static Package Compile(PublicationSource source,PublicationRequest request,CancellationToken token)
     {
         if(source.Pagination is not {Typography:{},RulerModel:{}}||source.Semantic is null)
-            return Publications.Blocked("EXPORT_SEMANTIC_UNAVAILABLE","Les styles et la structure vérifiés du document sont indisponibles.");
-        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
-        _=book.BuildBody();
-        return new(format switch{ExportFormat.Odt=>"odt-semantic-v1",ExportFormat.Epub3=>"epub-semantic-v1",_=>"opusnova-v27"},
-            [..book.Features],[..book.Issues]);
-    }
-
-    internal static void Write(string path,PublicationSource source,ExportFormat format,ExportBudget budget,
-        IProgress<PublicationProgress>? progress,CancellationToken token,bool useCover=false,PublicationCover? selectedCover=null)
-    {
-        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
+            return new(Publications.Blocked("EXPORT_SEMANTIC_UNAVAILABLE","Les styles et la structure vérifiés du document sont indisponibles."),[]);
+        var format=request.Format;
+        var book=new StructuredPublication(source,format,token,request.UseCoverImage,request.Cover,request.Policy);
         var body=book.BuildBody();
-        if(book.Issues.Any(i=>i.BlocksExport))throw new PublicationRefusal(book.Issues);
-        if(format==ExportFormat.Nova)
+        IReadOnlyList<PublicationPackages.Entry> entries=[];
+        ImmutableArray<PublicationContent> contents=[];
+        try
         {
-            NovaPublication.Write(path,book,budget,token);
-            progress?.Report(new("write",1,1));
-            return;
+            if(format==ExportFormat.Nova)entries=NovaPublication.Build(book,token);
+            else if(!book.Issues.Any(i=>i.BlocksExport))
+                entries=PublicationPackages.Entries(source,book,body,format);
+            if(format!=ExportFormat.Nova||entries.Count!=0)contents=book.ReviewConservation();
         }
-        PublicationPackages.Write(path,source,book,body,format,budget,progress,token);
-    }
-
-    internal static void Verify(string path,PublicationSource source,ExportFormat format,CancellationToken token,
-        bool useCover=false,PublicationCover? selectedCover=null)
-    {
-        var book=new StructuredPublication(source,format,token,useCover,selectedCover);
-        var body=book.BuildBody();
-        if(format==ExportFormat.Nova)NovaPublication.Verify(path,book,token);
-        else PublicationPackages.Verify(path,source,book,body,format,token);
+        catch(InvalidDataException error)
+        {
+            book.AddIssue("EXPORT_PACKAGE_INCOMPATIBLE",null,error.Message,true);
+        }
+        var plan=new PublicationPlan(format switch{ExportFormat.Odt=>"odt-semantic-v2",ExportFormat.Epub3=>"epub-semantic-v2",_=>"opusnova-v27"},
+            [..book.Features],[..book.Issues]){Reservations=[..book.reservations],Contents=contents};
+        return new(plan,plan.Allowed?entries:[]);
     }
 
     XElement[] BuildBody()
@@ -117,25 +110,28 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         Feature("document",PublicationRetention.Structured,model.Source(body.RootId).Location,"Ordre de lecture et paragraphes.");
         if(!Odt&&snapshot.Sections.Length>0)
             Issue("EXPORT_REFLOW_PAPER",model.Source(body.RootId),"La publication s’adapte au support de lecture.",false);
+        PrepareOdtComments();
         var auxiliary=Odt?BuildOdtPageStyles():BuildReflowStories(format==ExportFormat.Epub3);
         foreach(var issue in snapshot.Typography!.Diagnostics.Where(i=>i.Code is "TEXT_PROPERTY_PARTIAL" or "TEXT_VISIBILITY_UNRESOLVED" or
             "TEXT_HIDDEN_CONTROL_UNQUALIFIED" or "TEXT_STORY_UNQUALIFIED"))
-            AddIssue(issue.Code,issue.Source,issue.Message,true);
+        {
+            if(issue.Code is "TEXT_PROPERTY_PARTIAL" or "TEXT_STORY_UNQUALIFIED")
+                Reserve(issue.Code,issue.Source,issue.Message+" La restitution de cet élément source est partielle.");
+            else AddIssue(issue.Code,issue.Source,issue.Message,true);
+        }
         foreach(var element in model.Elements.Where(e=>e.Coverage!=SemanticCoverage.InactiveAlternative))
         {
             token.ThrowIfCancellationRequested();
-            if(element.Kind is SemanticKind.Revision or SemanticKind.CommentReference)
-                Issue("EXPORT_EDITORIAL_HISTORY",model.Source(element.Id),"L’historique éditorial de ce document dépasse le profil du format.");
+            if(element.Kind==SemanticKind.Revision||element.Kind==SemanticKind.CommentReference&&!handledComments.Contains(element.Id))
+                Reserve("EXPORT_EDITORIAL_HISTORY",model.Source(element.Id),"Le texte visible est conservé. Cet élément d’historique éditorial reste dans le DOCX.");
             if(element.Kind==SemanticKind.Opaque&&element.StoryId is not null&&element.Coverage==SemanticCoverage.InventoryOnly&&
                 !IsCoveredDescendant(element.Id))
-                Issue("EXPORT_UNKNOWN_CONTENT",model.Source(element.Id),"Contenu de l’histoire conservé dans l’inventaire. Conversion indéterminée.");
+                Reserve("EXPORT_UNKNOWN_CONTENT",model.Source(element.Id),"Élément dont la restitution n’est pas établie. Consultez le DOCX pour cette partie.");
         }
         if(format==ExportFormat.Nova)
-        {
-            NovaPublication.Assess(this,token);
             return [];
-        }
-        var blocks=auxiliary.Concat(Blocks(model.BodyBlocks)).ToArray();
+        var blocks=Odt?BuildOdtBody():auxiliary.Concat(Blocks(model.BodyBlocks)).ToArray();
+        Represent(body.RootId);
         if(selectedCover is not null)
         {
             string extension=selectedCover.Mime=="image/png"?".png":".jpg";
@@ -152,7 +148,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
     {
         for(string? parent=model.ParentId(id);parent is not null;parent=model.ParentId(parent))
             if(model.Element(parent).Kind is SemanticKind.Property or SemanticKind.Section||
-                model.Element(parent).Kind==SemanticKind.Drawing&&(placedImages.ContainsKey(parent)||odtFloatingIds.Contains(parent)))return true;
+                model.Element(parent).Kind==SemanticKind.Drawing&&
+                    (placedImages.ContainsKey(parent)||floatingObjects.ContainsKey(parent)||odtFloatingIds.Contains(parent)))return true;
         return false;
     }
 
@@ -173,6 +170,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         if(Odt||format==ExportFormat.Nova)
             foreach(var mark in bookmarkEnds[paragraph])
                 parts.Add((mark.Order,new(model.Source(mark.Id),null,null,null,AnchorEnd:model.Attribute(mark.Id,"id"))));
+        ReadCommentMarkers(paragraph,parts);
 
         var all=tokens[paragraph].ToArray();
         var fields=fieldsByParagraph[paragraph];
@@ -184,7 +182,13 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
                 continue;
             }
             else if(field is not {StructureVerified:true,Locked:true,StoredResultIds.IsEmpty:false})
-                Issue("EXPORT_FIELD_UNSUPPORTED",model.Source(field.Id),"Champ actif hors profil de conversion · "+field.Command+".");
+            {
+                if(format==ExportFormat.Nova&&field.Command!="TC"&&!HasVisibleFieldResult(field))
+                    Issue("EXPORT_NOVA_FIELD_VALUE_MISSING",model.Source(field.Id),"Champ sans résultat visible vérifié · "+field.Command+".");
+                else
+                    Reserve("EXPORT_FIELD_UNSUPPORTED",model.Source(field.Id),field.StoredResultIds.IsEmpty?
+                        "Champ sans valeur publiable · "+field.Command+".":"Résultat enregistré conservé sans actualisation · "+field.Command+".");
+            }
             else Feature("fields",PublicationRetention.Structured,model.Source(field.Id).Location,"Résultat stocké du champ verrouillé.");
         }
         foreach(var item in all)
@@ -210,17 +214,33 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
                             Issue("EXPORT_EPUB_REFLOW_BREAK",item.Source,"Le saut de feuille ou de colonne est adapté à la lecture continue.",false);
                             value="\n";
                         }
-                        else Issue("EXPORT_BREAK_UNSUPPORTED",item.Source,"Saut de page ou de colonne hors profil.");
+                        else if(format==ExportFormat.Nova&&model.Attribute(item.Source.NodeId,"type")=="page")
+                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Field:"BREAK")));
+                        else
+                        {
+                            Reserve("EXPORT_BREAK_UNSUPPORTED",item.Source,"Le saut de colonne est repris comme coupure de lecture.");
+                            value="\n";
+                        }
                         break;
                     case "Drawing":
-                        if(placedImages.GetValueOrDefault(item.Source.NodeId) is {} image&&
-                            AssetFor(image) is {} asset&&(format!=ExportFormat.Nova||asset.Mime is "image/png" or "image/jpeg"))
-                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Link:link,Image:image)));
-                        else if(Odt&&odtFloatingIds.Contains(item.Source.NodeId))
+                        if(Odt&&NativeOdtFrames(item.Source.NodeId).Length>0)
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Field:"FLOAT")));
-                        else if(reflowStory&&format==ExportFormat.Epub3&&IsDecorativeDrawing(item.Source.NodeId))
+                        else if(reflowStory&&!Odt&&IsDecorativeDrawing(item.Source.NodeId))
                             Issue("EXPORT_EPUB_DECORATION",item.Source,"Le décor récurrent est écarté de la lecture continue.",false);
-                        else Issue("EXPORT_DRAWING_UNSUPPORTED",item.Source,"Dessin, graphique ou équation hors du profil structuré.");
+                        else if(!Odt&&floatingObjects.GetValueOrDefault(item.Source.NodeId) is {} drawing&&
+                            drawing.Frames.Any(frame=>frame.Frame.StoryId.Length>0))
+                            parts.AddRange(ReflowDrawing(item.Source,link,drawing).Select(inline=>(model.Element(item.Source.NodeId).Order,inline)));
+                        else if(ConvertObject(item.Source.NodeId) is {} image&&AssetFor(image) is not null)
+                        {
+                            if(image.ResourceId.StartsWith("publication:",StringComparison.Ordinal))
+                                Reserve("EXPORT_OBJECT_RASTER",item.Source,"L’objet garde sa représentation graphique. Ses composants ne sont plus éditables.");
+                            if(floatingObjects.ContainsKey(item.Source.NodeId))
+                                Reserve("EXPORT_OBJECT_FLOW",item.Source,"L’objet est rapproché de son ancre dans le flux de lecture. Son habillage peut changer.");
+                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Link:link,Image:image)));
+                        }
+                        else if(ObjectText(item.Source.NodeId) is not null)
+                            Issue("EXPORT_OBJECT_TEXT",item.Source,"Seule la description de l’objet est disponible. L’export exige une représentation graphique vérifiée.");
+                        else Issue("EXPORT_DRAWING_UNSUPPORTED",item.Source,"Dessin, graphique ou équation sans restitution vérifiée. Consultez cet objet dans le DOCX.");
                         continue;
                     case "Symbol":
                         if(item.Style is {} symbolStyle&&uint.TryParse(value,NumberStyles.AllowHexSpecifier,
@@ -238,7 +258,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
                         var note=references[item.Source.NodeId].SingleOrDefault();
                         if(note is {Status:ReferenceStatus.Resolved,TargetId:not null})
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Note:note)));
-                        else Issue("EXPORT_NOTE_UNSUPPORTED",item.Source,"Note hors du profil structuré.");
+                        else Reserve("EXPORT_NOTE_UNSUPPORTED",item.Source,"Appel de note sans corps résolu dans le DOCX.");
                         continue;
                     default:Issue("EXPORT_INLINE_UNSUPPORTED",item.Source,"Élément en ligne hors profil.");continue;
                 }
@@ -246,9 +266,10 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             if(string.IsNullOrEmpty(value))continue;
             if(value.Contains('\r')||value.Any(c=>!XmlConvert.IsXmlChar(c)&&!char.IsSurrogate(c)))
                 Issue("EXPORT_TEXT_UNSUPPORTED",item.Source,"Caractère de contrôle sans représentation XML qualifiée.");
-            if(item.Style is {} style&&(style.HorizontalScale!=100||style.Shadow is not null||
-                style.Underline is not ("none" or "single")||style.Caps||style.SmallCaps||style.BaselineShift!=0))
-                Issue("EXPORT_STYLE_UNSUPPORTED",item.Source,"Effet typographique hors profil structuré.");
+            if(item.Style is {} style&&(format==ExportFormat.Nova&&(style.HorizontalScale!=100||style.Shadow is not null||
+                style.Underline is not ("none" or "single")||style.Caps||style.SmallCaps||style.BaselineShift!=0)||
+                !Odt&&style.HorizontalScale!=100||style.Shadow is not null))
+                Reserve("EXPORT_STYLE_UNSUPPORTED",item.Source,"Le texte reste éditable. Certains effets de caractère sont adaptés.");
             if(font is {Status:"substituted"}||font is not null&&font.RequestedFamily!=font.UsedFamily)
                 Feature("font-substitution",PublicationRetention.Structured,item.Source.Location,"Nom de la face résolue, sans copie de police dans les formats éditables.");
             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,value,item.Style,font,Link:link)));
@@ -309,10 +330,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             var format=ListFormat(label,paragraph.Id);
             if(format is null)
             {
-                Issue("EXPORT_LIST_UNSUPPORTED",model.Source(id),"Libellé ou glyphe de liste hors profil.");
-                lists.Clear();
-                result.Add(markup);
-                continue;
+                Reserve("EXPORT_LIST_UNSUPPORTED",model.Source(id),"Le code du libellé d’origine reste éditable. Son affichage dépend de la police disponible.");
+                format=("",0,"","",label.Text,true);
             }
             var (number,index,prefix,suffix,display,custom)=format.Value;
             int currentDepth=lists.Count>0&&lists[^1].Level==label.Level?lists.Count-1:lists.Count;
@@ -420,20 +439,49 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         string? plainTitle=level>0?string.Concat(parts.Select(x=>x.Value)).Trim():null;
         if(!string.IsNullOrEmpty(plainTitle))Headings.Add((Id(id),level,plainTitle));
         if(paragraph is {} layout)ApplyParagraph(block,layout,leadingBreak);
+        XElement? flow=null;
+        var current=block;
         foreach(var item in parts)
         {
             if(item.Field=="BREAK")
             {
                 // A mid-paragraph page break cannot be mapped to an ODF paragraph property.
                 if(!leadingBreak||item!=parts[0])
-                    Issue("EXPORT_ODT_INLINE_PAGE_BREAK",item.Source,"Saut de page à l’intérieur d’un paragraphe hors profil ODT.");
+                {
+                    Reserve("EXPORT_ODT_INLINE_PAGE_BREAK",item.Source,"Le saut interne est conservé comme coupure de ligne dans le paragraphe éditable.");
+                    block.Add(new XElement(Text+"line-break"));
+                }
                 continue;
             }
             if(item.Field=="FLOAT"){AppendOdtDrawing(block,item.Source);continue;}
+            if(item.TextFrame is {} frame)
+            {
+                if(flow is null)
+                {
+                    flow=new XElement(Html+"div",new XAttribute("id",Id(id)),block);
+                    block.Attribute("id")?.Remove();
+                }
+                else if(current.FirstNode is not null)flow.Add(current);
+                var content=Blocks(TextFrameBlocks(frame));
+                var inset=new XElement(Html+"aside",new XAttribute(Epub+"type","sidebar"),
+                    new XAttribute("class","text-frame"),content);
+                var decoration=new List<string>();
+                if(frame.Fill is uint fill)decoration.Add($"background-color:#{fill:X6}");
+                if(frame.Stroke is {} stroke)decoration.Add($"border:{Pt(stroke.Width)} solid #{stroke.Color:X6}");
+                if(decoration.Count>0)inset.SetAttributeValue("style",string.Join(';',decoration));
+                flow.Add(inset);
+                Represent(frame.StoryId,PublicationRepresentation.Presentation);
+                Represent(item.Source.NodeId,PublicationRepresentation.Presentation);
+                current=new XElement(Html+"p",block.Attributes().Where(a=>a.Name!="aria-level").Select(a=>new XAttribute(a)));
+                continue;
+            }
             var element=WriteInline(item);
-            if(element is not null)block.Add(element);
+            if(element is not null)current.Add(element);
         }
-        return block;
+        Represent(id,PublicationRepresentation.Compatible);
+        if(flow is null)return block;
+        if(current.FirstNode is not null)flow.Add(current);
+        return flow;
     }
 
     void ApplyParagraph(XElement node,LayoutParagraph paragraph,bool leadingBreak)
@@ -453,7 +501,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             new XAttribute(Fo+"text-indent",Pt(p.FirstLine)),new XAttribute(Fo+"margin-top",Pt(p.Before)),
             new XAttribute(Fo+"margin-bottom",Pt(p.After)));
         int? master=OdtMasterFor(paragraph.Id);
-        if(master>1||p.PageBreakBefore||leadingBreak)props.SetAttributeValue(Fo+"break-before","page");
+        if(master is int numberForBreak&&odtPageBreaks.Contains(numberForBreak)||p.PageBreakBefore||leadingBreak)
+            props.SetAttributeValue(Fo+"break-before","page");
         if(master is {} section&&snapshot.Sections[section-1].PageNumberStart is int number)
             props.SetAttributeValue(Style+"page-number",number);
         if(p.KeepNext)props.SetAttributeValue(Fo+"keep-with-next","always");
@@ -490,12 +539,14 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             return null;
         }
         if(item.Note is {} note)return WriteNote(item,note);
+        if(Odt&&item.Field is "COMMENT" or "COMMENT-END")return WriteOdtComment(item);
         XNode content;
         if(Odt&&item.Field is {} field)
             return WriteOdtField(item,field);
         else if(item.Image is {} image&&AssetFor(image) is {} asset)
         {
-            var alt=AlternativeText(item.Source.NodeId);
+            RepresentImage(item);
+            var alt=ObjectText(item.Source.NodeId);
             if(Odt)
                 content=new XElement(Draw+"frame",new XAttribute(Text+"anchor-type","as-char"),
                     new XAttribute(SvgOdt+"width",Pt(image.Width)), new XAttribute(SvgOdt+"height",Pt(image.Height)),
@@ -537,7 +588,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             item.Link is {Status:ReferenceStatus.Resolved,TargetId:{} target}?"#"+Id(target):Publications.SafeUrl(item.Link?.Relation?.Target);
         if(href is null)
         {
-            Issue("EXPORT_LINK_UNSUPPORTED",item.Source,"Cible du lien indisponible ou hors profil.");
+            Reserve("EXPORT_LINK_UNSUPPORTED",item.Source,"Le libellé reste éditable. La cible du lien ne peut être activée.");
             return content;
         }
         Feature("hyperlinks",PublicationRetention.Native,item.Source.Location,"Lien interne ou externe vérifié.");
@@ -558,6 +609,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         string label=NoteLabel(item.Source.NodeId)??ordinal;
         var blocks=Blocks(model.BlocksOf(note.TargetId!).Select(e=>e.Id));
         notes.Add((id,end,label,blocks));
+        Represent(note.TargetId!);
+        Represent(item.Source.NodeId);
         Feature("notes",PublicationRetention.Native,item.Source.Location,"Appels et corps de notes, avec retour dans l’EPUB.");
         return Odt?new XElement(Text+"note",new XAttribute(Text+"id",id),new XAttribute(Text+"note-class",end?"endnote":"footnote"),
                 new XElement(Text+"note-citation",label==ordinal?null:new XAttribute(Text+"label",label),label),
@@ -575,7 +628,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             if(OdtMasterFor(table.Id) is int section)
             {
                 var properties=new XElement(Style+"table-properties");
-                if(section>1)properties.SetAttributeValue(Fo+"break-before","page");
+                if(odtPageBreaks.Contains(section))properties.SetAttributeValue(Fo+"break-before","page");
                 if(snapshot.Sections[section-1].PageNumberStart is int start)
                     properties.SetAttributeValue(Style+"page-number",start);
                 grid.SetAttributeValue(Table+"style-name",Register("table",properties,OdtMasterName(section)));
@@ -622,6 +675,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             body.Add(tr);
         }
         Feature("tables",PublicationRetention.Native,table.Source,"Tableau éditable, fusions et propriétés de cellules.");
+        Represent(table.Id);
         return grid;
     }
 
@@ -631,19 +685,21 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         if(assetsById.TryGetValue(key,out var known))return known;
         byte[] bytes;
         string extension,mime;
-        if(image.VmlVector is not null||image.Diagram is not null)
+        if(VectorImage(image))
         {
             bytes=Encoding.UTF8.GetBytes(PublicationSvg.Encode(image));
             extension="svg";mime="image/svg+xml";
             Feature("vectors",PublicationRetention.Vector,image.Source,"Chemins et texte transmis en SVG.");
         }
-        else if(image.RenderBytes.Length>0&&image.Crop==default&&image.Effects==default&&!image.FlipX&&!image.FlipY&&image.Orientation==1)
+        else if(NativeImage(image))
         {
             bytes=image.RenderBytes;
             (extension,mime)=bytes.AsSpan().StartsWith(new byte[]{137,80,78,71,13,10,26,10})?("png","image/png"):
                 bytes.AsSpan().StartsWith(new byte[]{255,216,255})?("jpg","image/jpeg"):("","");
             if(extension.Length==0)return null;
-            Feature("images",PublicationRetention.Native,image.Source,"Image intégrée réutilisée.");
+            bool raster=image.ResourceId.StartsWith("publication:",StringComparison.Ordinal);
+            Feature(raster?"raster-objects":"images",raster?PublicationRetention.Raster:PublicationRetention.Native,image.Source,
+                raster?"Rendu transparent limité à l’objet.":"Image intégrée réutilisée.");
         }
         else return null;
         var asset=new Asset((Odt?"Pictures/":"images/")+Assets.Count.ToString(CultureInfo.InvariantCulture)+"."+extension,mime,bytes);
@@ -667,11 +723,23 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
     }
 
     internal string Id(string node)=>"n"+model.Element(node).Order.ToString(CultureInfo.InvariantCulture);
+    internal SourceLocation? SourceForPublicationId(string id)=>id.StartsWith('n')&&
+        int.TryParse(id.AsSpan(1),NumberStyles.None,CultureInfo.InvariantCulture,out int order)&&
+        model.Elements.FirstOrDefault(e=>e.Order==order).Id is {} node?model.Source(node).Location:null;
     internal void Issue(string code,SemanticSource location,string message,bool blocks=true)=>AddIssue(code,location.Location,message,blocks);
-    void AddIssue(string code,SourceLocation? location,string message,bool blocks)
+    internal void Issue(string code,SourceLocation? location,string message)=>AddIssue(code,location,message,true);
+    internal bool Compatible=>policy==PublicationPolicy.Compatible;
+    internal void Reserve(string code,SemanticSource location,string message)=>Reserve(code,location.Location,message);
+    internal void Reserve(string code,SourceLocation? location,string message)
     {
+        if(AddIssue(code,location,message,!Compatible))reservations.Add(Issues[^1]);
+    }
+    bool AddIssue(string code,SourceLocation? location,string message,bool blocks)
+    {
+        if(!seen.Add((code,location?.PartUri+location?.Path)))return false;
         if(Issues.Count>=4096)throw new InvalidDataException("EXPORT_DIAGNOSTIC_LIMIT");
-        if(seen.Add((code,location?.PartUri+location?.Path)))Issues.Add(new(code,location,message,false,blocks));
+        Issues.Add(new(code,location,message,false,blocks));
+        return true;
     }
     internal void Feature(string kind,PublicationRetention retention,SourceLocation? location,string detail)
     {
@@ -720,7 +788,16 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         if(style.Background is {} background)result.SetAttributeValue(Fo+"background-color",
             background.StartsWith('#')?background:"#"+background);
         if(family is not null)result.SetAttributeValue(Fo+"font-family",family);
-        if(style.Underline=="single")result.SetAttributeValue(Style+"text-underline-style","solid");
+        if(style.Underline!="none")
+        {
+            result.SetAttributeValue(Style+"text-underline-type",style.Underline=="double"?"double":"single");
+            result.SetAttributeValue(Style+"text-underline-style",UnderlineLineStyle(style.Underline));
+            if(style.UnderlineColor!="auto")result.SetAttributeValue(Style+"text-underline-color","#"+style.UnderlineColor);
+        }
+        if(style.Caps)result.SetAttributeValue(Fo+"text-transform","uppercase");
+        else if(style.SmallCaps)result.SetAttributeValue(Fo+"font-variant","small-caps");
+        if(style.HorizontalScale!=100)result.SetAttributeValue(Style+"text-scale",Num(style.HorizontalScale)+"%");
+        if(style.BaselineShift!=0)result.SetAttributeValue(Style+"text-position",Num(style.BaselineShift/style.Size*100)+"% 100%");
         if(style.Tracking!=0)result.SetAttributeValue(Fo+"letter-spacing",Pt(style.Tracking));
         if(style.Language!="und")result.SetAttributeValue(Style+"rfc-language-tag",style.Language);
         return result;
@@ -736,10 +813,28 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             char.IsLetterOrDigit(c)||c is ' ' or '-'?c.ToString():$"\\{(int)c:X} "))+"\"");
         if(style.Color!="auto")values.Add("color:#"+style.Color);
         if(style.Background is {} background)values.Add("background-color:"+(background.StartsWith('#')?background:"#"+background));
-        if(style.Underline=="single")values.Add("text-decoration:underline");
+        if(style.Underline!="none")
+        {
+            values.Add("text-decoration-line:underline");
+            values.Add("text-decoration-style:"+(style.Underline=="double"?"double":
+                UnderlineLineStyle(style.Underline)=="wave"?"wavy":
+                UnderlineLineStyle(style.Underline)=="dot"?"dotted":
+                UnderlineLineStyle(style.Underline)=="dash"?"dashed":"solid"));
+            if(style.UnderlineColor!="auto")values.Add("text-decoration-color:#"+style.UnderlineColor);
+        }
+        if(style.Caps)values.Add("text-transform:uppercase");
+        else if(style.SmallCaps)values.Add("font-variant:small-caps");
+        if(style.BaselineShift!=0)values.Add("vertical-align:"+Pt(style.BaselineShift));
         if(style.Tracking!=0)values.Add("letter-spacing:"+Pt(style.Tracking));
         return string.Join(';',values);
     }
+
+    static string UnderlineLineStyle(string value)=>value switch
+    {
+        "dotted" or "dottedHeavy"=>"dot","dash" or "dashedHeavy" or "dashLong" or "dashLongHeavy"=>"dash",
+        "dotDash" or "dashDotHeavy"=>"dot-dash","dotDotDash" or "dashDotDotHeavy"=>"dot-dot-dash",
+        "wave" or "wavyHeavy" or "wavyDouble"=>"wave",_=>"solid"
+    };
 
     internal static IEnumerable<XNode> OdtText(string text)
     {

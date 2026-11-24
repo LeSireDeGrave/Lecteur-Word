@@ -13,7 +13,7 @@ public static class DocumentExports
         var compatibility=Compatibility(source,format,default);
         if(!compatibility.Allowed)return compatibility;
         using var lease=PageComposer.Compose(source);
-        var plan=Publications.Prepare(new(source,lease.Snapshot,"Document"),new(format),default);
+        var plan=Publications.Prepare(new(source,lease.Snapshot,"Document"),new(format,Policy:PublicationPolicy.Complete),default);
         return new(plan.Allowed,plan.Profile,compatibility.Issues.Concat(plan.Issues).ToArray());
     }
 
@@ -30,7 +30,7 @@ public static class DocumentExports
             if((d.Attributes&FileAttributes.ReparsePoint)!=0)throw new IOException("Symbolic output ancestor refused.");
         using var lease=PageComposer.Compose(source,token);
         var publication=new PublicationSource(source,lease.Snapshot,"Document");
-        var request=new PublicationRequest(format);
+        var request=new PublicationRequest(format,Policy:PublicationPolicy.Complete);
         var plan=Publications.Prepare(publication,request,token);
         if(!plan.Allowed)throw new InvalidDataException("EXPORT_PREFLIGHT_BLOCKED");
         string stage=Path.Combine(parent,".lecteur-export-"+Guid.NewGuid().ToString("N"));

@@ -9,6 +9,11 @@ internal static class PublicationSvg
     {
         var root=new XElement(Svg+"svg",new XAttribute("viewBox",$"0 0 {Num(image.Width)} {Num(image.Height)}"),
             new XAttribute("width",Pt(image.Width)),new XAttribute("height",Pt(image.Height)));
+        if(image.Metafile is {} metafile)
+        {
+            AppendMetafile(root,image,metafile);
+            return Xml(root);
+        }
         if(image.VmlVector is {} vector)
             foreach(var polygon in vector.Polygons)
                 root.Add(new XElement(Svg+"polygon",new XAttribute("points",string.Join(' ',
@@ -80,4 +85,53 @@ internal static class PublicationSvg
 
     static string Point(float x,float y)=>Num(x)+","+Num(y);
     static string Color(uint rgb)=>"#"+(rgb&0xffffff).ToString("X6",System.Globalization.CultureInfo.InvariantCulture);
+
+    static void AppendMetafile(XElement root,InlineImage image,MetafilePicture picture)
+    {
+        var defs=new XElement(Svg+"defs");
+        var drawing=new XElement(Svg+"g",new XAttribute("transform",
+            $"scale({Num(image.Width/picture.Width)} {Num(image.Height/picture.Height)})"));
+        root.Add(defs,drawing);
+        int textIndex=0;
+        foreach(var stroke in picture.Strokes)
+        {
+            while(textIndex<picture.Texts.Length&&picture.Texts[textIndex].Order<stroke.Order)
+                AddText(picture.Texts[textIndex++]);
+            drawing.Add(new XElement(Svg+"polyline",new XAttribute("points",string.Join(' ',
+                stroke.Points.Select(point=>Point((float)((long)point.X-picture.Left)+.5f,(float)((long)point.Y-picture.Top)+.5f)))),
+                new XAttribute("fill","none"),new XAttribute("stroke",Color(stroke.Pen.Rgb)),
+                new XAttribute("stroke-width",Num(stroke.Pen.Width))));
+        }
+        while(textIndex<picture.Texts.Length)AddText(picture.Texts[textIndex++]);
+        var clipIds=new Dictionary<MetafilePath,string>(ReferenceEqualityComparer.Instance);
+        foreach(var fill in picture.Fills)
+        {
+            var path=new XElement(Svg+"path",new XAttribute("d",PathData(fill.Path)),
+                new XAttribute("fill",Color(fill.Rgb)),new XAttribute("fill-rule",fill.Path.Winding?"nonzero":"evenodd"));
+            if(fill.Clip is {} clip)
+            {
+                if(!clipIds.TryGetValue(clip,out var id))
+                {
+                    id="clip"+clipIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    clipIds.Add(clip,id);
+                    defs.Add(new XElement(Svg+"clipPath",new XAttribute("id",id),
+                        new XElement(Svg+"path",new XAttribute("d",PathData(clip)),
+                            new XAttribute("clip-rule",clip.Winding?"nonzero":"evenodd"))));
+                }
+                path.SetAttributeValue("clip-path","url(#"+id+")");
+            }
+            drawing.Add(path);
+        }
+
+        void AddText(MetafileText text)=>drawing.Add(new XElement(Svg+"path",new XAttribute("d",text.Outline),
+            new XAttribute("fill",Color(text.Rgb))));
+        static string PathData(MetafilePath path)=>string.Join(' ',path.Commands.Select(command=>command.Verb switch
+        {
+            MetafilePathVerb.Move=>"M "+Point(command.Point.X,command.Point.Y),
+            MetafilePathVerb.Line=>"L "+Point(command.Point.X,command.Point.Y),
+            MetafilePathVerb.Cubic=>"C "+Point(command.Point.X,command.Point.Y)+" "+
+                Point(command.Second.X,command.Second.Y)+" "+Point(command.Third.X,command.Third.Y),
+            _=>"Z"
+        }));
+    }
 }

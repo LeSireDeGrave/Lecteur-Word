@@ -17,10 +17,6 @@ internal static class PublicationPackages
     internal static Entry XmlEntry(string name,XElement tree)=>StringEntry(name,Xml(tree));
     internal static Entry StringEntry(string name,string text,bool store=false)=>new(name,Encoding.UTF8.GetBytes(text),store);
 
-    internal static void Write(string path,PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format,
-        ExportBudget budget,IProgress<PublicationProgress>? progress,CancellationToken token)=>
-        WriteEntries(path,Entries(source,book,body,format),budget,progress,token);
-
     internal static void WriteEntries(string path,IReadOnlyList<Entry> entries,ExportBudget budget,
         IProgress<PublicationProgress>? progress,CancellationToken token)
     {
@@ -44,10 +40,9 @@ internal static class PublicationPackages
         }
     }
 
-    internal static void Verify(string path,PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format,
+    internal static void Verify(string path,IReadOnlyList<Entry> expected,long maxOutputBytes,
         CancellationToken token)
     {
-        var expected=Entries(source,book,body,format);
         using var file=File.OpenRead(path);
         using var zip=new ZipArchive(file,ZipArchiveMode.Read);
         if(zip.Entries.Count!=expected.Count)throw new InvalidDataException("EXPORT_PACKAGE_INDEX");
@@ -64,7 +59,7 @@ internal static class PublicationPackages
                 item.Path.EndsWith(".opf",StringComparison.Ordinal)||item.Path.EndsWith(".svg",StringComparison.Ordinal))
             {
                 using var xml=XmlReader.Create(stream,new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,
-                    XmlResolver=null,MaxCharactersInDocument=source.Inspection.Manifest.Budgets.MaxOutputBytes});
+                    XmlResolver=null,MaxCharactersInDocument=maxOutputBytes});
                 var read=XDocument.Load(xml,LoadOptions.PreserveWhitespace);
                 var reference=XDocument.Parse(Encoding.UTF8.GetString(item.Data),LoadOptions.PreserveWhitespace);
                 if(!XNode.DeepEquals(read,reference))throw new InvalidDataException("EXPORT_PACKAGE_XML_ROUNDTRIP");
@@ -84,7 +79,7 @@ internal static class PublicationPackages
         }
     }
 
-    static List<Entry> Entries(PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format)=>
+    internal static List<Entry> Entries(PublicationSource source,StructuredPublication book,XElement[] body,ExportFormat format)=>
         format==ExportFormat.Odt?Odt(source,book,body):Epub3(source,book,body);
 
     static List<Entry> Odt(PublicationSource source,StructuredPublication book,XElement[] body)
@@ -101,7 +96,9 @@ internal static class PublicationPackages
         result.Add(XmlEntry("meta.xml",Root("document-meta",new XElement(Office+"meta",
             Property(Dc+"title",m.Title),Property(Meta+"initial-creator",m.Author),Property(Dc+"creator",m.Author),
             Property(Dc+"subject",m.Subject),Property(Dc+"description",m.Description),Property(Meta+"keyword",m.Keywords),
-            Property(Dc+"language",Language(m)),Property(Meta+"creation-date",Date(m.Created)),Property(Dc+"date",Date(m.Modified))))));
+            Property(Dc+"language",Language(m)),Property(Meta+"creation-date",Date(m.Created)),Property(Dc+"date",Date(m.Modified)),
+            book.OdtDocumentProperties.Select(property=>new XElement(Meta+"user-defined",
+                new XAttribute(Meta+"name",property.Key),new XAttribute(Meta+"value-type","string"),property.Value))))));
         result.AddRange(book.Assets.Select(asset=>new Entry(asset.Path,asset.Data)));
         var declarations=new[]{("/",mime),("content.xml","text/xml"),("styles.xml","text/xml"),("meta.xml","text/xml")}
             .Concat(book.Assets.Select(asset=>(asset.Path,asset.Mime)));
@@ -168,9 +165,17 @@ internal static class PublicationPackages
                 readingOrder.Add(id.Value,readingOrder.Count);
             }
         foreach(var chapter in chapters)
-            foreach(var link in chapter.Contents.Descendants(Html+"a").Attributes("href").Where(a=>a.Value.StartsWith('#')))
+            foreach(var link in chapter.Contents.Descendants(Html+"a").Attributes("href").Where(a=>a.Value.StartsWith('#')).ToArray())
             {
-                if(!locations.TryGetValue(link.Value[1..],out var target))throw new InvalidDataException("EXPORT_EPUB_LINK_TARGET");
+                if(!locations.TryGetValue(link.Value[1..],out var target))
+                {
+                    if((string?)link.Parent?.Attribute(Epub+"type")=="noteref")
+                        throw new InvalidDataException("EXPORT_EPUB_NOTE_TARGET");
+                    book.Reserve("EXPORT_EPUB_LINK_TARGET",book.SourceForPublicationId(link.Value[1..]),
+                        "Le libellé du renvoi reste lisible. Sa destination ne figure pas dans le livre.");
+                    link.Parent?.ReplaceWith(new XElement(Html+"span",link.Parent.Nodes()));
+                    continue;
+                }
                 if(target!=chapter.Path)link.SetValue(target+link.Value);
             }
 
