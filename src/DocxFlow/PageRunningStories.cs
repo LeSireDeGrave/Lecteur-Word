@@ -284,19 +284,15 @@ internal static partial class PageComposer
                             long origin=kind=="header"?anchorRegion.Top:anchorRegion.Top+anchorRegion.Height-prepared.Height;
                             paragraphTop=firstLine.NativeTop+Points(origin-prepared.TopInk);
                         }
-                        var (frameX,frameY)=frame.PageOrigin(page.Geometry,paragraphTop);
-                        float stroke=(frame.Stroke?.Width??0)/2;
-                        if(frameX-stroke>=page.Geometry.Width||frameY-stroke>=page.Geometry.Height||
-                            frameX+frame.Width+stroke<=0||frameY+frame.Height+stroke<=0)
-                        {
-                            add(new("PAGE_STORY_FLOATING_FRAME_OUTSIDE_SHEET",frame.Drawing,"La zone de texte est entièrement hors de la feuille.",true));
-                            Gap(root,"PAGE_STORY_FLOATING_FRAME_OUTSIDE_SHEET");
-                            continue;
-                        }
+                        var (frameX,frameY)=frame.PageOrigin(page.Geometry,page.Number,paragraphTop);
                         occurrences+=placement.Lines.Count+placement.Cells.Count+1;
                         if(occurrences>MaxStoryPlacements)throw new InvalidDataException("PAGE_STORY_PLACEMENT_LIMIT");
-                        pageFrames.Add(new(frame with{X=frameX,Y=frameY},
-                            MoveFrame(placement.Content,frameX,frameY,page.Section,page.Geometry)));
+                        var placed=new PlacedFloatingTextFrame(frame with{X=frameX,Y=frameY},
+                            MoveFrame(placement.Content,frameX,frameY,page.Section,page.Geometry)).ClipOn(page.Geometry);
+                        if(placed.CrossesSheet(page.Geometry)||placed.OutsideSheet)
+                            add(new("PAGE_FLOATING_TEXTBOX_CLIPPED_BY_SHEET",frame.Drawing,
+                                "L’ancre est conservée et la peinture est découpée aux limites de la feuille.",false));
+                        pageFrames.Add(placed);
                     }
                 if(flowOverlap)
                 {
@@ -518,7 +514,8 @@ internal static partial class PageComposer
         SemanticStory story,PaginatedDocument layout,Dictionary<string,LayoutParagraph> adjusted,LineComposer painter,
         Dictionary<string,InlineImage> images,Dictionary<string,TextParagraph> text,Func<string,TextParagraph?> paragraph,
         IEnumerable<TextParagraph> ordered,IReadOnlyDictionary<string,GeneratedPageField>? generated,
-        ImmutableArray<FlowIssue>.Builder diagnostics,Action check,CancellationToken token,IReadOnlySet<string>? floatingIds=null)
+        ImmutableArray<FlowIssue>.Builder diagnostics,Action check,CancellationToken token,IReadOnlySet<string>? floatingIds=null,
+        bool unwrappedFrame=false)
     {
         var markers=painter.MeasureListMarkers(layout.Paragraphs,text,token);
         var grids=layout.Tables.Select(t=>Composer.FitPageTable(t,adjusted,check,p=>
@@ -534,7 +531,8 @@ internal static partial class PageComposer
             return (null,"PAGE_STORY_MERGE_CONTENT",null);
         var items=layout.Paragraphs.Select(p=>adjusted[p.Id]).Where(p=>!aliases.Contains(p.Id)).ToArray();
         var widths=items.Where(p=>p.TableId is null).ToDictionary(p=>p.Id,
-            p=>new LineRegion(p.CellOwner??story.RootId,0,Emu(p.Geometry.Width)-Emu(p.Geometry.Left)-Emu(p.Geometry.Right)),StringComparer.Ordinal);
+            p=>new LineRegion(p.CellOwner??story.RootId,0,Emu(p.Geometry.Width)-Emu(p.Geometry.Left)-Emu(p.Geometry.Right))
+                {NoWrap=unwrappedFrame,AllowHorizontalOverflow=unwrappedFrame},StringComparer.Ordinal);
         var measured=painter.Compose(r=>widths[r.ParagraphId],token,widths.Keys.ToHashSet(StringComparer.Ordinal),
             markers,ordered,generated,auxiliaryFloatingIds:floatingIds);
         foreach(var line in measured.Lines)

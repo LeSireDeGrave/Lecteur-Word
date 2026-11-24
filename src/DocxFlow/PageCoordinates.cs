@@ -5,6 +5,13 @@ namespace LecteurWord.Flow;
 internal readonly record struct PageRect(float Left,float Top,float Width,float Height)
 {
     internal bool Contains(double x,double y)=>x>=Left&&x<Left+Width&&y>=Top&&y<Top+Height;
+    internal PageRect Intersection(PageRect other)
+    {
+        float left=Math.Max(Left,other.Left),top=Math.Max(Top,other.Top);
+        return new(left,top,Math.Max(0,Math.Min(Left+Width,other.Left+other.Width)-left),
+            Math.Max(0,Math.Min(Top+Height,other.Top+other.Height)-top));
+    }
+    internal bool Empty=>Width<=0||Height<=0;
 }
 internal sealed record PageCluster(Utf16Span ContextRange,PageRect Rect,ImmutableArray<SemanticSource> Sources,string Text);
 
@@ -21,7 +28,7 @@ internal static class PageCoordinates
             if(field.Kind!="pageField"||field.Fragment.Measure is not {} measure)continue;
             var rect=Clip(line,new(line.NativeOffsetX+PageComposer.Points(field.X),
                 line.Baseline-PageComposer.Points(ascent),PageComposer.Points(measure.Metrics.Width),PageComposer.Points(ascent+descent)));
-            if(rect.Height>0)yield return (field.ResultId??field.Cause.NodeId,rect);
+            if(!rect.Empty)yield return (field.ResultId??field.Cause.NodeId,rect);
         }
     }
 
@@ -33,7 +40,7 @@ internal static class PageCoordinates
             if(slot.AdvanceX+slot.ExtraAfter<=0)continue;
             var rect=Clip(line,new(line.NativeOffsetX+PageComposer.Points(slot.X),line.Baseline-PageComposer.Points(ascent),
                 PageComposer.Points(slot.AdvanceX+slot.ExtraAfter),PageComposer.Points(ascent+descent)));
-            if(rect.Height<=0)continue;
+            if(rect.Empty)continue;
             if(slot.Cluster<0)
             {
                 var part=native.Parts[slot.Part];
@@ -65,7 +72,7 @@ internal static class PageCoordinates
         {
             if(!bySource.TryGetValue(image.RunId,out var part))continue;
             var rect=Clip(line,new(image.X,image.Y,image.Image.Width,image.Image.Height));
-            if(rect.Height>0)yield return new(part.ContextRange,rect,[part.Control!.Value.Source],"");
+            if(!rect.Empty)yield return new(part.ContextRange,rect,[part.Control!.Value.Source],"");
         }
     }
 
@@ -76,6 +83,7 @@ internal static class PageCoordinates
             float top=Math.Max(rect.Top,line.NativeTop);
             rect=rect with {Top=top,Height=Math.Max(0,Math.Min(rect.Top+rect.Height,line.NativeTop+line.Height)-top)};
         }
-        return line.FrameTransform is {} rotation?rotation.Bounds(rect):rect;
+        if(line.FrameTransform is {} rotation)rect=rotation.Bounds(rect);
+        return line.SheetClip is {} sheet?rect.Intersection(sheet):rect;
     }
 }

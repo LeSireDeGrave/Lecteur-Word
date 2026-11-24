@@ -66,11 +66,11 @@ internal static class LegacySymbols
 // Microsoft Symbol encoding (3,0). A private code has no meaning outside its selected face.
 internal static class SymbolCmap
 {
-    internal enum Status { Absent, Present, Invalid }
+    internal enum Status { Absent, Present, Invalid, Ambiguous }
     static int U16(ReadOnlySpan<byte> table,int offset)=>BinaryPrimitives.ReadUInt16BigEndian(table[offset..]);
 
     internal static (Status Status,ushort Glyph) Lookup(ReadOnlySpan<byte> cmap,int code,int glyphCount,Action check,
-        int firstSymbol=0xf020)
+        int firstSymbol=0xf020,bool packedWordSymbol=false)
     {
         if(cmap.Length<4||U16(cmap,0)!=0)return (Status.Invalid,0);
         int entries=U16(cmap,2);
@@ -96,9 +96,11 @@ internal static class SymbolCmap
         int glyphArray=ranges+segmentsTwice,previous=-1;
         ushort glyph=0;
         // A legacy byte starts at OS/2.usFirstCharIndex in a symbol subtable.
-        // A private Unicode scalar continues to use its own code.
-        int alias=code is >=0x20 and <=0xff?firstSymbol+code-0x20:-1;
-        ushort aliasGlyph=0;
+        // Only an explicit w:sym may use the Word F0xx encoding of a legacy byte.
+        int symbolByte=packedWordSymbol&&code is >=0xf020 and <=0xf0ff?code&0xff:-1;
+        int legacy=code is >=0x20 and <=0xff?code:symbolByte;
+        int alias=legacy>=0?firstSymbol+legacy-0x20:-1;
+        ushort aliasGlyph=0,byteGlyph=0;
         for(int i=0;i<segmentsTwice;i+=2)
         {
             check();
@@ -110,9 +112,12 @@ internal static class SymbolCmap
             previous=end;
             if(code>=start&&code<=end)glyph=ReadGlyph(table,code,start,offset,first,delta);
             if(alias>=start&&alias<=end)aliasGlyph=ReadGlyph(table,alias,start,offset,first,delta);
+            if(symbolByte>=start&&symbolByte<=end)byteGlyph=ReadGlyph(table,symbolByte,start,offset,first,delta);
         }
-        if(previous!=0xffff||glyph>=glyphCount||aliasGlyph>=glyphCount)return (Status.Invalid,0);
-        return (Status.Present,aliasGlyph!=0?aliasGlyph:glyph);
+        if(previous!=0xffff||glyph>=glyphCount||aliasGlyph>=glyphCount||byteGlyph>=glyphCount)return (Status.Invalid,0);
+        ushort resolved=glyph!=0?glyph:aliasGlyph!=0?aliasGlyph:byteGlyph;
+        if(aliasGlyph!=0&&aliasGlyph!=resolved||byteGlyph!=0&&byteGlyph!=resolved)return (Status.Ambiguous,0);
+        return (Status.Present,resolved);
     }
 
     static ushort ReadGlyph(ReadOnlySpan<byte> table,int code,int start,int offset,int first,int delta)

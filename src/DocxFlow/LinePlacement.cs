@@ -7,6 +7,8 @@ namespace LecteurWord.Flow;
 
 internal sealed partial class LineComposer
 {
+    internal void PaintDiagramLabel(SKCanvas canvas,DiagramTextLine line)=>
+        session.Paint(canvas,line.Fragment,line.X,line.Baseline,SKColors.Black);
     readonly record struct Slot(int Part,int Cluster,byte Level,long Width,long Height,long PenX,long PenY,
         bool Space,bool Trailing,char Separator,TextControl? Tab,LineDecoration? Decoration);
     sealed record Geometry(ImmutableArray<LinePlacement> Visual,ImmutableArray<LineTabPlacement> Tabs,
@@ -199,10 +201,12 @@ internal sealed partial class LineComposer
         if(props.ForgetLastTabAlignment&&visualTabs.Count>0&&
             visualTabs[^1] is {Stop.Kind:LineTabKind.Center or LineTabKind.Right or LineTabKind.Decimal} lastTab)
             alignmentWidth-=lastTab.To-lastTab.From;
+        long free=bounds.Width-alignmentWidth;
+        if(!bounds.Region.AllowHorizontalOverflow&&bounds.Region.CenteredImageOverhang==0)free=Math.Max(0,free);
         long shift=props.Alignment switch
         {
-            LineAlignment.Right=>Math.Max(0,bounds.Width-alignmentWidth),
-            LineAlignment.Center=>Math.Max(0,bounds.Width-alignmentWidth)/2,
+            LineAlignment.Right=>free,
+            LineAlignment.Center=>free/2,
             _=>0
         };
         // UBA L1 sends trailing visual spaces to the right in LTR and to the left in RTL.

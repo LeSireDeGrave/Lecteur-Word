@@ -231,12 +231,14 @@ internal sealed partial class TypographySession
         return new(Emu(width),ascent,descent,Emu(Math.Max(0,metrics.LineGap*scale)),ascent,ink);
     }
 
-    TextFragment MeasureSymbol(string paragraph,int offset,string original,int code,SegmentKey key,Action check,Action<int> count)
+    TextFragment MeasureSymbol(string paragraph,int offset,string original,int code,SegmentKey key,Action check,Action<int> count,
+        bool packedWordSymbol=false)
     {
         FontResolution? chosen=null;
         TextMeasure? measure=null;
         var decision=new LegacySymbolDecision(key.Family,code,null,"unresolved","Aucune face ou correspondance vérifiée.");
         string? rejected=null;
+        bool ambiguousEncoding=false;
         if(key.CanShape&&!(key.Request?.Theme==true&&key.Theme is null))
         {
             foreach(var resolution in selection.SymbolFaces(key.Family,key.Bold,key.Italic))
@@ -247,9 +249,15 @@ internal sealed partial class TypographySession
                 catch(InvalidDataException error) when(error.Message is "TEXT_FACE_METRICS" or "LAYOUT_FONT_INVALID" or "LAYOUT_FONT_IDENTITY_MISMATCH")
                 {rejected="Face demandée inexploitable. "+error.Message;continue;}
                 if(face.SkiaFace.GetTableSize(0x66766172)>0)continue;
-                var cmap=SymbolCmap.Lookup(face.Cmap,code,face.GlyphCount,check,face.FirstSymbol);
+                var cmap=SymbolCmap.Lookup(face.Cmap,code,face.GlyphCount,check,face.FirstSymbol,packedWordSymbol);
                 if(cmap.Status==SymbolCmap.Status.Invalid)
                 {rejected="Table cmap symbolique invalide.";continue;}
+                if(cmap.Status==SymbolCmap.Status.Ambiguous)
+                {
+                    rejected="Table cmap symbolique avec deux glyphes pour le même octet.";
+                    ambiguousEncoding=true;
+                    break;
+                }
                 uint glyph=cmap.Glyph;
                 if(cmap.Status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(code,out glyph))glyph=0;
                 if(glyph==0||glyph>=face.GlyphCount||glyph>=face.SkiaFace.GlyphCount)continue;
@@ -266,7 +274,7 @@ internal sealed partial class TypographySession
                     resolution.Status=="substituted"?resolution.Reason+" "+encoding:encoding);
                 break;
             }
-            if(measure is null&&LegacySymbols.Mapping(key.Family,code) is {} mapping)
+            if(measure is null&&!ambiguousEncoding&&LegacySymbols.Mapping(key.Family,code) is {} mapping)
             {
                 var fallback=mapping.Face=="DejaVu Serif"?selection.Bundled(key.Bold,key.Italic):
                     selection.ExactInstalled(mapping.Face,key.Bold,key.Italic);
@@ -314,7 +322,7 @@ internal sealed partial class TypographySession
             return null;
         var cmap=SymbolCmap.Lookup(face.Cmap,' ',face.GlyphCount,check,face.FirstSymbol);
         uint glyph=cmap.Glyph;
-        if(cmap.Status==SymbolCmap.Status.Invalid||
+        if(cmap.Status is SymbolCmap.Status.Invalid or SymbolCmap.Status.Ambiguous||
             cmap.Status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(' ',out glyph)||glyph==0||glyph>=face.GlyphCount)
             return null;
         count(1);

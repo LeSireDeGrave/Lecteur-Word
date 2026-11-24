@@ -24,6 +24,7 @@ public sealed record InlineImage(string ResourceId,SourceLocation Source,float W
     internal bool FlipY {get;init;}
     internal MetafilePicture? Metafile {get;init;}
     internal VmlVectorPicture? VmlVector {get;init;}
+    internal DiagramDrawing? Diagram {get;init;}
     internal float ReservedHeight=>Height+Effects.Top+Effects.Bottom;
 }
 internal readonly record struct ImageInsets(float Left,float Top,float Right,float Bottom);
@@ -34,6 +35,7 @@ public sealed record LayoutCell(string Id,SourceLocation Source,int Row,int Colu
 {
     public float? PreferredWidth {get;init;}
     internal TableWidthPreference? NativeWidth {get;init;}
+    internal SourceLocation? NoWrapSource {get;init;}
     internal System.Collections.Immutable.ImmutableArray<string> AppliedTableStyles {get;init;}=[];
     internal System.Collections.Immutable.ImmutableArray<string> RowCellStyleProperties {get;init;}=[];
 }

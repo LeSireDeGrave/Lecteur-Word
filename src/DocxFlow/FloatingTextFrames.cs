@@ -24,14 +24,34 @@ internal sealed record FloatingTextFrame(string Id,SourceLocation Drawing,string
     internal string? HorizontalAlignment {get;init;}
     internal string? VerticalAlignment {get;init;}
     internal SourceLocation? VmlSource {get;init;}
-    internal SideExclusion? Exclusion=>Square?.At(X,Y,Width,Height);
-    internal (float X,float Y) PageOrigin(PageGeometry page,float paragraphTop)
+    internal SideExclusion? Exclusion=>Square is {} wrap?wrap.At(X,Y,Width,Height) with
+        {ClipToSheet=AutoFit&&!WrapText&&Rotation==0}:null;
+    internal (float X,float Y) PageOrigin(PageGeometry page,int physicalPage,float paragraphTop,
+        (float Left,float Width)? column=null,float? character=null)
     {
-        float left=HorizontalReference=="page"?0:page.Left;
-        float top=VerticalReference switch{"margin"=>page.Top,"paragraph"=>paragraphTop,_=>0};
-        float width=HorizontalReference=="page"?page.Width:page.Width-page.Left-page.Right;
-        float height=VerticalReference=="margin"?page.Height-page.Top-page.Bottom:page.Height;
-        return (X+left+(HorizontalAlignment switch{"center"=>(width-Width)/2,"right"=>width-Width,_=>0}),
+        bool facingLeft=physicalPage%2==0;
+        var (left,width)=HorizontalReference switch
+        {
+            "page"=>(0f,page.Width),
+            "column" when column is {} span=>span,
+            "character"=>(character??throw new InvalidDataException("PAGE_FLOATING_CHARACTER_REFERENCE"),0f),
+            "leftMargin"=>(0f,page.Left),
+            "rightMargin"=>(page.Width-page.Right,page.Right),
+            "insideMargin"=>(facingLeft?(page.Width-page.Right,page.Right):(0f,page.Left)),
+            "outsideMargin"=>(facingLeft?(0f,page.Left):(page.Width-page.Right,page.Right)),
+            _=>(page.Left,page.Width-page.Left-page.Right)
+        };
+        var (top,height)=VerticalReference switch
+        {
+            "margin"=>(page.Top,page.Height-page.Top-page.Bottom),
+            "paragraph" or "line"=>(paragraphTop,0f),
+            "topMargin"=>(0f,page.Top),
+            "bottomMargin"=>(page.Height-page.Bottom,page.Bottom),
+            _=>(0f,page.Height)
+        };
+        return (X+left+(HorizontalAlignment switch
+            {"center"=>(width-Width)/2,"right"=>width-Width,"inside" when facingLeft=>width-Width,
+                "outside" when !facingLeft=>width-Width,_=>0}),
             Y+top+(VerticalAlignment switch{"center"=>(height-Height)/2,"bottom"=>height-Height,_=>0}));
     }
 }
@@ -48,29 +68,48 @@ internal sealed record FrameSquareWrap(string Side,long Left,long Right,long Bot
 }
 internal sealed record PlacedFloatingTextFrame(FloatingTextFrame Frame,ComposedPage Content)
 {
+    internal PageRect? SheetClip {get;init;}
+    internal bool OutsideSheet {get;init;}
     internal FrameRotation? Transform=>Frame.Rotation switch
     {
         90=>new(Frame.X+Frame.Width,Frame.Y,90),
         -90=>new(Frame.X,Frame.Y+Frame.Height,-90),
         _=>null
     };
-    internal IReadOnlyList<PageLine> Lines=>Transform is {} transform?
-        Content.Lines.Select(l=>l with{FrameTransform=transform}).ToArray():Content.Lines;
-    internal IReadOnlyList<PageCell> Cells=>Transform is {} transform?Content.Cells.Select(c=>
+    internal IReadOnlyList<PageLine> Lines=>Transform is null&&SheetClip is null?Content.Lines:
+        Content.Lines.Select(l=>l with{FrameTransform=Transform,SheetClip=SheetClip}).ToArray();
+    internal IReadOnlyList<PageCell> Cells=>Transform is null&&SheetClip is null?Content.Cells:Content.Cells.Select(c=>
     {
-        var rect=transform.Bounds(new(c.X,c.Y,c.Width,c.Height));
+        PageRect rect=new(c.X,c.Y,c.Width,c.Height);
+        if(Transform is {} transform)rect=transform.Bounds(rect);
+        if(SheetClip is {} sheet)rect=rect.Intersection(sheet);
         return c with{X=rect.Left,Y=rect.Top,Width=rect.Width,Height=rect.Height};
-    }).ToArray():Content.Cells;
+    }).Where(c=>c.Width>0&&c.Height>0).ToArray();
+
+    internal bool CrossesSheet(PageGeometry sheet)=>Frame.X<-.01f||Frame.Y<-.01f||
+        Frame.X+Frame.Width>sheet.Width+.01f||Frame.Y+Frame.Height>sheet.Height+.01f;
+
+    internal PlacedFloatingTextFrame ClipOn(PageGeometry sheet)
+    {
+        PageRect paper=new(0,0,sheet.Width,sheet.Height);
+        float border=(Frame.Stroke?.Width??0)/2;
+        PageRect shape=new(Frame.X-border,Frame.Y-border,Frame.Width+2*border,Frame.Height+2*border);
+        PageRect bounds=Transform is {} transform?
+            transform.Bounds(new(0,0,Content.Geometry.Width,Content.Geometry.Height)):shape;
+        bool outside=paper.Intersection(shape).Empty&&paper.Intersection(bounds).Empty&&
+            !Lines.SelectMany(line=>PageCoordinates.Clusters(line).Concat(PageCoordinates.Images(line)))
+                .Any(item=>!paper.Intersection(item.Rect).Empty);
+        return this with{SheetClip=paper,OutsideSheet=outside};
+    }
 
     internal bool HasTextOverflow=>Frame.Rotation!=0&&Content.Geometry.Height>Frame.Geometry.Height+.01f;
 
     internal bool OverflowFits(PageGeometry sheet)
     {
-        if(!HasTextOverflow)return true;
-        var rectangles=Lines.SelectMany(l=>PageCoordinates.Clusters(l).Concat(PageCoordinates.Images(l)).Select(c=>c.Rect)).ToArray();
-        return rectangles.Length>0&&rectangles.All(rect=>
-                rect.Left>=-.01f&&rect.Top>=-.01f&&rect.Left+rect.Width<=sheet.Width+.01f&&
-                rect.Top+rect.Height<=sheet.Height+.01f);
+        if(Frame.WrapText&&!HasTextOverflow)return true;
+        return Lines.SelectMany(l=>PageCoordinates.Clusters(l).Concat(PageCoordinates.Images(l)))
+            .All(item=>item.Rect.Left>=-.01f&&item.Rect.Top>=-.01f&&item.Rect.Left+item.Rect.Width<=sheet.Width+.01f&&
+                item.Rect.Top+item.Rect.Height<=sheet.Height+.01f);
     }
 }
 
@@ -144,7 +183,8 @@ internal static partial class PageComposer
                 textParagraphs.GetValueOrDefault(paragraph.Id) is {RightToLeft:false,Controls.IsEmpty:true} text&&
                 !paragraph.Properties.PageBreakBefore&&!paragraph.Properties.HasBorders)
             {
-                var single=painter.Compose(_=>new(frame.Id,0,Emu(frame.Width-frame.Left-frame.Right)),
+                var single=painter.Compose(_=>new(frame.Id,0,Emu(frame.Width-frame.Left-frame.Right))
+                    {NoWrap=!frame.WrapText,AllowHorizontalOverflow=!frame.WrapText},
                     token,orderedParagraphs:[text]);
                 if(single.Lines is [var line]&&line.Occupied is not null&&!line.Diagnostics.Any(BlocksLine)&&
                     !line.HasUnsupportedUnderline&&Composer.PlaceFloatingTextLine(frame,paragraph,line) is {} positioned)
@@ -157,7 +197,7 @@ internal static partial class PageComposer
             {
                 var result=ComposeAuxiliaryLayout(story,frameLayout,frameLayout.Paragraphs.ToDictionary(p=>p.Id),
                     painter,imageRuns,textParagraphs,id=>textParagraphs.GetValueOrDefault(id),ordered,
-                    null,diagnostics,Check,token);
+                    null,diagnostics,Check,token,unwrappedFrame:!frame.WrapText);
                 foreach(var issue in diagnostics)Add(issue);
                 if(result.Page is not {} page)
                 {
@@ -191,18 +231,23 @@ internal static partial class PageComposer
     {
         Geometry=physical,Section=section,
         Cells=content.Cells.Select(c=>c with{X=c.X+x,Y=c.Y+y}).ToImmutableArray(),
-        Lines=content.Lines.Select(line=>line with
+        Lines=content.Lines.Select(line=>TranslateLine(line,x,y) with{Section=section}).ToImmutableArray()
+    };
+
+    internal static PageLine TranslateLine(PageLine line,float x,float y)=>line with
         {
-            Section=section,X=line.X+x,NativeOffsetX=line.NativeOffsetX+x,NativeTop=line.NativeTop+y,
+            X=line.X+x,NativeOffsetX=line.NativeOffsetX+x,NativeTop=line.NativeTop+y,
             Baseline=line.Baseline+y,
+            FloatingAnchorTop=line.FloatingAnchorTop+y,
+            SideExclusion=line.SideExclusion is {} exclusion?exclusion with
+                {Left=exclusion.Left+Emu(x),Top=exclusion.Top+Emu(y)}:null,
             Images=line.Images.Select(i=>i with{X=i.X+x,Y=i.Y+y}).ToImmutableArray(),
             Tabs=line.Tabs.Select(tab=>tab with{From=tab.From+x,To=tab.To+x}).ToImmutableArray(),
             LeftBorder=line.LeftBorder is {} left?left with{X=left.X+x}:null,
             RightBorder=line.RightBorder is {} right?right with{X=right.X+x}:null,
             ParagraphTopBorder=line.ParagraphTopBorder is {} top?top with{Left=top.Left+x,Right=top.Right+x,Top=top.Top+y}:null,
             ParagraphBorder=line.ParagraphBorder is {} bottom?bottom with{Left=bottom.Left+x,Right=bottom.Right+x,Top=bottom.Top+y}:null
-        }).ToImmutableArray()
-    };
+        };
 }
 
 public static partial class LayoutReader
@@ -216,7 +261,7 @@ public static partial class LayoutReader
         bool IsFloatingTextAlternative(InventoryNode n)=>SemanticIndex.IsAlternative(n)&&Elements(n).Any(c=>
             c.Name=="{"+SemanticIndex.Mc+"}Choice"&&Value(c,"Requires") is {} prefix&&Namespace(c,prefix)==Wps);
 
-        FloatingTextFrame? ReadFloatingTextFrame(InventoryNode alternative)
+        FloatingTextFrame? ReadFloatingTextFrame(InventoryNode alternative,bool inCell=false)
         {
             string mc=SemanticIndex.Mc;
             var alternatives=Elements(alternative).ToArray();
@@ -227,6 +272,8 @@ public static partial class LayoutReader
                 Properties(drawing).Any()||Elements(pict).Any(n=>n.Name is not ("{"+Vml+"}shapetype" or "{"+Vml+"}shape"))||
                 Only(drawing,WP,"anchor") is not {} anchor)return null;
             if(!Anchor(anchor,out var placement))return Refuse(anchor,"Ancre ou habillage extérieur de la zone hors profil.");
+            if(inCell&&(placement.Square is null||!Bool(anchor,"layoutInCell",true)))
+                return Refuse(anchor,"Habillage et disposition dans la cellule requis par le profil d’ancrage en tableau.");
             if(Part(anchor,D,"graphic") is not {} graphic||Properties(graphic).Any()||Only(graphic,D,"graphicData") is not {} data||
                 !Attrs(data,("uri",Wps))||Only(data,Wps,"wsp") is not {} shape||Properties(shape).Any()||
                 !Parts(shape,Wps,"cNvSpPr","spPr","txbx","bodyPr")||
@@ -310,7 +357,8 @@ public static partial class LayoutReader
                 {
                     var wrap=parts[5];
                     string? side=Value(wrap,"wrapText");
-                    if(horizontal!="column"||vertical!="paragraph"||y<0||side is not ("bothSides" or "left" or "right" or "largest")||
+                    if(horizontal!="column"||vertical!="paragraph"||hAlign is not null||vAlign is not null||
+                        y<0||side is not ("bothSides" or "left" or "right" or "largest")||
                         Elements(wrap).Any()||Properties(wrap).Any(p=>p.Key is not ("{}wrapText" or "{}distL" or "{}distR" or "{}distT" or "{}distB"))||
                         !Distance(wrap,"distL",out long dl)||!Distance(wrap,"distR",out long dr)||
                         !Distance(wrap,"distB",out long db)||!Distance(wrap,"distT",out long dt)||dt!=0)
@@ -344,13 +392,15 @@ public static partial class LayoutReader
                 shift=0;reference="";align=null;
                 bool horizontal=key=="positionH";
                 if(Part(n,WP,key) is not {} axis||Value(axis,"relativeFrom") is not {} basis||
-                    (horizontal?basis is not ("page" or "margin" or "column"):basis is not ("page" or "margin" or "paragraph"))||
+                    (horizontal?basis is not ("page" or "margin" or "column" or "character" or "leftMargin" or "rightMargin" or "insideMargin" or "outsideMargin"):
+                        basis is not ("page" or "margin" or "paragraph" or "line" or "topMargin" or "bottomMargin"))||
+                    runningStory&&basis is ("character" or "line")||
                     !Attrs(axis,("relativeFrom",basis))||Elements(axis).Take(2).ToArray() is not [var value]||
                     Properties(value).Any()||Elements(value).Any())return false;
                 string raw=string.Concat(children[value.Id].Where(c=>c.Kind=="textValue").Select(c=>c.Text)).Trim();
                 reference=basis;
-                if(runningStory&&basis!="paragraph"&&value.Name=="{"+WP+"}align"&&
-                    (horizontal?raw is "left" or "center" or "right":raw is "top" or "center" or "bottom"))
+                if(basis is not ("paragraph" or "character" or "line")&&value.Name=="{"+WP+"}align"&&
+                    (horizontal?raw is "left" or "center" or "right" or "inside" or "outside":raw is "top" or "center" or "bottom"))
                 {align=raw;return true;}
                 if(value.Name!="{"+WP+"}posOffset"||!Offset(raw,out long offset))return false;
                 shift=PageComposer.Points(offset);

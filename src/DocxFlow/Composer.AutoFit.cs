@@ -22,7 +22,8 @@ public static partial class Composer
                     foreach(string id in cell.ParagraphIds)
                     {
                         var p=paragraphs[id];
-                        paragraphs[id]=p with{Geometry=p.Geometry with{Width=width,Left=cell.Margins.Left,Right=cell.Margins.Right}};
+                        paragraphs[id]=p with{Geometry=p.Geometry with{Width=width,Left=cell.Margins.Left,Right=cell.Margins.Right},
+                            CenteredImageOverhang=CenteredCellImageOverhang(solved.Table,cell,p)};
                     }
                 }
                 tables.Add(solved.Table with{Columns=solved.Columns});

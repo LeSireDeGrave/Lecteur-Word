@@ -25,6 +25,7 @@ internal sealed record SideExclusion(long Left,long Right,long Height,string Wra
     internal long CollisionLeft {get;init;}
     internal long CollisionRight {get;init;}
     internal long CollisionHeight {get;init;}
+    internal bool ClipToSheet {get;init;}
 
     internal (long Left,long Right) Project(long top,long bottom)
     {

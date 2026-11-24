@@ -205,7 +205,7 @@ internal sealed partial class TypographySession
             string original=char.ConvertFromUtf32(code);
             var key=Key(original,new Graph(0,original.Length,slice,0,"Zsym",true),style) with
             {Family=family,Request=new(family,false,token.Source.Location,"font"),Theme=null,Slot="symbol",CanShape=true};
-            var symbol=MeasureSymbol(paragraph.Id,slice.Start,original,code,key,Check,CountGlyphs);
+            var symbol=MeasureSymbol(paragraph.Id,slice.Start,original,code,key,Check,CountGlyphs,packedWordSymbol:true);
             ReportSymbol(symbol,token.Source.NodeId);
             return control with {Symbol=symbol with
                 {Sources=[new(token.Source,token.RunId,style,new(0,original.Length)){Role=TextRole.Control}]}};

@@ -15,6 +15,7 @@ public sealed record PageLine(string ParagraphId, SourceLocation Source, string 
     internal bool HasExplicitPageBreak {get;init;}
     internal PlacedFlowRegion? FlowRegion {get;init;}
     internal PageRegion? SideExclusion {get;init;}
+    internal float? FloatingAnchorTop {get;init;}
     internal FootnoteRule? NoteRule {get;init;}
     internal PlacedParagraphBorder? ParagraphBorder {get;init;}
     internal PlacedParagraphBorder? ParagraphTopBorder {get;init;}
@@ -31,6 +32,7 @@ public sealed record PageLine(string ParagraphId, SourceLocation Source, string 
     internal float NativeTop {get;init;}
     internal bool ClipToLineBox {get;init;}
     internal FrameRotation? FrameTransform {get;init;}
+    internal PageRect? SheetClip {get;init;}
 }
 internal sealed record PlacedParagraphBorder(ParagraphBorderStroke Border,float Left,float Right,float Top);
 internal sealed record PlacedParagraphSideBorder(ParagraphBorderStroke Border,float X,float ExtendedBottom=0,float ExtendedTop=0);
@@ -49,8 +51,8 @@ public sealed record ComposedPage(int Number, IReadOnlyList<PageLine> Lines)
     internal IReadOnlyList<PlacedFloatingTextFrame> FloatingTextFrames {get;init;}=[];
     internal IEnumerable<PageLine> MainDisplayLines=>Lines.Concat(Footnotes.SelectMany(n=>n.Lines)).Concat(RunningStories.SelectMany(s=>s.Lines));
     internal IEnumerable<PageCell> MainDisplayCells=>Cells.Concat(RunningStories.SelectMany(s=>s.Cells));
-    internal IEnumerable<PageLine> DisplayLines=>MainDisplayLines.Concat(FloatingTextFrames.SelectMany(f=>f.Lines));
-    internal IEnumerable<PageCell> DisplayCells=>MainDisplayCells.Concat(FloatingTextFrames.SelectMany(f=>f.Cells));
+    internal IEnumerable<PageLine> DisplayLines=>MainDisplayLines.Concat(FloatingTextFrames.Where(f=>!f.OutsideSheet).SelectMany(f=>f.Lines));
+    internal IEnumerable<PageCell> DisplayCells=>MainDisplayCells.Concat(FloatingTextFrames.Where(f=>!f.OutsideSheet).SelectMany(f=>f.Cells));
 }
 public sealed record Composition(IReadOnlyList<ComposedPage> Pages, IReadOnlyList<FlowIssue> Issues)
 {

@@ -255,14 +255,14 @@ internal sealed partial class LineComposer : IDisposable
             var firstMarker=ordinal==0?marker:null;
             var bounds=new Bounds(region,checked(region.Left+(firstMarker?.TextStart??(props.Left+(p.RightToLeft?0:indent)))),
                 checked(region.Left+region.Width-props.Right-(p.RightToLeft?indent:0)));
-            var (end,overflow)=blank?(from,0):Choose(atoms,p,props,bounds,from);
+            var (end,overflow)=blank?(from,0):region.NoWrap?(HardEnd(atoms.Items,from),0):Choose(atoms,p,props,bounds,from);
             ComposedLine line;
             while(true)
             {
                 Check();
                 line=BuildLine(p,props,source,atoms,bidi,bounds,ordinal,from,end,firstMarker);
                 bool overlap=line.Occupied is null&&line.Diagnostics.Any(d=>d.Code=="LINE_TAB_OVERLAP");
-                if(!overlap&&(line.Occupied is not {} used||Fits(bounds,used,LastLineTab(bounds,line.Tabs))))break;
+                if(region.NoWrap||!overlap&&(line.Occupied is not {} used||Fits(bounds,used,LastLineTab(bounds,line.Tabs))))break;
                 int previous=end-1;
                 while(previous>from&&!atoms.Cuts.Contains(atoms.Items[previous-1].End)){Check();previous--;}
                 if(previous<=from)break;
@@ -299,6 +299,17 @@ internal sealed partial class LineComposer : IDisposable
             blank=end>from&&end==atoms.Items.Length&&line.Cut==LineCutKind.Line;
             from=end;ordinal++;
         }
+    }
+
+    int HardEnd(Atom[] atoms,int start)
+    {
+        int end=start;
+        while(end<atoms.Length)
+        {
+            Check();
+            if(atoms[end++].Hard)break;
+        }
+        return end;
     }
 
     static string BidiText(TextParagraph p)
@@ -382,7 +393,7 @@ internal sealed partial class LineComposer : IDisposable
     // A declared right tab may reach into the physical margin. Only its final
     // aligned field may use that space; ordinary text retains its line width.
     static bool Fits(Bounds bounds,long occupied,LineTabStop? finalTab)=>
-        occupied<=bounds.Width||
+        occupied<=bounds.Width||occupied-bounds.Width<=bounds.Region.CenteredImageOverhang||
         (finalTab is {Kind:LineTabKind.Right,Source:not null} stop&&bounds.Region.RightMargin>0&&
          bounds.Right==bounds.Region.Left+bounds.Region.Width&&
          occupied-bounds.Width<=bounds.Region.RightMargin&&
@@ -440,7 +451,7 @@ internal sealed partial class LineComposer : IDisposable
             }
         var field=end>from&&data.Items[end-1].IsPageField?data.PageField:null;
         var geometry=positionsKnown?Place(p,props,b,parts,levels,range,cut,source,issues,marker?.Decoration,field):null;
-        if(geometry is not null&&!Fits(b,geometry.Occupied,LastLineTab(b,geometry.Tabs)))
+        if(geometry is not null&&!b.Region.AllowHorizontalOverflow&&!Fits(b,geometry.Occupied,LastLineTab(b,geometry.Tabs)))
             Issue("LINE_OVERFLOW",source,"Segment indivisible plus large que la région disponible.");
         return new(p.Id,p.StoryId,source,ordinal,b.Region,b.Left,b.Right,range,cut,props,parts,
             geometry?.Visual??[],geometry?.Tabs??[],geometry?.Generated??[],geometry?.Occupied,

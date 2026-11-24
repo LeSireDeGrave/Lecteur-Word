@@ -71,7 +71,7 @@ public static partial class Composer
         IReadOnlyDictionary<int,EndnoteGroup>? endnotes=null,bool completeBody=false,bool textBoxBorders=false)
     {
         var allMeasured=measured.ToDictionary(m=>m.Paragraph.Id);
-        var measuredTables=document.Tables.ToDictionary(t=>t.Id,t=>MeasureTable(t,allMeasured,Check));
+        var measuredTables=document.Tables.ToDictionary(t=>t.Id,t=>MeasureTable(t,allMeasured,Check,reflow));
         measured=measured.Where(m=>m.Paragraph.CellOwner is null).ToList();
         if(measured.Count==0)return new([], [..document.Issues,new("LAYOUT_NO_PARAGRAPHS",null,"Aucun paragraphe qualifié à composer.",true)]);
         var keep=native&&measured.Any(p=>p.Paragraph.Properties.KeepNext)?PlanNativeKeeps(measured,measuredTables,Check,
@@ -730,6 +730,8 @@ public static partial class Composer
                 var square=line==0?p.SideExclusion:null;
                 float top=cursor+(newSegment&&line==0?before:0);
                 sideOnRegion.RemoveAll(active=>top>=active.Bottom);
+                bool fullSheetBand=DrawsAcrossColumn(square);
+                float bandShift=fullSheetBand?PageComposer.Points(square!.Height):0;
                 if(square is not null)
                 {
                     float clear=top;
@@ -760,6 +762,13 @@ public static partial class Composer
                     var checkpoint=item.Lines[line].Native!;
                     var target=TargetRegion();
                     var variant=Recompose(target,checkpoint.Resume);
+                    if(square is null&&sideOnRegion.Count>0&&variant[0].Native is {} narrowed&&
+                        narrowed.Diagnostics.Any(d=>d.Code=="LINE_OVERFLOW")&&
+                        !checkpoint.Diagnostics.Any(d=>d.Code=="LINE_OVERFLOW"))
+                    {
+                        cursor+=sideOnRegion.Min(active=>active.Bottom)-top;
+                        continue;
+                    }
                     var remaining=new List<MeasuredLine>(line+variant.Count);
                     for(int i=0;i<line;i++){Check();remaining.Add(item.Lines[i]);}
                     remaining.AddRange(variant);
@@ -779,7 +788,7 @@ public static partial class Composer
                     if(keep?[pi] is {} continuation&&segmentEnd==item.Lines.Count&&!item.Lines[segmentEnd-1].PageBreak&&
                         item.Lines[segmentEnd-1].Native?.Cut!=LineCutKind.Column)
                     {
-                        float chain=segmentHeight+continuation.Following;
+                        float chain=bandShift+segmentHeight+continuation.Following;
                         float atTop=segmentStart==0?atRegionStart:0;
                         float notes=NoteHeightIn(item,segmentStart,segmentEnd)+continuation.Notes;
                         if(pi>oversizedThrough)
@@ -817,7 +826,7 @@ public static partial class Composer
                 }
                 if(native&&props.KeepLines&&line==segmentStart)
                 {
-                    float keptHeight=segmentHeight+(segmentEnd==item.Lines.Count?paragraphBorder?.Height??0:0);
+                    float keptHeight=bandShift+segmentHeight+(segmentEnd==item.Lines.Count?paragraphBorder?.Height??0:0);
                     float notes=NoteHeightIn(item,segmentStart,segmentEnd);
                     if(keptHeight+NoteReservation(notes,0)>RegionHeight()+.01f)
                         throw new LayoutFailure(notes>0?"PAGE_FOOTNOTE_KEEP_LINES_TOO_TALL":"LAYOUT_KEEP_LINES_TOO_LARGE",p.Source);
@@ -831,8 +840,8 @@ public static partial class Composer
                 }
                 Check();int count=0;float height=0,trialReserve=reservedNotes;
                 bool sideLine=square is not null||sideOnRegion.Count>0;
-                if(sideLine&&(keep?[pi] is {} sideKeep&&!SideKeepFits(sideKeep)||
-                    (props.Widow||props.KeepLines)&&cursor+segmentHeight+reservedNotes>
+                if(sideLine&&(keep?[pi] is {} sideKeep&&!fullSheetBand&&!SideKeepFits(sideKeep)||
+                    (props.Widow||props.KeepLines)&&cursor+bandShift+segmentHeight+reservedNotes>
                         bandBottom+.01f))
                     throw new LayoutFailure("PAGE_FLOW_SIDE_PARAGRAPH_CONSTRAINT_UNQUALIFIED",p.Source);
                 bool noteDoesNotFit=false;
@@ -844,7 +853,7 @@ public static partial class Composer
                     foreach(var note in NotesIn(candidate))
                     {
                         float separator=trialReserve==0?footnotes!.Separator.Height:0;
-                        float end=Math.Max(Math.Max(occupiedByShape,borderBottomOnPage),cursor+height+candidate.Height+
+                        float end=Math.Max(Math.Max(occupiedByShape,borderBottomOnPage),cursor+bandShift+height+candidate.Height+
                             (line+count==item.Lines.Count-1?paragraphBorder?.Height??0:0));
                         var slice=FitNote(note.Block,bandBottom-end-trialReserve-separator,candidate.Height);
                         if(slice is null){noteDoesNotFit=true;break;}
@@ -852,7 +861,7 @@ public static partial class Composer
                     }
                     if(noteDoesNotFit)break;
                     float bottomBorder=line+count==item.Lines.Count-1?paragraphBorder?.Height??0:0;
-                    if(cursor+height+candidate.Height+bottomBorder+trialReserve>bandBottom+.01f)break;
+                    if(cursor+bandShift+height+candidate.Height+bottomBorder+trialReserve>bandBottom+.01f)break;
                     height+=candidate.Height;count++;
                     if(candidate.PageBreak||candidate.Native?.Cut==LineCutKind.Column)break;
                 }
@@ -875,7 +884,7 @@ public static partial class Composer
                     if(count==1&&segmentEnd-line>1&&!RegionHasContent())throw new InvalidDataException("LAYOUT_WIDOW_UNSATISFIABLE");
                 }
                 if(native&&followingMinimum>0&&line+count==segmentEnd&&
-                    cursor+height+followingMinimum+reservedNotes>bandBottom+.01f)
+                    cursor+bandShift+height+followingMinimum+reservedNotes>bandBottom+.01f)
                 {
                     int tail=props.Widow?2:1;
                     if(!props.KeepLines&&count-tail>=tail&&
@@ -902,13 +911,16 @@ public static partial class Composer
                             if(sourceLine.Region.Left+sourceLine.Region.Width<columnWidth-PageComposer.Emu(.01f))
                                 rightBound=RegionLeft()+PageComposer.Points(sourceLine.Region.Left+sourceLine.Region.Width);
                         }
+                        float anchorTop=cursor;
+                        cursor+=bandShift;
                         var placed=PositionNative(l,p,RegionLeft(),cursor,leftBound,0,rightBound,geometry.Height) with{FlowRegion=region};
                         if(square is not null)
                         {
                             long exclusionLeft=Math.Max(0,square.Left);
                             long exclusionRight=Math.Min(PageComposer.Emu(RegionRight()-RegionLeft()),square.Right);
                             placed=placed with{SideExclusion=new(PageComposer.Emu(RegionLeft())+exclusionLeft,
-                                PageComposer.Emu(cursor)+square.Top,exclusionRight-exclusionLeft,square.Height-square.Top)};
+                                PageComposer.Emu(anchorTop)+square.Top,exclusionRight-exclusionLeft,square.Height-square.Top),
+                                FloatingAnchorTop=fullSheetBand?anchorTop:null};
                         }
                         if(paragraphBorder is not null&&line==item.Lines.Count-1)
                         {
@@ -960,8 +972,8 @@ public static partial class Composer
                         current.Add(placed);
                         if(square is not null)
                         {
-                            float bottom=cursor+PageComposer.Points(square.Height);
-                            sideOnRegion.Add((square,cursor,bottom));
+                            float bottom=anchorTop+PageComposer.Points(square.Height);
+                            if(!fullSheetBand)sideOnRegion.Add((square,anchorTop,bottom));
                             sideBottomOnPage=Math.Max(sideBottomOnPage,bottom);
                         }
                         foreach(var note in NotesIn(l))
@@ -1003,6 +1015,12 @@ public static partial class Composer
             after=SpacingAfter(props);
 
             bool OtherWidth()=>item.Lines[line].Native is {} nextLine&&TargetRegion()!=nextLine.Region;
+            bool DrawsAcrossColumn(SideExclusion? shape)=>
+                shape is {ClipToSheet:true,WrapText:"bothSides",Top:0,Left:<=0}&&
+                shape.Right>=PageComposer.Emu(RegionRight()-RegionLeft())&&Columns() is null&&
+                sideOnRegion.Count==0&&item.Lines[0].Native is {} anchor&&!anchor.Parts.IsEmpty&&
+                anchor.Parts[0].Control?.Kind=="Drawing"&&
+                props.TopBorder is null&&props.LeftBorder is null&&props.RightBorder is null&&paragraphBorder is null;
             bool SideKeepFits(KeepContinuation continuation)
             {
                 if(p.SideExclusion is not null||sideOnRegion.Count!=1||continuation.Notes>0||
@@ -1065,9 +1083,10 @@ public static partial class Composer
                 long availableLeft=0,availableRight=width;
                 foreach(var active in sideOnRegion)
                     if(top<active.Bottom)Exclude(active.Shape,active.Top);
-                if(line==0&&p.SideExclusion is {} pending)Exclude(pending,top);
+                if(line==0&&p.SideExclusion is {} pending&&!DrawsAcrossColumn(pending))Exclude(pending,top);
                 var region=initial with{Left=availableLeft,Width=availableRight-availableLeft,
                     RightMargin=availableLeft==0&&availableRight==width?initial.RightMargin:0,
+                    CenteredImageOverhang=availableLeft==0&&availableRight==width?initial.CenteredImageOverhang:0,
                     TabOrigin=availableLeft!=initial.Left?initial.TabOrigin??initial.Left:initial.TabOrigin};
                 if(region.Width<12*TypographySession.EmuPerPoint)
                     throw new LayoutFailure("PAGE_FLOW_SIDE_TOO_NARROW",p.Source);
@@ -1343,7 +1362,7 @@ public static partial class Composer
                 try
                 {
                     foreach(var image in line.Images)
-                        DrawImage(canvas,bitmaps,image.Image,image.X,image.Y);
+                        DrawImage(canvas,bitmaps,image.Image,image.X,image.Y,page.NativePainter);
                 }
                 finally{if(save>=0)canvas.RestoreToCount(save);}
             }
@@ -1432,7 +1451,7 @@ public static partial class Composer
             {
                 if(picture is {} placement)
                 {
-                    DrawImage(canvas,images,placement.Picture.Image,placement.X,placement.Y);
+                    DrawImage(canvas,images,placement.Picture.Image,placement.X,placement.Y,page.NativePainter);
                 }
                 else if(frame is not null)
                 {
@@ -1470,8 +1489,13 @@ public static partial class Composer
         }
     }
 
-    static void DrawImage(SKCanvas canvas,Dictionary<string,SKBitmap> bitmaps,InlineImage image,float x,float y)
+    static void DrawImage(SKCanvas canvas,Dictionary<string,SKBitmap> bitmaps,InlineImage image,float x,float y,LineComposer? painter)
     {
+        if(image.Diagram is {} diagram)
+        {
+            DrawDiagram(canvas,diagram,x,y,painter??throw new InvalidDataException("PAGE_DRAW_LEASE"));
+            return;
+        }
         if(image.VmlVector is {} vector)
         {
             foreach(var polygon in vector.Polygons)

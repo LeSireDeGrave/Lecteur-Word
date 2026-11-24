@@ -72,7 +72,8 @@ public static partial class Composer
                     check();
                     var start=source[paragraph.Id][0];
                     var bounds=new LineRegion(paragraph.CellOwner!,0,PageComposer.Emu(paragraph.Geometry.Width)-
-                        PageComposer.Emu(paragraph.Geometry.Left)-PageComposer.Emu(paragraph.Geometry.Right));
+                        PageComposer.Emu(paragraph.Geometry.Left)-PageComposer.Emu(paragraph.Geometry.Right))
+                        {CenteredImageOverhang=PageComposer.Emu(paragraph.CenteredImageOverhang)};
                     var lines=reflow!(paragraph,bounds,start.Resume);
                     if(lines.Any(l=>l.Diagnostics.Any(issue=>issue.Code=="LINE_OVERFLOW")))
                         throw new LayoutFailure("LINE_OVERFLOW",paragraph.Source);
@@ -224,7 +225,8 @@ public static partial class Composer
         foreach(var box in native.Boxes)
         {
             float x=origin+PageComposer.Points(box.X),y=baseline-PageComposer.Points(box.Height);
-            if(x-box.Image.Effects.Left<left-.01f||x+PageComposer.Points(box.Width)+box.Image.Effects.Right>right+.01f||
+            if(!native.Region.AllowHorizontalOverflow&&(x-box.Image.Effects.Left<left-.01f||
+                x+PageComposer.Points(box.Width)+box.Image.Effects.Right>right+.01f)||
                 !line.ClipToLineBox&&(y<upper-.01f||baseline>bottom+.01f))
                 throw new LayoutFailure("PAGE_INLINE_OUTSIDE",box.Source.Location);
         }
@@ -250,7 +252,8 @@ public static partial class Composer
 
         void Check(TextInk ink,long x,long y)
         {
-            if(origin+PageComposer.Points(x+ink.Left)<left-.01f||origin+PageComposer.Points(x+ink.Right)>right+.01f||
+            if(!native.Region.AllowHorizontalOverflow&&(origin+PageComposer.Points(x+ink.Left)<left-.01f||
+                origin+PageComposer.Points(x+ink.Right)>right+.01f)||
                !line.ClipToLineBox&&(baseline+PageComposer.Points(y+ink.Top)<upper-.01f||baseline+PageComposer.Points(y+ink.Bottom)>bottom+.01f))
                 throw new LayoutFailure("PAGE_GLYPH_OUTSIDE",paragraph.Source);
         }

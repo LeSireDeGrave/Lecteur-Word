@@ -154,9 +154,6 @@ internal sealed class LinePropertiesReader(SemanticDocument model,TableStyleCasc
             long position=paragraph.RightToLeft?right:left;
             stops.TryAdd(position,new(position,paragraph.RightToLeft?LineTabKind.Right:LineTabKind.Left,"none",origins.GetValueOrDefault("first")));
         }
-        if(model.ParentId(sourceParagraph) is {} parent&&Local(parent)=="tc"&&model.ChildId(parent,"tcPr") is {} cell&&
-            model.ChildId(cell,"noWrap") is {} nowrap&&Boolean(nowrap,false))
-            Issue(nowrap,"LINE_CELL_WRAP_PENDING","Contrainte de largeur de cellule à résoudre avec la table.");
         if(paragraph.DirectionOrigin is {} direction)origins["direction"]=direction;
         return new(alignment,left,right,first,[..stops.Values],defaultTab,defaultSource,keepNext,keepLines,widow,pageBefore,
             paragraph.RightToLeft,origins.ToImmutable(),issues.ToImmutable())

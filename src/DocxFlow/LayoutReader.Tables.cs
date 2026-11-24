@@ -233,7 +233,6 @@ public static partial class LayoutReader
                             else if(tableCascade is not null&&Is(c,"cnfStyle")){}
                             else Issue("LAYOUT_CELL_PROPERTY_UNQUALIFIED",c,"Propriété de cellule non qualifiée : "+c.Name);
                     }
-                    if(noWrap is not null)Issue("LAYOUT_CELL_PROPERTY_UNQUALIFIED",noWrap,"Absence d’habillage de la cellule hors profil.");
                     if(column+span>scaled.Length){Issue("LAYOUT_GRID_SPAN_INVALID",cell,"Cellule hors grille.");continue;}
                     float cellWidth=scaled.Skip(column).Take(span).Sum();if(tableCascade is null&&!autoFit&&declaredWidth.HasValue&&Math.Abs(declaredWidth.Value*ratio-cellWidth)>.5f)Issue("LAYOUT_CELL_WIDTH_CONFLICT",cell,"Largeur de cellule incompatible avec la grille.");
                     if(tableCascade is null&&!autoFit&&cellWidth-cellMargins.Left-cellMargins.Right<12)Issue("LAYOUT_CELL_BODY_INVALID",cell,"Zone de cellule trop étroite.");
@@ -254,7 +253,8 @@ public static partial class LayoutReader
                         terminalKeeps.Add((output[^1],rowIndex));
                     if(paragraphIds.Count==0)Issue("LAYOUT_CELL_PARAGRAPH_MISSING",cell,"Cellule sans paragraphe qualifié.");
                     var model=new LayoutCell(cell.Id,cell.Source,rowIndex,column,span,1,null,cellMargins,cellBorders,valign,fill,paragraphIds)
-                    {PreferredWidth=declaredWidth,NativeWidth=cellWidthPreference,AppliedTableStyles=tableCascade?.Cell(cell.Id)??[],
+                    {PreferredWidth=declaredWidth,NativeWidth=cellWidthPreference,NoWrapSource=noWrap?.Source,
+                        AppliedTableStyles=tableCascade?.Cell(cell.Id)??[],
                         RowCellStyleProperties=[..rowCellDeclarations.Select(c=>c.Id)]};
                     if(merge=="continue")
                     {

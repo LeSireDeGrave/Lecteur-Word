@@ -32,9 +32,12 @@ public static partial class Composer
                 check();
                 try
                 {
-                    var size=intrinsic(paragraphs[id]);
-                    minimum=Math.Max(minimum,size.Minimum);
-                    preferred=Math.Max(preferred,size.Preferred);
+                    var p=paragraphs[id];
+                    var size=intrinsic(p);
+                    float imageMargin=CenteredCellImageOverhang(table,cell,p);
+                    bool contiguous=table.AutoFit&&cell.NoWrapSource is not null&&cell.NativeWidth?.Unit is (null or "auto" or "pct");
+                    minimum=Math.Max(minimum,(contiguous?size.Preferred:size.Minimum)-imageMargin);
+                    preferred=Math.Max(preferred,size.Preferred-imageMargin);
                 }
                 catch(InvalidDataException e) when(e.Message is "PAGE_AUTOFIT_SOURCE" or "PAGE_AUTOFIT_UNMEASURED" or "PAGE_AUTOFIT_INLINE_PENDING")
                 {
@@ -65,11 +68,32 @@ public static partial class Composer
             var desired=lower.ToArray();
             foreach(var c in ordered)
                 Grow(desired,c.Cell,c.Cell.NativeWidth?.At(target)??c.IntrinsicPreferred??0);
-            chosen=lower;
-            float extra=target-minTotal,capacity=desired.Sum()-minTotal;
-            if(extra>0&&capacity>epsilon)
-                for(int i=0;i<count;i++)chosen[i]+=Math.Min(extra,capacity)*(desired[i]-chosen[i])/capacity;
+            chosen=lower.ToArray();
+            if(ordered.Any(c=>c.Cell.NoWrapSource is not null&&c.Cell.NativeWidth is {Unit:"dxa"}))
+            {
+                var protectedWidths=lower.ToArray();
+                foreach(var c in ordered)
+                    if(c.Cell.NoWrapSource is not null&&c.Cell.NativeWidth is {Unit:"dxa",Value:var protectedWidth})
+                        Grow(protectedWidths,c.Cell,protectedWidth);
+                AllocateToward(protectedWidths);
+                AllocateToward(desired);
+            }
+            else
+            {
+                float extra=target-minTotal,capacity=desired.Sum()-minTotal;
+                if(extra>0&&capacity>epsilon)
+                    for(int i=0;i<count;i++)chosen[i]+=Math.Min(extra,capacity)*(desired[i]-chosen[i])/capacity;
+            }
             FillRemainder(chosen,target);
+
+            void AllocateToward(float[] goal)
+            {
+                float extra=target-chosen.Sum();
+                float capacity=chosen.Select((width,index)=>Math.Max(0,goal[index]-width)).Sum();
+                if(extra<=0||capacity<=epsilon)return;
+                float fraction=Math.Min(extra,capacity)/capacity;
+                for(int i=0;i<count;i++)chosen[i]+=fraction*Math.Max(0,goal[i]-chosen[i]);
+            }
         }
         else
         {
@@ -170,6 +194,16 @@ public static partial class Composer
             float weight=grid.Sum();
             for(int i=0;i<count;i++)widths[i]+=extra*(weight>0?grid[i]/weight:1f/count);
         }
+    }
+
+    static float CenteredCellImageOverhang(LayoutTable table,LayoutCell cell,LayoutParagraph paragraph)
+    {
+        if(table.AutoFit||paragraph.Properties is not {Alignment:"center",Left:0,Right:0,FirstLine:0}||
+            paragraph.Runs.Where(r=>r.Kind!="paragraphMark").Take(2).ToArray() is not [{Image:not null}])
+            return 0;
+        var borders=EffectiveBorders(table,cell);
+        return 2*Math.Max(0,Math.Min(cell.Margins.Left-(borders.Left?.Width??0)/2,
+            cell.Margins.Right-(borders.Right?.Width??0)/2));
     }
 
     static float Span(float[] widths,LayoutCell cell)

@@ -4,21 +4,43 @@ namespace LecteurWord.Flow;
 
 public static partial class Composer
 {
-    sealed record MeasuredCell(LayoutCell Cell,IReadOnlyList<MeasuredParagraph> Paragraphs,float Height);
+    sealed record MeasuredCell(LayoutCell Cell,IReadOnlyList<MeasuredParagraph> Paragraphs,float Height,ComposedPage? FloatingFlow);
     sealed record MeasuredTable(LayoutTable Table,IReadOnlyDictionary<string,MeasuredCell> Cells,float[] Heights,
         float[] Offsets,IReadOnlyList<(int First,int Last)> Groups);
     sealed record RowLine(LayoutParagraph Paragraph,MeasuredLine Line,float Top,bool BreakAfter);
     sealed record RowCellFlow(LayoutCell Cell,IReadOnlyList<RowLine> Lines,float End);
     sealed record CellSlice(RowCellFlow Flow,int Start,int End,float Origin);
     sealed record RowSlice(IReadOnlyList<CellSlice> Cells,float Height,bool Last);
-    static MeasuredTable MeasureTable(LayoutTable table,IReadOnlyDictionary<string,MeasuredParagraph> paragraphs,Action check)
+    static MeasuredTable MeasureTable(LayoutTable table,IReadOnlyDictionary<string,MeasuredParagraph> paragraphs,Action check,
+        Func<LayoutParagraph,LineRegion,LineResume,IReadOnlyList<MeasuredLine>>? reflow=null)
     {
         var heights=table.Rows.Select(r=>r.Height).ToArray();var cells=new Dictionary<string,MeasuredCell>();
         foreach(var cell in table.Cells.Where(c=>c.MergeOrigin is null))
         {
             check();var items=cell.ParagraphIds.Select(id=>paragraphs[id]).ToArray();float height=cell.Margins.Top+cell.Margins.Bottom,after=0;
             foreach(var item in items){height+=Math.Max(after,item.Paragraph.Properties.Before)+item.Height;after=item.Paragraph.Properties.After;}
-            height+=after;cells[cell.Id]=new(cell,items,height);
+            height+=after;
+            ComposedPage? flow=null;
+            if(items.Any(p=>p.Paragraph.SideExclusion is not null))
+            {
+                if(reflow is null||table.AutoFit||cell.RowSpan!=1||table.Rows[cell.Row].Header||
+                    items.Count(p=>p.Paragraph.SideExclusion is not null)!=1||
+                    items.SelectMany(p=>p.Lines).Any(l=>l.Native is not {} line||
+                        line.Parts.Any(part=>part.Control?.Kind=="NoteCall")||
+                        line.Generated.Any(g=>g.Kind=="pageField")))
+                    throw new LayoutFailure("PAGE_CELL_FLOAT_FLOW_UNQUALIFIED",cell.Source);
+                var local=items.Select(p=>p with{Paragraph=p.Paragraph with{CellOwner=null,
+                    Geometry=p.Paragraph.Geometry with{Top=cell.Margins.Top,Bottom=cell.Margins.Bottom}}}).ToList();
+                using var cellFonts=new LayoutFonts();
+                var placed=PlaceMeasured(new(local.Select(p=>p.Paragraph).ToArray(),[]),local,cellFonts,check,true,reflow:reflow);
+                if(placed.Pages is not [var inner]||placed.Issues.Any(i=>i.BlocksRendering))
+                    throw new LayoutFailure("PAGE_CELL_FLOAT_FLOW_UNQUALIFIED",cell.Source);
+                flow=inner;
+                height=inner.Lines.Select(line=>Math.Max(line.NativeTop+line.Height,
+                        line.SideExclusion is {} box?PageComposer.Points(box.Top+box.Height):0))
+                    .DefaultIfEmpty(cell.Margins.Top).Max()+after+cell.Margins.Bottom;
+            }
+            cells[cell.Id]=new(cell,items,height,flow);
             if(cell.RowSpan==1)
             {
                 if(table.Rows[cell.Row].HeightRule=="exact"&&height>heights[cell.Row]+.01f)throw new InvalidDataException("LAYOUT_EXACT_ROW_CLIPS_CONTENT");
@@ -62,7 +84,7 @@ public static partial class Composer
         var row=table.Table.Rows[group.First];
         return group.First==group.Last&&row is {Header:false,CantSplit:false,Height:0,HeightRule:not "exact"}&&
             table.Cells.Values.Where(c=>c.Cell.Row==group.First).All(c=>
-                c.Cell is {RowSpan:1,VerticalAlignment:"top"}&&
+                c.FloatingFlow is null&&c.Cell is {RowSpan:1,VerticalAlignment:"top"}&&
                 c.Paragraphs.SelectMany(p=>p.Lines).All(l=>l.Native is {Cut:not (LineCutKind.Page or LineCutKind.Column)}));
     }
 
@@ -219,6 +241,16 @@ public static partial class Composer
             }
             boxes.Add(new(table.Id,cell.Id,cell.Source,cx,cy,width,height,borders,cell.Fill)
             {IsRepeated=repeated,CellFragment=fragment,MergedSourceIds=table.Cells.Where(c=>c.MergeOrigin==cell.Id).Select(c=>c.Id).ToImmutableArray()});
+            if(data.FloatingFlow is {} flow)
+            {
+                float shift=wholeY+CellAlignmentOffset(data,wholeHeight);
+                foreach(var entry in flow.Lines)
+                {
+                    check();
+                    lines.Add(PageComposer.TranslateLine(entry,cx,shift) with{CellId=cell.Id,FlowRegion=null});
+                }
+                continue;
+            }
             float cursor=wholeY+cell.Margins.Top+CellAlignmentOffset(data,wholeHeight),after=0;
             foreach(var p in data.Paragraphs)
             {

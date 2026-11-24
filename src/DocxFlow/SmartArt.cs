@@ -20,8 +20,9 @@ public static partial class LayoutReader
         ILookup<(string SourcePart,string Id),Relationship>? diagramLinks;
         ILookup<string,PartInventory>? diagramParts;
 
-        bool ReadSmartArt(InventoryNode drawing)
+        bool ReadSmartArt(InventoryNode drawing,out InlineImage? image)
         {
+            image=null;
             var anchor=SemanticIndex.Unique(Elements(drawing));
             if(anchor is null||anchor.Name is not ("{"+WP+"}inline" or "{"+WP+"}anchor")||
                 Member(anchor,D,"graphic") is not {} graphic||Member(graphic,D,"graphicData") is not {} data||
@@ -29,8 +30,10 @@ public static partial class LayoutReader
             if(ResolveSmartArt(data) is {} presentation)
             {
                 smartArt.Add(presentation);
-                Issue("LAYOUT_SMARTART_RENDER_UNQUALIFIED",data,
-                    $"Modèle, disposition, styles et couleurs reliés à {presentation.Shapes.Count} formes. Composition visuelle hors profil.");
+                image=ReadDiagramDrawing(drawing,anchor,presentation);
+                if(image is null)
+                    Issue("LAYOUT_SMARTART_RENDER_UNQUALIFIED",data,
+                        $"Modèle, disposition, styles et couleurs reliés à {presentation.Shapes.Count} formes. Composition visuelle hors profil.");
             }
             return true;
         }

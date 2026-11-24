@@ -56,6 +56,7 @@ public sealed record LayoutParagraph(string Id,SourceLocation Source,IReadOnlyLi
     internal FlowExclusion? FlowExclusion {get;init;}
     internal SideExclusion? SideExclusion {get;init;}
     public string? CellOwner {get;init;}
+    internal float CenteredImageOverhang {get;init;}
     public string? TableId {get;init;}
     public ListLabel? List {get;init;}
     public string StyleId {get;init;}="";
@@ -497,6 +498,9 @@ public static partial class LayoutReader
                 if(placedFootnoteCalls is not null&&relation.Type==R+"/footnotes"&&
                     semantic!.References.Any(r=>r.Kind=="footnote"&&placedFootnoteCalls.Contains(r.SourceId)))continue;
                 if(nativeComposition&&endnotesPlanned&&relation.Type==R+"/endnotes")continue;
+                // The graphic consumer validates the type, target and content of each referenced diagram part.
+                if(nativeComposition&&relation.Mode=="Internal"&&relation.Type is
+                    R+"/diagramData" or R+"/diagramLayout" or R+"/diagramQuickStyle" or R+"/diagramColors" or DrawingRelation)continue;
                 if(semantic is not null&&(relation.Type==StylesEffectsRelation||
                     relation.Type is R+"/header" or R+"/footer" or SemanticReader.CustomXmlRelation))continue;
                 if(relation.Type is not (R+"/styles" or R+"/settings" or R+"/theme" or R+"/fontTable" or R+"/numbering" or R+"/webSettings" or R+"/image" or R+"/hyperlink")&&!EmptyNoteDependency(relation))Issue("LAYOUT_DEPENDENCY_UNQUALIFIED",body,"Dépendance non qualifiée en pagination : "+relation.Type);
@@ -635,13 +639,17 @@ public static partial class LayoutReader
                         WAttributes(run,"rsidR","rsidRPr");var rp=Child(run,"rPr");var effective=character;
                         if(rp is not null&&Child(rp,"rStyle") is {} rs)foreach(var style in Chain(A(rs,"val"),rs))effective=Character(Child(style,"rPr"),effective,true);
                         effective=Character(rp,effective);
-                        foreach(var leaf in RunContents(run,(!readingStory||runningStory)&&!inCell))
+                        foreach(var leaf in RunContents(run,!readingStory||runningStory&&!inCell))
                         {
                             if(Is(leaf,"t")){Attributes(leaf,"{http://www.w3.org/XML/1998/namespace}space");if(children[leaf.Id].Any(c=>c.Kind!="textValue"))Issue("LAYOUT_TEXT_CONTENT_UNQUALIFIED",leaf,"Contenu imbriqué dans un texte hors profil.");runs.Add(new(leaf.Id,leaf.Source,string.Concat(children[leaf.Id].Where(c=>c.Kind=="textValue").Select(c=>c.Text)),effective));}
                             else if(Is(leaf,"tab")){WAttributes(leaf);runs.Add(new(leaf.Id,leaf.Source,"\t",effective,"tab"));}
                             else if(Is(leaf,"drawing"))
                             {
-                                if(nativeComposition&&ReadSmartArt(leaf))continue;
+                                if(nativeComposition&&ReadSmartArt(leaf,out var diagram))
+                                {
+                                    if(diagram is not null)runs.Add(new(leaf.Id,leaf.Source,"",effective,"image"){Image=diagram});
+                                    continue;
+                                }
                                 if(nativeComposition&&!readingStory&&!inCell&&
                                     Elements(leaf).Take(2).ToArray() is [var anchor]&&anchor.Name=="{"+WP+"}anchor")
                                 {
@@ -651,9 +659,9 @@ public static partial class LayoutReader
                                 else if(ReadInlineImage(leaf) is {} image)
                                     runs.Add(new(leaf.Id,leaf.Source,"",effective,"image"){Image=image});
                             }
-                            else if(nativeComposition&&(!readingStory||runningStory)&&!inCell&&IsFloatingTextAlternative(leaf))
+                            else if(nativeComposition&&(!readingStory||runningStory&&!inCell)&&IsFloatingTextAlternative(leaf))
                             {
-                                if(ReadFloatingTextFrame(leaf) is {} frame)
+                                if(ReadFloatingTextFrame(leaf,inCell) is {} frame)
                                     runs.Add(new(frame.Id,leaf.Source,"",effective,"floatingTextFrame"){FloatingTextFrame=frame});
                                 else Issue("LAYOUT_FLOATING_TEXTBOX_UNQUALIFIED",leaf,
                                     "Branche de dessin ou zone de texte hors profil natif.");

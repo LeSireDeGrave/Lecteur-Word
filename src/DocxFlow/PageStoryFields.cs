@@ -52,7 +52,7 @@ internal static partial class PageComposer
         PaginatedDocument layout,IReadOnlyDictionary<string,TextParagraph> text,TypographySession typography,
         IReadOnlySet<string> parentFields,Action check,string? propertyValue=null)
     {
-        var syntax=field.Command=="DOCPROPERTY"?null:PageFieldSyntax.Read(model,field);
+        var syntax=field.Command=="DOCPROPERTY"?null:PageFieldSyntax.Read(model,field,allowCachedPageStyle:true);
         if(field is not {StructureVerified:true,Locked:false,ParentFieldId:null,
             Command:"PAGE" or "NUMPAGES" or "SECTIONPAGES" or "PAGEREF" or "REF" or "DOCPROPERTY",EndId:{} endId}||parentFields.Contains(field.Id)||
             propertyValue is null&&syntax is not {Relative:false,Hyperlink:false}||
@@ -69,7 +69,7 @@ internal static partial class PageComposer
         if(paragraph.Controls.Any(c=>cache.Contains(c.Source.NodeId)||model.Element(c.Source.NodeId).Order>=order))return null;
         var prefix=paragraph.Fragments.TakeWhile(f=>f.Sources.All(s=>model.Element(s.Source.NodeId).Order<order)).ToArray();
         var result=paragraph.Fragments.Skip(prefix.Length).ToArray();
-        if(result.Any(f=>f.Sources.Any(s=>!cache.Contains(s.Source.NodeId)))||
+        if(syntax?.RetainCachedStyle==true||result.Any(f=>f.Sources.Any(s=>!cache.Contains(s.Source.NodeId)))||
             cache.Count>0&&(!field.StoredResultIds.All(n=>model.Element(n).Kind==SemanticKind.Text)||
                 model.StoredText(field)!=string.Concat(result.Select(f=>f.Text))))
         {

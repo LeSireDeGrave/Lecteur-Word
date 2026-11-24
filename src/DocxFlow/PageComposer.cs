@@ -216,6 +216,7 @@ internal static partial class PageComposer
                 calculatedBodyFields:bodyFields.Values.Select(f=>f.Field.Id).ToHashSet(StringComparer.Ordinal),placedFootnoteCalls:noteControls,
                 generatedTocs:tocPlans,tocContinuations:tocContinuations,endnotesPlanned:endnoteRequests is not null,
                 styleCompositionComparison:styleComparison);
+            reader.UseDiagramTypography(typography,Check);
             layout=reader.Read();
             styleDecision=reader.StyleDecision;
             sections=ReadSections(model,layout,token);
@@ -467,7 +468,8 @@ internal static partial class PageComposer
             foreach(var anchor in sideAnchors)
             {
                 Check();
-                if(sideProfile&&adjusted.TryGetValue(anchor.Paragraph,out var p)&&p.CellOwner is null&&
+                if(sideProfile&&adjusted.TryGetValue(anchor.Paragraph,out var p)&&
+                    (p.CellOwner is null||paintedFrames.ContainsKey(anchor.Id))&&
                     textParagraphs.TryGetValue(p.Id,out var paragraph)&&paragraph.Controls.Count(c=>c.Kind=="Drawing")==1)
                     adjusted[p.Id]=p with{SideExclusion=anchor.Exclusion};
                 else
@@ -536,6 +538,7 @@ internal static partial class PageComposer
                     Emu(p.Geometry.Width)-Emu(p.Geometry.Left)-Emu(p.Geometry.Right);
                 if(width>0)paragraphRegions.Add(p.Id,new(p.CellOwner??$"section-{p.Section}",0,width)
                 {
+                    CenteredImageOverhang=Emu(p.CenteredImageOverhang),
                     RightMargin=p.CellOwner is null&&section.ColumnLayout is null?
                         Emu(section.MirrorMargins?Math.Min(section.Format.Left,section.Format.Right):section.Format.Right):0
                 });
@@ -683,16 +686,22 @@ internal static partial class PageComposer
                             if(paintedFrames.TryGetValue(id,out var painted))
                             {
                                 var frame=painted.Frame;
-                                float frameX=frame.X+(frame.HorizontalReference switch
+                                var column=line.CellId is not null?(line.NativeOffsetX,Points(native.Region.Width)):
+                                    line.FlowRegion is {} flow?(Points(flow.Bounds.Left),Points(flow.Bounds.Width)):((float,float)?)null;
+                                float? character=null;
+                                if(frame.HorizontalReference=="character")
                                 {
-                                    "column" when line.FlowRegion is {} flow=>Points(flow.Bounds.Left),
-                                    "column" or "margin"=>page.Geometry.Left,
-                                    _=>0
-                                });
-                                float frameY=frame.Y+(frame.VerticalReference switch
-                                {
-                                    "paragraph"=>line.NativeTop,"margin"=>page.Geometry.Top,_=>0
-                                });
+                                    int index=native.Parts.IndexOf(part);
+                                    var visual=native.Visual.Where(v=>v.Part==index).Take(2).ToArray();
+                                    if(native.Properties.RightToLeft||visual is not [var occurrence])
+                                    {
+                                        handled.Add(id);
+                                        RefuseDrawing(id,"PAGE_FLOATING_CHARACTER_REFERENCE");
+                                        continue;
+                                    }
+                                    character=line.NativeOffsetX+Points(occurrence.X);
+                                }
+                                var (frameX,frameY)=frame.PageOrigin(page.Geometry,page.Number,line.FloatingAnchorTop??line.NativeTop,column,character);
                                 if(!handled.Add(id)||native.Index!=0||line.ParagraphId!=floatingFrames[id].Paragraph||
                                     frame.Square is not null&&line.SideExclusion is null)
                                     RefuseDrawing(id,"PAGE_FLOATING_TEXTBOX_ANCHOR_UNQUALIFIED");
@@ -703,10 +712,17 @@ internal static partial class PageComposer
                                         MoveFrame(painted.Page,0,0,line.Section,painted.Page.Geometry));
                                     bool frameOutside=frameX>=page.Geometry.Width||frameY>=page.Geometry.Height||
                                         frameX+frame.Width<=0||frameY+frame.Height<=0;
-                                    if(frameOutside&&!placedFrame.HasTextOverflow)RefuseDrawing(id,"PAGE_FLOATING_TEXTBOX_OUTSIDE_SHEET");
-                                    else if(!placedFrame.OverflowFits(page.Geometry))
+                                    bool overflowOutside=!placedFrame.OverflowFits(page.Geometry);
+                                    if(frame.Square is not null&&(frameOutside&&frame.Exclusion is not {ClipToSheet:true}||
+                                        overflowOutside&&frame.WrapText))
                                         RefuseDrawing(id,frameOutside?"PAGE_FLOATING_TEXTBOX_OUTSIDE_SHEET":"PAGE_FLOATING_TEXTBOX_OVERFLOW_OUTSIDE_SHEET");
-                                    else textFrames.Add(placedFrame);
+                                    else
+                                    {
+                                        if(placedFrame.CrossesSheet(page.Geometry)||overflowOutside)
+                                            Add(new("PAGE_FLOATING_TEXTBOX_CLIPPED_BY_SHEET",frame.Drawing,
+                                                "L’ancre est conservée et la peinture est découpée aux limites de la feuille.",false));
+                                        textFrames.Add(placedFrame.ClipOn(page.Geometry));
+                                    }
                                 }
                                 continue;
                             }
@@ -793,7 +809,8 @@ internal static partial class PageComposer
                     text.Context.AsSpan(tab.Offset+1).IndexOfAnyExcept(' ')>=0||
                     p.List is not null||p.Properties.Alignment!="left"||
                     model.Name(tab.Source.NodeId)!=SemanticIndex.QName(SemanticIndex.W,"tab"))
-                    return Intrinsic(p,text,imageRuns,Check,markers.GetValueOrDefault(p.Id),noteCallWidth:NoteWidth);
+                    return Intrinsic(p,text,imageRuns,Check,markers.GetValueOrDefault(p.Id),noteCallWidth:NoteWidth,
+                        floatingDrawings:floatingIds);
 
                 var trial=painter.Compose(_=>new(p.Id,0,Emu(1440)),token,markers:markers,orderedParagraphs:[text]);
                 intrinsicTabWork+=trial.Performance.Work;
@@ -1197,7 +1214,7 @@ internal static partial class PageComposer
 
     internal static (float Minimum,float Preferred) Intrinsic(LayoutParagraph layout,TextParagraph? p,
         IReadOnlyDictionary<string,InlineImage> images,Action check,MeasuredListMarker? marker=null,long fieldWidth=0,bool fixedTabs=false,
-        Func<TextParagraph,TextControl,long?>? noteCallWidth=null)
+        Func<TextParagraph,TextControl,long?>? noteCallWidth=null,IReadOnlySet<string>? floatingDrawings=null)
     {
         if(p is null)throw new InvalidDataException("PAGE_AUTOFIT_SOURCE");
         if(layout.List is not null&&marker?.TextStart is null)throw new InvalidDataException("PAGE_AUTOFIT_UNMEASURED");
@@ -1225,6 +1242,8 @@ internal static partial class PageComposer
             if(c.Kind=="Break")units.Add((c.Offset+1,0,false,true));
             else if(c.Kind=="Drawing"&&images.TryGetValue(c.Source.NodeId,out var image))
                 units.Add((c.Offset+1,Emu(image.Width),false,false));
+            else if(c.Kind=="Drawing"&&floatingDrawings?.Contains(c.Source.NodeId)==true)
+                units.Add((c.Offset+1,0,false,false));
             else if(c.Kind=="NoteCall"&&noteCallWidth?.Invoke(p,c) is {} noteWidth)
             {
                 units.Add((c.Offset+1,noteWidth,false,false));

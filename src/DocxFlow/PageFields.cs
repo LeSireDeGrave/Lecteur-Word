@@ -6,12 +6,17 @@ namespace LecteurWord.Flow;
 
 internal sealed record PageFieldSyntax(string? Bookmark,bool Hyperlink,bool Relative,string? Format,int DecimalPlaces)
 {
-    internal static PageFieldSyntax? Read(SemanticDocument model,SemanticField field)
+    internal bool RetainCachedStyle {get;init;}
+
+    internal static PageFieldSyntax? Read(SemanticDocument model,SemanticField field,bool allowCachedPageStyle=false)
     {
         if(!ValidFlags(model,field))return null;
         if(Instruction(model,field) is not {} instruction)return null;
         string[] words=instruction.Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries);
         if(words.Length==0||!words[0].Equals(field.Command,StringComparison.OrdinalIgnoreCase))return null;
+        if(allowCachedPageStyle&&field.Command=="PAGE"&&words is [_,"\\*",var option]&&
+            option.Equals("MERGEFORMAT",StringComparison.OrdinalIgnoreCase))
+            return new(null,false,false,null,0){RetainCachedStyle=true};
         int i=1,places=0;
         string? name=null,format=null;
         bool hyperlink=false,relative=false;
