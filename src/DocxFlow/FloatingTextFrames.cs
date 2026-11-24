@@ -24,6 +24,7 @@ internal sealed record FloatingTextFrame(string Id,SourceLocation Drawing,string
     internal string? HorizontalAlignment {get;init;}
     internal string? VerticalAlignment {get;init;}
     internal SourceLocation? VmlSource {get;init;}
+    internal InlineImage? Vector {get;init;}
     internal SideExclusion? Exclusion=>Square is {} wrap?wrap.At(X,Y,Width,Height) with
         {ClipToSheet=AutoFit&&!WrapText&&Rotation==0}:null;
     internal (float X,float Y) PageOrigin(PageGeometry page,int physicalPage,float paragraphTop,
@@ -274,6 +275,17 @@ public static partial class LayoutReader
             if(!Anchor(anchor,out var placement))return Refuse(anchor,"Ancre ou habillage extérieur de la zone hors profil.");
             if(inCell&&(placement.Square is null||!Bool(anchor,"layoutInCell",true)))
                 return Refuse(anchor,"Habillage et disposition dans la cellule requis par le profil d’ancrage en tableau.");
+            if(runningStory&&placement.Square is null&&Part(anchor,D,"graphic") is {} vectorGraphic&&
+                Only(vectorGraphic,D,"graphicData") is {} vectorData&&Value(vectorData,"uri")==Wps&&
+                Only(vectorData,Wps,"wsp") is {} vectorShape&&!Elements(vectorShape).Any(n=>n.Name=="{"+Wps+"}txbx"))
+            {
+                var vector=ReadWpsVector(drawing,vectorShape,pict,placement.Width,placement.Height,out string detail);
+                if(vector is null)return Refuse(vectorShape,detail);
+                return new(pict.Id,drawing.Source,"",placement.X,placement.Y,placement.Width,placement.Height,0,0,0,0,false,placement.Order)
+                {HorizontalReference=placement.Horizontal,VerticalReference=placement.Vertical,Vector=vector,
+                    VmlSource=pict.Source,BehindText=placement.Behind,HorizontalAlignment=placement.HorizontalAlignment,
+                    VerticalAlignment=placement.VerticalAlignment};
+            }
             if(Part(anchor,D,"graphic") is not {} graphic||Properties(graphic).Any()||Only(graphic,D,"graphicData") is not {} data||
                 !Attrs(data,("uri",Wps))||Only(data,Wps,"wsp") is not {} shape||Properties(shape).Any()||
                 !Parts(shape,Wps,"cNvSpPr","spPr","txbx","bodyPr")||

@@ -14,6 +14,7 @@ internal readonly record struct LineRegion(string Id,long Left,long Width)
     internal bool NoWrap {get;init;}
     internal bool AllowHorizontalOverflow {get;init;}
     internal long CenteredImageOverhang {get;init;}
+    internal long? PaperRight {get;init;}
 }
 internal readonly record struct LineRequest(string ParagraphId,string StoryId,int Index,int ContextStart);
 internal readonly record struct LineResume(int ContextStart,int Index,int ConsecutiveHyphens,bool TerminalMark);

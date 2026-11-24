@@ -8,6 +8,7 @@ public static class FontResolver
 {
     static readonly Lazy<HashSet<string>> installed=new(()=>SKFontManager.Default.GetFontFamilies().ToHashSet(StringComparer.OrdinalIgnoreCase));
     public static bool IsInstalled(string family)=>family.Length is >0 and <=128&&installed.Value.Contains(family);
+    internal static string[] InstalledFamilies()=>installed.Value.Order(StringComparer.CurrentCultureIgnoreCase).ToArray();
     internal static string[] FallbackFamilies(string family,string classification)
     {
         if(family.Contains("Mono",StringComparison.OrdinalIgnoreCase)||

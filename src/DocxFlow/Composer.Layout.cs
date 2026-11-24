@@ -1456,6 +1456,11 @@ public static partial class Composer
                 else if(frame is not null)
                 {
                     var bounds=frame.Frame;
+                    if(bounds.Vector is {} vector)
+                    {
+                        DrawImage(canvas,images,vector,bounds.X,bounds.Y,page.NativePainter);
+                        continue;
+                    }
                     if(bounds.Fill is {} rgb)
                     {
                         using var fill=new SKPaint{Color=new((byte)(rgb>>16),(byte)(rgb>>8),(byte)rgb)};

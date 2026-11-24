@@ -76,6 +76,8 @@ internal sealed partial class TypographySession : IDisposable
     readonly TextStyleResolver styles;
     readonly object owner = new();
     readonly FontResolver.FaceSelection selection;
+    readonly IReadOnlyList<HistoricalFontChoice>? historicalChoices;
+    readonly bool reserveMissingSymbols;
     readonly Dictionary<(string Code,string Id), FlowIssue> issues = [];
     readonly Dictionary<(string Hash,int Index), ShapingFace> faces = [];
     readonly Dictionary<(string Paragraph,int Start,int Length,string Hash,int Index), TextMeasure> shapes = [];
@@ -89,13 +91,16 @@ internal sealed partial class TypographySession : IDisposable
     long styleTicks, segmentTicks, fontTicks, shapeTicks;
 
     internal TypographySession(InspectionResult inspected, SemanticDocument model, TextBudget? limits = null, CancellationToken cancellation = default,
-        TableStyleCascade? tableStyles=null)
+        TableStyleCascade? tableStyles=null,IReadOnlyList<HistoricalFontChoice>? historicalChoices=null,
+        bool reserveMissingSymbols=false)
     {
         cancellation.ThrowIfCancellationRequested();
         if (!inspected.Manifest.InspectionComplete || inspected.Manifest.Status==Coverage.Refused ||
             inspected.Manifest.SourceSha256 != model.SnapshotId)
             throw new InvalidDataException("TEXT_SNAPSHOT_MISMATCH");
         this.model = model;
+        this.historicalChoices=historicalChoices;
+        this.reserveMissingSymbols=reserveMissingSymbols;
         this.limits = limits ?? new();
         if (this.limits is not { MaxTokens: >0 and <=100_000, MaxChars: >0 and <=500_000,
             MaxParagraphChars: >0 and <=32768, MaxGlyphs: >0 and <=500_000, Ms: >0 and <=15000 })

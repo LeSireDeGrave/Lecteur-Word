@@ -71,6 +71,7 @@ public sealed partial class ReaderWindow:Window
     internal ReaderWindow(ThemePreference? preference, SessionRecoveryService? recovery = null, string? startupWarning = null, ExtensionManagerService? extensions = null)
     {
         themePreference=preference;this.recovery=recovery;this.startupWarning=startupWarning;this.extensions=extensions;
+        if(preference is not null)historicalFontPreferences=new(Path.Combine(preference.DirectoryPath,"historical-fonts.json"));
         Title="Lecteur Word";Icon=BrandAssets.WindowIcon;Width=1240;Height=850;MinWidth=640;MinHeight=500;
         FontFamily=new FontFamily("avares://Avalonia.Fonts.Inter/Assets#Inter");FontSize=13;
         var root=new Grid{RowDefinitions=new RowDefinitions("43,Auto,*,Auto")};Content=root;
@@ -190,10 +191,11 @@ public sealed partial class ReaderWindow:Window
                     var reading=ReadableReader.Read(result,cancellation.Token,out var preparedModel,request);
                     bool hasTables=reading.Available&&reading.Presentation.BodyBlocks.Any(b=>b.Kind=="table");
                     clock=new OpenClock();
-                    if(reading.Available)candidate=PageComposer.Compose(result,cancellation.Token,hasTables,preparedModel);
+                    if(reading.Available)candidate=PageComposer.Compose(result,cancellation.Token,hasTables,preparedModel,
+                        ReadHistoricalChoices(result.Manifest.SourceSha256));
                     var proposed=candidate?.Snapshot;
                     clock.Report(request,"composition",proposed?.Coverage.ToString()??"skipped");
-                    bool adopt=proposed is {Coverage:PageCoverage.Complete,Composition.Available:true,RulerModel:not null};
+                    bool adopt=proposed is {Rendering.Pagination:PageCoverage.Complete,Composition.Available:true,RulerModel:not null};
                     var pageModel=adopt?proposed!.RulerModel!:LayoutReader.Read(result,cancellation.Token);
                     var historical=LegacySinglePage.TryCompose(proposed,pageModel,cancellation.Token);
                     var layout=adopt?proposed!.Composition:historical??

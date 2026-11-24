@@ -12,7 +12,8 @@ internal static partial class PageComposer
         "PAGE_STYLES_EFFECTS_MISSING_STYLE" or "PAGE_STYLES_EFFECTS_ONLY_STYLE";
 
     static PageCompositionLease? CompareStyleCompositions(InspectionResult inspection, PageCompositionSnapshot initial,
-        CancellationToken token, bool prepareReadingTables, PreparedReadingModel? prepared)
+        CancellationToken token, bool prepareReadingTables, PreparedReadingModel? prepared,
+        IReadOnlyList<HistoricalFontChoice>? historicalChoices)
     {
         if (initial.StyleDecision is not { Selection: PageStyleSelection.Unresolved, CanCompareEffective: true } decision ||
             initial.Coverage != PageCoverage.Partial || initial.Pages.Length > 12 ||
@@ -26,10 +27,10 @@ internal static partial class PageComposer
         try
         {
             using var ordinary = ComposeWithStyles(inspection, budget.Token, prepareReadingTables, prepared,
-                styleComparison: true);
+                styleComparison: true,historicalChoices:historicalChoices);
             if (ordinary.Snapshot.Coverage != PageCoverage.Complete) return null;
             effects = ComposeWithStyles(inspection, budget.Token, prepareReadingTables, null,
-                StyleCollectionKind.Effects, styleComparison: true);
+                StyleCollectionKind.Effects, styleComparison: true,historicalChoices:historicalChoices);
             if (!SameStyleComposition(ordinary.Snapshot, effects.Snapshot, budget.Token)) return null;
 
             var chosen = effects.Snapshot.StyleDecision! with

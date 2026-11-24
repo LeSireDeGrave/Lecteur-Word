@@ -9,7 +9,10 @@ namespace LecteurWord.Flow;
 internal sealed record DiagramTextLine(float X,float Baseline,TextFragment Fragment);
 internal sealed record DiagramShape(SourceLocation Source,PageRect Box,string Geometry,float FirstAdjustment,
     float SecondAdjustment,uint? Fill,FrameStroke? Stroke,PageRect? TextBox,ImmutableArray<DiagramTextLine> Text);
-internal sealed record DiagramDrawing(ImmutableArray<DiagramShape> Shapes);
+internal sealed record DiagramDrawing(ImmutableArray<DiagramShape> Shapes)
+{
+    internal string LayoutProfile {get;init;}="cached";
+}
 
 public static partial class LayoutReader
 {
@@ -172,81 +175,6 @@ public static partial class LayoutReader
                     Value(body,"anchor")??"t",lineSpacing,before,after,out lines);
             }
 
-            bool WrapLabel(string value,TextStyle style,SemanticSource origin,PageRect inner,string align,string anchor,
-                float spacing,float before,float after,out ImmutableArray<DiagramTextLine> lines)
-            {
-                lines=[];
-                var boundaries=TextUnicode.Instance.Boundaries(value,false,style.Language,Check);
-                var graphemes=StringInfo.ParseCombiningCharacters(value);
-                var measured=new List<TextFragment>();
-                int start=0,boundary=0;
-                while(start<value.Length)
-                {
-                    TextFragment? chosen=null;
-                    int end=start;
-                    while(boundary<boundaries.Count)
-                    {
-                        int next=boundaries[boundary].Offset;
-                        string candidate=value[start..next].Trim(' ');
-                        if(candidate.Length==0){end=next;boundary++;continue;}
-                        var fragment=Measure(candidate);
-                        if(fragment is null)break;
-                        chosen=fragment;end=next;boundary++;
-                        if(boundaries[boundary-1].Mandatory)break;
-                    }
-                    if(chosen is null&&end==value.Length)break;
-                    if(chosen is null&&boundary<boundaries.Count)
-                    {
-                        // A single word wider than the text rectangle can break at a grapheme boundary.
-                        int nextWord=boundaries[boundary].Offset;
-                        foreach(int next in graphemes)
-                        {
-                            if(next<=start||next>=nextWord)continue;
-                            string candidate=value[start..next].Trim(' ');
-                            if(candidate.Length==0)continue;
-                            if(Measure(candidate) is not {} fragment)break;
-                            chosen=fragment;
-                            end=next;
-                        }
-                    }
-                    if(chosen is null||end<=start||measured.Count>=128)return false;
-                    measured.Add(chosen);
-                    start=end;
-                }
-                if(measured.Count==0)return false;
-                var offsets=new List<float>(measured.Count);
-                float y=style.Size*before;
-                foreach(var fragment in measured)
-                {
-                    var m=fragment.Measure!.Metrics;
-                    float ascent=Points(m.Ascent);
-                    offsets.Add(y+ascent);
-                    y+=Points(m.Height)*spacing;
-                }
-                var last=measured[^1].Measure!.Metrics;
-                y=Math.Max(y,offsets[^1]+Points(last.Descent))+style.Size*after;
-                float remaining=inner.Height-y;
-                if(remaining<-.01f)return false;
-                float shift=anchor=="ctr"?remaining/2:anchor=="b"?remaining:0;
-                lines=[..measured.Select((fragment,i)=>
-                {
-                    float space=inner.Width-Points(fragment.Measure!.Metrics.Width);
-                    return new DiagramTextLine(inner.Left+(align=="ctr"?space/2:align=="r"?space:0),
-                        inner.Top+shift+offsets[i],fragment);
-                })];
-                return true;
-
-                TextFragment? Measure(string candidate)
-                {
-                    var fragment=diagramTypography.ShapeLineDecoration(origin.NodeId,candidate,style,origin,0,Check,count=>
-                    {
-                        diagramGlyphs+=count;
-                        if(diagramGlyphs>32_768)throw new InvalidDataException("LAYOUT_SMARTART_GLYPH_LIMIT");
-                    });
-                    return fragment?.Measure is {} size&&Points(size.Metrics.Width)<=inner.Width+.01f?fragment:null;
-                }
-            }
-
             bool ReadStroke(InventoryNode parent,out FrameStroke? stroke)
             {
                 stroke=null;
@@ -308,6 +236,83 @@ public static partial class LayoutReader
             {
                 token.ThrowIfCancellationRequested();
                 checkDiagramBudget?.Invoke();
+            }
+        }
+
+        bool WrapLabel(string value,TextStyle style,SemanticSource origin,PageRect inner,string align,string anchor,
+            float spacing,float before,float after,out ImmutableArray<DiagramTextLine> lines)
+        {
+            lines=[];
+            if(diagramTypography is not {} typography)return false;
+            void Check(){token.ThrowIfCancellationRequested();checkDiagramBudget?.Invoke();}
+            var boundaries=TextUnicode.Instance.Boundaries(value,false,style.Language,Check);
+            var graphemes=StringInfo.ParseCombiningCharacters(value);
+            var measured=new List<TextFragment>();
+            int start=0,boundary=0;
+            while(start<value.Length)
+            {
+                TextFragment? chosen=null;
+                int end=start;
+                while(boundary<boundaries.Count)
+                {
+                    int next=boundaries[boundary].Offset;
+                    string candidate=value[start..next].Trim(' ');
+                    if(candidate.Length==0){end=next;boundary++;continue;}
+                    var fragment=Measure(candidate);
+                    if(fragment is null)break;
+                    chosen=fragment;end=next;boundary++;
+                    if(boundaries[boundary-1].Mandatory)break;
+                }
+                if(chosen is null&&end==value.Length)break;
+                if(chosen is null&&boundary<boundaries.Count)
+                {
+                    // A single word wider than the text rectangle can break at a grapheme boundary.
+                    int nextWord=boundaries[boundary].Offset;
+                    foreach(int next in graphemes)
+                    {
+                        if(next<=start||next>=nextWord)continue;
+                        string candidate=value[start..next].Trim(' ');
+                        if(candidate.Length==0)continue;
+                        if(Measure(candidate) is not {} fragment)break;
+                        chosen=fragment;
+                        end=next;
+                    }
+                }
+                if(chosen is null||end<=start||measured.Count>=128)return false;
+                measured.Add(chosen);
+                start=end;
+            }
+            if(measured.Count==0)return false;
+            var offsets=new List<float>(measured.Count);
+            float y=style.Size*before;
+            foreach(var fragment in measured)
+            {
+                var m=fragment.Measure!.Metrics;
+                float ascent=Points(m.Ascent);
+                offsets.Add(y+ascent);
+                y+=Points(m.Height)*spacing;
+            }
+            var last=measured[^1].Measure!.Metrics;
+            y=Math.Max(y,offsets[^1]+Points(last.Descent))+style.Size*after;
+            float remaining=inner.Height-y;
+            if(remaining<-.01f)return false;
+            float shift=anchor=="ctr"?remaining/2:anchor=="b"?remaining:0;
+            lines=[..measured.Select((fragment,i)=>
+            {
+                float space=inner.Width-Points(fragment.Measure!.Metrics.Width);
+                return new DiagramTextLine(inner.Left+(align=="ctr"?space/2:align=="r"?space:0),
+                    inner.Top+shift+offsets[i],fragment);
+            })];
+            return true;
+
+            TextFragment? Measure(string candidate)
+            {
+                var fragment=typography.ShapeLineDecoration(origin.NodeId,candidate,style,origin,0,Check,count=>
+                {
+                    diagramGlyphs+=count;
+                    if(diagramGlyphs>32_768)throw new InvalidDataException("LAYOUT_SMARTART_GLYPH_LIMIT");
+                });
+                return fragment?.Measure is {} size&&Points(size.Metrics.Width)<=inner.Width+.01f?fragment:null;
             }
         }
 

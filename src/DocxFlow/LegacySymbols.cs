@@ -4,6 +4,11 @@ using System.Text;
 namespace LecteurWord.Flow;
 
 internal sealed record LegacySymbolDecision(string Family,int Code,int? DrawingCode,string Method,string Evidence);
+internal sealed record HistoricalFontChoice(string Family,int Code,bool Packed,string SelectedFamily,int SelectedCode)
+{
+    internal bool Valid=>Family is {Length:>0 and <=128}&&SelectedFamily is {Length:>0 and <=128}&&
+        System.Text.Rune.IsValid(Code)&&System.Text.Rune.IsValid(SelectedCode);
+}
 
 internal static class LegacySymbols
 {

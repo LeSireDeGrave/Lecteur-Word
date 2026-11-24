@@ -136,7 +136,7 @@ internal sealed partial class TypographySession
             {
                 string original=context[graph.Start..graph.End];
                 var symbol=LegacySymbols.SingleScalar(original,out int code)?
-                    MeasureSymbol(paragraphId,graph.Start,original,code,key,Check,CountGlyphs):null;
+                    MeasureSymbol(paragraphId,graph.Start,original,code,key,Check,CountGlyphs,sourceGlyph:true):null;
                 Add(i,i+1,null,symbol);
                 i++;
                 continue;
@@ -205,7 +205,7 @@ internal sealed partial class TypographySession
             string original=char.ConvertFromUtf32(code);
             var key=Key(original,new Graph(0,original.Length,slice,0,"Zsym",true),style) with
             {Family=family,Request=new(family,false,token.Source.Location,"font"),Theme=null,Slot="symbol",CanShape=true};
-            var symbol=MeasureSymbol(paragraph.Id,slice.Start,original,code,key,Check,CountGlyphs,packedWordSymbol:true);
+            var symbol=MeasureSymbol(paragraph.Id,slice.Start,original,code,key,Check,CountGlyphs,packedWordSymbol:true,sourceGlyph:true);
             ReportSymbol(symbol,token.Source.NodeId);
             return control with {Symbol=symbol with
                 {Sources=[new(token.Source,token.RunId,style,new(0,original.Length)){Role=TextRole.Control}]}};
@@ -265,6 +265,10 @@ internal sealed partial class TypographySession
         var decision=symbol.LegacySymbol!;
         if(symbol.Measure is null)
             Issue("TEXT_MISSING_FACE",id,$"{decision.Family} U+{decision.Code:X4}. {decision.Evidence}");
+        else if(decision.Method=="missing-marker")
+            Issue("TEXT_HISTORICAL_GLYPH_MISSING",id,$"{decision.Family} U+{decision.Code:X4}. {decision.Evidence}");
+        else if(decision.Method=="user")
+            Issue("TEXT_HISTORICAL_GLYPH_USER_CHOICE",id,$"{decision.Family} U+{decision.Code:X4} → {symbol.Face!.UsedFamily} U+{decision.DrawingCode:X4}. {decision.Evidence}");
         else if(decision.Method=="documented")
             Issue("TEXT_LEGACY_SYMBOL_SUBSTITUTION",id,symbol.Face!.Reason);
     }

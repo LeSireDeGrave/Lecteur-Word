@@ -6,6 +6,7 @@ internal sealed record SmartArtShape(InventoryNode Drawing,InventoryNode Content
     InventoryNode LayoutNode,InventoryNode QuickStyle,InventoryNode Colors,InventoryNode? TextLayout);
 internal sealed record SmartArtPresentation(SourceLocation Source,InventoryNode Data,InventoryNode Layout,
     InventoryNode Styles,InventoryNode Colors,InventoryNode Drawing,IReadOnlyList<SmartArtShape> Shapes);
+internal sealed record SmartArtParts(InventoryNode Data,InventoryNode Layout,InventoryNode Styles,InventoryNode Colors);
 
 public static partial class LayoutReader
 {
@@ -27,7 +28,7 @@ public static partial class LayoutReader
             if(anchor is null||anchor.Name is not ("{"+WP+"}inline" or "{"+WP+"}anchor")||
                 Member(anchor,D,"graphic") is not {} graphic||Member(graphic,D,"graphicData") is not {} data||
                 Value(data,"uri")!=Diagram)return false;
-            if(ResolveSmartArt(data) is {} presentation)
+            if(ResolveSmartArt(data,out var parts) is {} presentation)
             {
                 smartArt.Add(presentation);
                 image=ReadDiagramDrawing(drawing,anchor,presentation);
@@ -35,11 +36,17 @@ public static partial class LayoutReader
                     Issue("LAYOUT_SMARTART_RENDER_UNQUALIFIED",data,
                         $"Modèle, disposition, styles et couleurs reliés à {presentation.Shapes.Count} formes. Composition visuelle hors profil.");
             }
+            else if(parts is not null)
+            {
+                image=ComposeSmartArtData(drawing,anchor,parts,out string reason);
+                if(image is null)Issue("LAYOUT_SMARTART_ALGORITHM_UNSUPPORTED",parts.Layout,reason);
+            }
             return true;
         }
 
-        SmartArtPresentation? ResolveSmartArt(InventoryNode graphic)
+        SmartArtPresentation? ResolveSmartArt(InventoryNode graphic,out SmartArtParts? parts)
         {
+            parts=null;
             const int limit=1024;
             string from=graphic.Source.PartUri;
             if(Member(graphic,Diagram,"relIds") is not {} refs||Elements(graphic).Count()!=1||Elements(refs).Any()||
@@ -49,7 +56,12 @@ public static partial class LayoutReader
                 Related(Ref("cs"),R+"/diagramColors",DiagramContentType+"diagramColors+xml",Diagram,"colorsDef") is not {} colors)
                 return Refuse(graphic,"Parties SmartArt de données, disposition, styles ou couleurs manquantes ou ambiguës.");
             if(Member(data,Diagram,"extLst") is not {} extensions||
-                SemanticIndex.Unique(Elements(extensions).Where(e=>e.Name=="{"+D+"}ext"&&Value(e,"uri")==DiagramDrawing)) is not {} extension||
+                !Elements(extensions).Any(e=>e.Name=="{"+D+"}ext"&&Value(e,"uri")==DiagramDrawing))
+            {
+                parts=new(data,layout,styles,colors);
+                return null;
+            }
+            if(SemanticIndex.Unique(Elements(extensions).Where(e=>e.Name=="{"+D+"}ext"&&Value(e,"uri")==DiagramDrawing)) is not {} extension||
                 Member(extension,DiagramDrawing,"dataModelExt") is not {} reference||
                 Related(Value(reference,"relId"),DrawingRelation,"application/vnd.ms-office.drawingml.diagramDrawing+xml",
                     DiagramDrawing,"drawing") is not {} cached||Member(cached,DiagramDrawing,"spTree") is not {} tree)

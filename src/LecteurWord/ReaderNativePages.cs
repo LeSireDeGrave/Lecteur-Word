@@ -10,7 +10,7 @@ public sealed partial class ReaderWindow
     internal IReadOnlyList<SemanticSource> SelectedNativeSources {get;private set;}=[];
     int nativeSelectionPage;
     IReadOnlyList<PageRect> nativeSelectionRects=[];
-    bool ShowsNativePages=>nativePageLease?.Snapshot is {Coverage:PageCoverage.Complete,Composition.Available:true} snapshot&&
+    bool ShowsNativePages=>nativePageLease?.Snapshot is {Rendering.Pagination:PageCoverage.Complete,Composition.Available:true} snapshot&&
         ReferenceEquals(composition,snapshot.Composition);
     internal bool ShowsHistoricalPage=>composition is {Profile:PaginatedDocument.Profile,Available:true};
     bool ShowsCalculatedPages=>ShowsNativePages||ShowsHistoricalPage;

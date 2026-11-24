@@ -9,6 +9,7 @@ internal enum ReaderTheme { System, Chocolate, MicrosoftBlue }
 
 internal sealed class ThemePreference(string path)
 {
+    internal string DirectoryPath=>Path.GetDirectoryName(path)!;
     internal static ThemePreference ForCurrentUser()
     {
         string? xdg=Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");

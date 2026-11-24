@@ -6,6 +6,10 @@ using LecteurWord.DocxCore;
 namespace LecteurWord.Flow;
 
 internal enum PageCoverage { Complete, Partial, Fallback }
+internal sealed record PageRenderingStatus(PageCoverage Pagination,bool ContentComplete,int MissingGlyphs,int UserGlyphChoices)
+{
+    internal string VisualComparison=>"NotCompared";
+}
 
 internal readonly record struct PageRegion(long Left,long Top,long Width,long Height);
 internal sealed record PageSection(SemanticSection Semantic,SemanticSource? Source,PageGeometry Format,PageRegion Body,
@@ -66,6 +70,7 @@ internal sealed record PageCompositionSnapshot(string? SnapshotId,SemanticDocume
     internal string? FieldStability {get;init;}
     internal IReadOnlyDictionary<string,PlacedPageBookmark> FieldBookmarks {get;init;}=ImmutableDictionary<string,PlacedPageBookmark>.Empty;
     internal IReadOnlyDictionary<string,string> PageLinkTargets {get;init;}=ImmutableDictionary<string,string>.Empty;
+    internal PageRenderingStatus Rendering {get;init;}=new(PageCoverage.Fallback,false,0,0);
 }
 
 /// <summary>Owns the faces used to draw one immutable composition. The caller releases the lease on document close.</summary>
@@ -92,12 +97,12 @@ internal static partial class PageComposer
         Compose(inspection,token,prepareReadingTables,null);
 
     internal static PageCompositionLease Compose(InspectionResult inspection,CancellationToken token,bool prepareReadingTables,
-        PreparedReadingModel? preparedModel)
+        PreparedReadingModel? preparedModel,IReadOnlyList<HistoricalFontChoice>? historicalChoices=null)
     {
-        var initial=ComposeWithStyles(inspection,token,prepareReadingTables,preparedModel);
+        var initial=ComposeWithStyles(inspection,token,prepareReadingTables,preparedModel,historicalChoices:historicalChoices);
         try
         {
-            var equivalent=CompareStyleCompositions(inspection,initial.Snapshot,token,prepareReadingTables,preparedModel);
+            var equivalent=CompareStyleCompositions(inspection,initial.Snapshot,token,prepareReadingTables,preparedModel,historicalChoices);
             if(equivalent is null)return initial;
             initial.Dispose();
             return equivalent;
@@ -110,7 +115,8 @@ internal static partial class PageComposer
     }
 
     static PageCompositionLease ComposeWithStyles(InspectionResult inspection,CancellationToken token,bool prepareReadingTables,
-        PreparedReadingModel? preparedModel,StyleCollectionKind styles=StyleCollectionKind.Ordinary,bool styleComparison=false)
+        PreparedReadingModel? preparedModel,StyleCollectionKind styles=StyleCollectionKind.Ordinary,bool styleComparison=false,
+        IReadOnlyList<HistoricalFontChoice>? historicalChoices=null)
     {
         token.ThrowIfCancellationRequested();
         var timer=Stopwatch.StartNew();
@@ -154,7 +160,8 @@ internal static partial class PageComposer
             if(model is null)return Result();
             long start=Stopwatch.GetTimestamp();
             var tableStyles=new TableStyleCascade(model,token);
-            typography=new(inspection,model,cancellation:token,tableStyles:tableStyles);
+            typography=new(inspection,model,cancellation:token,tableStyles:tableStyles,
+                historicalChoices:historicalChoices,reserveMissingSymbols:true);
             var measured=typography.Measure(token);
             textSnapshot=measured;
             typographyMs=Stopwatch.GetElapsedTime(start).TotalMilliseconds;
@@ -539,6 +546,8 @@ internal static partial class PageComposer
                 if(width>0)paragraphRegions.Add(p.Id,new(p.CellOwner??$"section-{p.Section}",0,width)
                 {
                     CenteredImageOverhang=Emu(p.CenteredImageOverhang),
+                    PaperRight=p.CellOwner is null&&section.ColumnLayout is null?
+                        width+Emu(section.MirrorMargins?Math.Max(section.Format.Left,section.Format.Right):section.Format.Right):null,
                     RightMargin=p.CellOwner is null&&section.ColumnLayout is null?
                         Emu(section.MirrorMargins?Math.Min(section.Format.Left,section.Format.Right):section.Format.Right):0
                 });
@@ -1056,7 +1065,7 @@ internal static partial class PageComposer
                     successor=id;
                 }
                 var chosen=prefix.ToHashSet(StringComparer.Ordinal);
-                if(prefix.Count>0)
+                for(int attempt=0;attempt<4&&prefix.Count>0;attempt++)
                 {
                     var placedLayout=layout with
                     {
@@ -1075,12 +1084,32 @@ internal static partial class PageComposer
                         if(variableWidths&&placement.Pages.Count>0)
                             VerifyPlacement(placedLayout,placement);
                         foreach(var issue in placement.Issues)add(issue);
+                        if(!final||bodyFields.Count!=0||placement.Pages.Count!=0||
+                            placement.Issues.FirstOrDefault(i=>i.BlocksRendering&&i.Source is not null) is not {} failed||
+                            !locations.TryGetValue(failed.Source!,out string? sourceId)||Owner(sourceId) is not {} block||
+                            prefix.IndexOf(block) is not (>0 and var cut))break;
+                        obstacle=failed.Code;
+                        obstacleSource=model.Source(sourceId);
+                        while(cut>0&&adjusted[prefix[cut-1]] is {Properties.KeepNext:true} previous&&
+                            Composer.CanJoinNative(previous,adjusted[prefix[cut]]))cut--;
+                        if(cut==0||attempt==3)break;
+                        for(int index=cut;index<prefix.Count;index++)
+                        {
+                            Check();
+                            string trim=prefix[index];
+                            string diagnostic=trim==block?failed.Code:"PAGE_AFTER_PLACEMENT_FAILURE";
+                            lineBlocked.TryAdd(trim,diagnostic);
+                            gaps.Add(new(FlowSource(trim),diagnostic));
+                            chosen.Remove(trim);
+                        }
+                        prefix.RemoveRange(cut,prefix.Count-cut);
                     }
                     catch(InvalidDataException error)
                     {
                         placement=new([],[]);
                         obstacle=error.Message;
                         add(new(error.Message,null,"Les positions ne peuvent pas être certifiées dans ce profil.",true));
+                        break;
                     }
                 }
                 return (placement,chosen,obstacle,obstacleSource);
@@ -1184,9 +1213,21 @@ internal static partial class PageComposer
             foreach(var issue in semanticDiagnostics)Add(issue);
             if(textSnapshot is not null)
                 foreach(var issue in textSnapshot.Diagnostics)Add(issue);
-            var coverage=pages.Pages.Count==0?PageCoverage.Fallback:issues.Any(i=>i.BlocksRendering)||gaps.Count>0?PageCoverage.Partial:PageCoverage.Complete;
-            if(coverage==PageCoverage.Partial&&!issues.Any(i=>i.BlocksRendering))
+            var pagination=pages.Pages.Count==0?PageCoverage.Fallback:issues.Any(i=>i.BlocksRendering)||gaps.Count>0?PageCoverage.Partial:PageCoverage.Complete;
+            if(pagination==PageCoverage.Partial&&!issues.Any(i=>i.BlocksRendering))
                 Add(new("PAGE_PARTIAL",null,"Des sources restent accessibles sans géométrie de page.",true));
+            int missing=0,userChoices=0;
+            if(textSnapshot is not null)
+                foreach(var p in textSnapshot.Paragraphs)
+                foreach(var fragment in p.Fragments.Concat(p.Controls.Select(c=>c.Symbol).OfType<TextFragment>()))
+                {
+                    token.ThrowIfCancellationRequested();
+                    if(fragment.LegacySymbol?.Method=="user")userChoices++;
+                    if(fragment.LegacySymbol?.Method=="missing-marker"||fragment.MeasurementIssue=="TEXT_MISSING_FACE")missing++;
+                }
+            var rendering=new PageRenderingStatus(pagination,pagination==PageCoverage.Complete&&missing==0,missing,userChoices);
+            var coverage=pagination==PageCoverage.Complete&&(missing>0||userChoices>0||issues.Any(i=>i.Code=="LINE_TAB_OUTSIDE_PAPER"))?
+                PageCoverage.Partial:pagination;
             var composition=pages with{Issues=issues.ToImmutableArray(),Profile=Profile,Fonts=layout?.Fonts??new()};
             string? id=inspection.Manifest.SourceSha256;
             var nativePages=composition.Pages.Select(p=>new NativePage(new(id,p.Number),sections[p.Section-1],
@@ -1201,13 +1242,14 @@ internal static partial class PageComposer
                     PublicationMs=Stopwatch.GetElapsedTime(publicationStarted).TotalMilliseconds},layout)
                 {ListMarkers=markers,StoryRegions=storyRegions,StyleDecision=styleDecision,ReadingTables=readingTables,ReadingGrids=readingGrids,
                     FieldPasses=fieldPasses.ToImmutable(),ReplayedFieldSheets=replayedFieldSheets.ToImmutable(),
-                    FieldStability=fieldStability,FieldBookmarks=fieldBookmarks,PageLinkTargets=pageLinkTargets};
+                    FieldStability=fieldStability,FieldBookmarks=fieldBookmarks,PageLinkTargets=pageLinkTargets,Rendering=rendering};
             ownsLease=true;
             return new(snapshot,typography,painter);
         }
     }
 
-    static bool BlocksLine(FlowIssue issue)=>issue.Code is not ("LINE_SPACING_PENDING" or "LINE_LIST_FACE_SUBSTITUTED");
+    static bool BlocksLine(FlowIssue issue)=>issue.Code is not
+        ("LINE_SPACING_PENDING" or "LINE_LIST_FACE_SUBSTITUTED" or "LINE_TAB_OUTSIDE_PAPER");
 
     internal static long Emu(float points)=>checked((long)Math.Round((double)points*TypographySession.EmuPerPoint));
     internal static float Points(long emu)=>(float)emu/TypographySession.EmuPerPoint;

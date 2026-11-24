@@ -94,6 +94,7 @@ internal static partial class PageComposer
         foreach(string variant in new[]{"default","first","even"})
         {
             check();
+            long? estimatedHeight=null;
             var selection=section.Semantic.RunningStories.SingleOrDefault(s=>s.Kind==kind&&s.Variant==variant);
             var key=(section.Semantic.Number,kind,variant);
             if((variant=="first"&&!section.TitlePage)||(variant=="even"&&!section.EvenAndOdd))
@@ -115,8 +116,15 @@ internal static partial class PageComposer
             var geometry=section.Format with{Top=0,Bottom=0};
             var template=Template(story,geometry);
             if(kind=="header")template=template.FitHeader(height);
+            if(prepareOnly&&distance is not null&&height<0&&template is {Fields.IsEmpty:false,Layout:{} fieldLayout})
+            {
+                // Measure the stored result to reserve the auxiliary region. The calculated result
+                // is then measured again on each occurrence and must fit the reserved region.
+                var estimate=PlaceStory(story,geometry,fieldLayout,template.Issues.ToBuilder(),[],null);
+                if(estimate.Page is not null)estimatedHeight=estimate.Height;
+            }
             if(distance is null||height<0||section.Body.Width<=0||
-                height==0&&(kind!="header"||template.StructuralHeight is null))
+                height==0&&(kind=="header"?template.StructuralHeight is null:template.StructuralHeight!=0))
             {
                 Set("NoRegion",prepared:template,issues:template.Issues.Add(
                     new("PAGE_STORY_REGION_UNQUALIFIED",reference.Location,"La distance et la marge ne déterminent pas une région auxiliaire utilisable.",true)));
@@ -145,7 +153,8 @@ internal static partial class PageComposer
             {
                 plan.Add(key,(new(key.Number,kind,variant,selection,available,status,prepared?.Page?.Lines.Count??0,
                     prepared?.Page?.Cells.Count??0,issues.IsDefault?[]:issues)
-                    {FloatingFrames=prepared?.Page?.FloatingTextFrames.Count??0,FlowHeight=prepared?.Page is null?null:prepared.Height},prepared));
+                    {FloatingFrames=prepared?.Page?.FloatingTextFrames.Count??0,
+                        FlowHeight=prepared?.Page is null?estimatedHeight:prepared.Height},prepared));
             }
         }
         if(prepareOnly)return (body,plan.Values.Select(p=>p.Region).ToImmutableArray(),0,0);
@@ -468,11 +477,14 @@ internal static partial class PageComposer
                     if(!frameTemplates.TryGetValue(frame.Id,out var positioned))
                     {
                         if(frameTemplates.Count>=512)throw new InvalidDataException("PAGE_FLOATING_PICTURE_LIMIT");
-                        if(!frameRoots.TryGetValue(frame.StoryId,out var frameStory)||frameFields.Contains(frame.StoryId)||
+                        if(frame.Vector is not null)
+                            positioned=(frame,new(1,[]){Geometry=frame.Geometry,NativePainter=painter});
+                        else if(!frameRoots.TryGetValue(frame.StoryId,out var frameStory)||frameFields.Contains(frame.StoryId)||
                             PrepareFrame(frame,frameStory,reader,painter,text,images,frameText[frame.StoryId],check,
                                 storyIssues.Add,token) is not {} composed)
                             return Failed("PAGE_STORY_FLOATING_FRAME_LAYOUT_UNQUALIFIED",frame.Drawing);
-                        frameTemplates.Add(frame.Id,positioned=composed);
+                        else positioned=composed;
+                        frameTemplates.Add(frame.Id,positioned);
                     }
                     frames.Add(new(positioned.Frame,positioned.Page));
                 }

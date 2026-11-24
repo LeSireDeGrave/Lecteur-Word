@@ -146,7 +146,10 @@ internal sealed partial class LineComposer
             Order(field);
             if(pending is {} tab)
             {
-                var stop=NextStop(props,bounds.TabOrigin,pen);
+                var stop=NextStop(props,bounds,pen,out var outside);
+                if(outside is {} unsupported&&issues.All(i=>i.Source!=unsupported.Location||i.Code!="LINE_TAB_OUTSIDE_PAPER"))
+                    issues.Add(new("LINE_TAB_OUTSIDE_PAPER",unsupported.Location,
+                        "Taquet gauche hors papier. Le caractère de tabulation reste placé sur la grille automatique.",false));
                 long width=field.Where(s=>!s.Trailing).Sum(s=>s.Width);
                 long? decimalWidth=null;
                 if(stop.Kind==LineTabKind.Decimal)
@@ -365,10 +368,27 @@ internal sealed partial class LineComposer
             }
     }
 
-    static LineTabStop NextStop(LineProperties props,long regionLeft,long x)
+    static LineTabStop NextStop(LineProperties props,Bounds bounds,long x,out SemanticSource? outside)=>
+        NextStop(props,bounds.TabOrigin,x,bounds.Region.PaperRight,out outside);
+
+    static LineTabStop NextStop(LineProperties props,long origin,long x)=>
+        NextStop(props,origin,x,null,out _);
+
+    static LineTabStop NextStop(LineProperties props,long origin,long x,long? paperRight,out SemanticSource? outside)
     {
-        long position=x-regionLeft;
-        foreach(var stop in props.Tabs)if(stop.Position>position)return stop;
+        outside=null;
+        long position=x-origin;
+        foreach(var stop in props.Tabs)
+        {
+            if(stop.Position<=position)continue;
+            if(stop is {Kind:LineTabKind.Left,Leader:"none",Source:{} declaration}&&paperRight is {} right&&
+                origin+stop.Position>right)
+            {
+                outside??=declaration;
+                continue;
+            }
+            return stop;
+        }
         long next=(Math.Max(0,position)/props.DefaultTab+1)*props.DefaultTab;
         return new(next,LineTabKind.Left,"none",props.DefaultTabSource);
     }

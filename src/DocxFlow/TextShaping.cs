@@ -232,13 +232,14 @@ internal sealed partial class TypographySession
     }
 
     TextFragment MeasureSymbol(string paragraph,int offset,string original,int code,SegmentKey key,Action check,Action<int> count,
-        bool packedWordSymbol=false)
+        bool packedWordSymbol=false,bool sourceGlyph=false)
     {
         FontResolution? chosen=null;
         TextMeasure? measure=null;
         var decision=new LegacySymbolDecision(key.Family,code,null,"unresolved","Aucune face ou correspondance vérifiée.");
         string? rejected=null;
         bool ambiguousEncoding=false;
+        bool invalidEncoding=false;
         if(key.CanShape&&!(key.Request?.Theme==true&&key.Theme is null))
         {
             foreach(var resolution in selection.SymbolFaces(key.Family,key.Bold,key.Italic))
@@ -249,18 +250,16 @@ internal sealed partial class TypographySession
                 catch(InvalidDataException error) when(error.Message is "TEXT_FACE_METRICS" or "LAYOUT_FONT_INVALID" or "LAYOUT_FONT_IDENTITY_MISMATCH")
                 {rejected="Face demandée inexploitable. "+error.Message;continue;}
                 if(face.SkiaFace.GetTableSize(0x66766172)>0)continue;
-                var cmap=SymbolCmap.Lookup(face.Cmap,code,face.GlyphCount,check,face.FirstSymbol,packedWordSymbol);
-                if(cmap.Status==SymbolCmap.Status.Invalid)
-                {rejected="Table cmap symbolique invalide.";continue;}
-                if(cmap.Status==SymbolCmap.Status.Ambiguous)
+                uint glyph=HistoricalGlyph(face,code,packedWordSymbol,check,out var encodingStatus);
+                if(encodingStatus==SymbolCmap.Status.Invalid)
+                {rejected="Table cmap symbolique invalide.";invalidEncoding=true;continue;}
+                if(encodingStatus==SymbolCmap.Status.Ambiguous)
                 {
                     rejected="Table cmap symbolique avec deux glyphes pour le même octet.";
                     ambiguousEncoding=true;
                     break;
                 }
-                uint glyph=cmap.Glyph;
-                if(cmap.Status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(code,out glyph))glyph=0;
-                if(glyph==0||glyph>=face.GlyphCount||glyph>=face.SkiaFace.GlyphCount)continue;
+                if(glyph==0)continue;
                 if(FitScript(key,face) is not {} fitted)
                 {
                     rejected="Métriques d’indice ou d’exposant de la face hors profil.";
@@ -269,7 +268,7 @@ internal sealed partial class TypographySession
                 key=fitted;
                 chosen=resolution;
                 measure=MeasureGlyph(face,glyph);
-                string encoding=cmap.Status==SymbolCmap.Status.Present?"cmap OpenType 3/0, format 4.":"cmap Unicode de la face utilisée.";
+                string encoding=encodingStatus==SymbolCmap.Status.Present?"cmap OpenType 3/0, format 4.":"cmap Unicode de la face utilisée.";
                 decision=new(key.Family,code,null,resolution.Status=="substituted"?"declared-alternate":resolution.Status,
                     resolution.Status=="substituted"?resolution.Reason+" "+encoding:encoding);
                 break;
@@ -295,6 +294,43 @@ internal sealed partial class TypographySession
             }
         }
         if(measure is null&&rejected is not null)decision=decision with {Evidence=rejected+" "+decision.Evidence};
+        bool choiceUnavailable=false;
+        if(measure is null&&sourceGlyph&&key.CanShape&&historicalChoices is not null)
+        {
+            var choice=historicalChoices.FirstOrDefault(c=>c.Valid&&c.Code==code&&c.Packed==packedWordSymbol&&
+                c.Family.Equals(key.Family,StringComparison.OrdinalIgnoreCase));
+            if(choice is not null)
+            {
+                choiceUnavailable=true;
+                foreach(var substitute in selection.ExactFaces(choice.SelectedFamily,key.Bold,key.Italic))
+                {
+                    check();
+                    var face=GetFace(substitute);
+                    uint glyph=HistoricalGlyph(face,choice.SelectedCode,false,check,out _);
+                    if(glyph==0||FitScript(key,face) is not {} fitted)continue;
+                    key=fitted;
+                    chosen=substitute with{RequestedFamily=key.Family,Status="user-substitution",
+                        Reason="Substitution choisie par l’utilisateur pour ce document."};
+                    measure=MeasureGlyph(face,glyph);
+                    decision=new(key.Family,code,choice.SelectedCode,"user",chosen.Reason);
+                    break;
+                }
+            }
+        }
+        if(measure is null&&reserveMissingSymbols&&sourceGlyph&&key.CanShape&&!invalidEncoding&&LegacySymbols.Private(code))
+        {
+            var fallback=selection.Bundled(key.Bold,key.Italic);
+            var face=GetFace(fallback);
+            if(face.Font.TryGetGlyph(0x25a1,out uint glyph)&&glyph>0&&FitScript(key,face) is {} fitted)
+            {
+                key=fitted;
+                string detail=decision.Evidence+(choiceUnavailable?" La substitution sélectionnée ne couvre pas cette occurrence.":"");
+                chosen=fallback with{RequestedFamily=key.Family,Status="missing-glyph-marker",
+                    Reason="Réservation d’un carré pour un glyphe absent."};
+                measure=MeasureGlyph(face,glyph);
+                decision=new(key.Family,code,null,"missing-marker",detail+" Un carré signale la position du caractère source.");
+            }
+        }
         return new(paragraph,offset,original,[],key.Script,key.Language,key.Level,key.Style,key.Slot,key.Family,
             key.Request,key.Theme?.Source,chosen is null?null:chosen with {Data=null},key.Size,[],measure,[])
         {
@@ -313,6 +349,47 @@ internal sealed partial class TypographySession
             return new([new((ushort)glyph,0,0,Emu(y),Emu(width),0){Ink=ink}],
                 [new(new(0,original.Length),0,1,false,false)],Metrics(face,scale,width,ink));
         }
+    }
+
+    static uint HistoricalGlyph(ShapingFace face,int scalar,bool packed,Action check,out SymbolCmap.Status status)
+    {
+        status=SymbolCmap.Status.Invalid;
+        if(face.SkiaFace.GetTableSize(0x66766172)>0)return 0;
+        var mapping=SymbolCmap.Lookup(face.Cmap,scalar,face.GlyphCount,check,face.FirstSymbol);
+        status=mapping.Status;
+        uint glyph=mapping.Glyph;
+        if(status==SymbolCmap.Status.Absent&&!face.Font.TryGetGlyph(scalar,out glyph))return 0;
+        return glyph<face.GlyphCount&&glyph<face.SkiaFace.GlyphCount?glyph:0;
+    }
+
+    internal static byte[]? PreviewHistoricalGlyph(string family,int scalar,bool bold,bool italic)
+    {
+        using var selection=new FontResolver.FaceSelection(new DocumentFonts(),()=>{});
+        if(!Rune.IsValid(scalar)||selection.ExactInstalled(family,bold,italic) is not {} resolution)return null;
+        try
+        {
+            using var face=new ShapingFace(resolution);
+            uint glyph=HistoricalGlyph(face,scalar,false,()=>{},out _);
+            if(glyph==0)return null;
+            using var font=new SKFont(face.SkiaFace,48);
+            using var path=font.GetGlyphPath((ushort)glyph);
+            using var bitmap=new SKBitmap(120,76);
+            using var canvas=new SKCanvas(bitmap);
+            canvas.Clear(SKColors.White);
+            if(path is {IsEmpty:false})
+            {
+                var bounds=path.TightBounds;
+                float scale=Math.Min(1,Math.Min(100/bounds.Width,56/bounds.Height));
+                canvas.Translate(60,38);
+                canvas.Scale(scale);
+                canvas.Translate(-bounds.MidX,-bounds.MidY);
+                using var paint=new SKPaint{Color=SKColors.Black,IsAntialias=true};
+                canvas.DrawPath(path,paint);
+            }
+            using var encoded=bitmap.Encode(SKEncodedImageFormat.Png,100);
+            return encoded.ToArray();
+        }
+        catch(InvalidDataException){return null;}
     }
 
     internal long? SymbolSpaceAdvance(TextFragment fragment,Action check,Action<int> count)

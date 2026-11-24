@@ -362,7 +362,7 @@ internal sealed partial class LineComposer : IDisposable
         while(tab<end)
         {
             Check();
-            var stop=NextStop(props,bounds.TabOrigin,cursor);
+            var stop=NextStop(props,bounds,cursor,out _);
             int next=Math.Min(end,data.NextTab[tab+1]);
             int edge=next==end?Math.Max(tab+1,data.VisibleEnd[next]):next;
             long width=data.Prefix[edge]-data.Prefix[tab+1];

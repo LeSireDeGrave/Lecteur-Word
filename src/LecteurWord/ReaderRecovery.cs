@@ -233,6 +233,7 @@ public sealed partial class ReaderWindow
         if (recovery?.LatestReport is {} incident)
             AsyncButton(panel,T("Consulter le dernier rapport","View latest report"), () => ShowIncidentAsync(incident, dialog));
         else panel.Children.Add(DialogText(T("Aucun rapport d’incident disponible.", "No incident report available.")));
+        AsyncButton(panel,T("Préférences de polices","Font preferences"),()=>ShowHistoricalFontsAsync(dialog));
         AddSupportActions(panel, dialog, CreateSupportService());
         ActionButton(panel,T("Fermer","Close"), dialog.Close);
         await dialog.ShowDialog(this);

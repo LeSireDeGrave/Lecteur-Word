@@ -47,7 +47,8 @@ public static partial class Composer
         var measured=new List<MeasuredParagraph>();
         try
         {
-            if(textBoxBorders)document=JoinTextBoxBorders(document);
+            bool joinBorders=textBoxBorders||paper is not null;
+            if(joinBorders)document=JoinParagraphBorders(document);
             foreach(var p in document.Paragraphs)
             {
                 check();
@@ -59,7 +60,8 @@ public static partial class Composer
             var placed=PlaceMeasured(document,measured,fonts,check,native:true,firstPage:firstPage,paper:paper,
                 reflow:reflow is null?null:(p,region,start)=>reflow(p,region,start).Select(l=>MeasureNative(p,l)).ToArray(),
                 footnotes:footnotes,replay:replay,checkpoints:checkpoints,regionalTables:regionalTables,tableAt:fitRegion is null?null:TableAt,
-                endnotes:endnotes,completeBody:completeBody,textBoxBorders:textBoxBorders);
+                endnotes:endnotes,completeBody:completeBody,textBoxBorders:joinBorders);
+            if(paper is not null)CheckJoinedParagraphBorders(document,placed,check);
             return placed with {Pages=placed.Pages.Select(p=>p.NativePainter==painter?p:p with {NativePainter=painter}).ToImmutableArray()};
 
             MeasuredTable TableAt(string id,long width)
@@ -93,8 +95,7 @@ public static partial class Composer
     }
 
     // ISO/IEC 29500-1 §17.3.1.4: compare the whole set on adjoining paragraphs.
-    // The auxiliary compositor subsequently requires the whole story on one sheet.
-    static PaginatedDocument JoinTextBoxBorders(PaginatedDocument document)
+    static PaginatedDocument JoinParagraphBorders(PaginatedDocument document)
     {
         if(!document.Paragraphs.Any(p=>p.Properties.HasBorders))return document;
         var original=document.Paragraphs;
@@ -117,7 +118,8 @@ public static partial class Composer
 
         static bool Join(LayoutParagraph previous,LayoutParagraph next)
         {
-            if(previous.TableId is not null||previous.CellOwner is not null||next.Properties.PageBreakBefore)return false;
+            if(previous.TableId is not null||previous.CellOwner is not null||previous.Section!=next.Section||
+                next.Properties.PageBreakBefore||previous.Runs.Any(r=>r.Kind is "pageBreak" or "columnBreak"))return false;
             var a=previous.Properties;var b=next.Properties;
             if(!Same(a.TopBorder,b.TopBorder)||!Same(a.BottomBorder,b.BottomBorder)||
                 !Same(a.LeftBorder,b.LeftBorder)||!Same(a.RightBorder,b.RightBorder)||!Same(a.BetweenBorder,b.BetweenBorder))
@@ -129,6 +131,29 @@ public static partial class Composer
 
         static bool Same(ParagraphBorderStroke? a,ParagraphBorderStroke? b)=>
             a is null?b is null:b is not null&&a==(b with{Source=a.Source});
+    }
+
+    static void CheckJoinedParagraphBorders(PaginatedDocument layout,Composition composition,Action check)
+    {
+        if(!layout.Paragraphs.Any(p=>p.Properties.ContinuesSideBorders)||composition.Pages.Count==0)return;
+        var sheets=new Dictionary<string,(int First,int Last)>(StringComparer.Ordinal);
+        foreach(var sheet in composition.Pages)
+        foreach(var line in sheet.Lines.Where(l=>!l.IsRepeated&&l.CellId is null))
+        {
+            check();
+            var prior=sheets.GetValueOrDefault(line.ParagraphId,(First:sheet.Number,Last:sheet.Number));
+            sheets[line.ParagraphId]=(prior.First,sheet.Number);
+        }
+        for(int i=1;i<layout.Paragraphs.Count;i++)
+        {
+            var paragraph=layout.Paragraphs[i];
+            if(!paragraph.Properties.ContinuesSideBorders)continue;
+            check();
+            if(!sheets.TryGetValue(layout.Paragraphs[i-1].Id,out var previous)||
+                !sheets.TryGetValue(paragraph.Id,out var next)||previous.First!=previous.Last||
+                next.First!=next.Last||previous.Last!=next.First)
+                throw new LayoutFailure("PAGE_PARAGRAPH_BORDER_GROUP_SPANS_PAGES",layout.Paragraphs[i-1].Source);
+        }
     }
 
     internal static ComposedPage PlaceContinuousTable(LayoutTable table,
