@@ -10,8 +10,8 @@ public static partial class LayoutReader
     sealed partial class Reader
     {
         sealed record DiagramGraph(string RootId,IReadOnlyDictionary<string,InventoryNode> Nodes,
-            IReadOnlyDictionary<string,ImmutableArray<string>> Children);
-        readonly record struct LinearPlan(string Shape,string Direction,float Width,float Height,float FontSize,string Label);
+            IReadOnlyDictionary<string,ImmutableArray<string>> Children,ImmutableArray<DiagramEdge> Edges);
+        readonly record struct LinearPlan(string Shape,string Direction,float Width,float Height,float FontSize,string Label,SourceLocation Source);
 
         InlineImage? ComposeSmartArtData(InventoryNode drawing,InventoryNode anchor,SmartArtParts parts,out string reason)
         {
@@ -29,24 +29,25 @@ public static partial class LayoutReader
                 return null;
             var layout=Member(parts.Layout,Diagram,"layoutNode");
             string? algorithm=layout is null?null:Value(Member(layout,Diagram,"alg")??layout,"type");
-            if(algorithm!="lin")
+            DiagramDrawing? composed=null;
+            if(layout is not null&&algorithm=="lin"&&ReadLinearPlan(layout) is {} plan)
             {
-                reason="Algorithme SmartArt sans dessin enregistré hors profil. Identifiant : "+(algorithm??"absent")+".";
+                var shapes=ArrangeLinear(graph,plan,width,height,parts,token);
+                if(!shapes.IsDefaultOrEmpty)composed=new(shapes)
+                {
+                    LayoutProfile="linear-direct",Model=DiagramOrigins(graph,parts),
+                    Groups=[new(layout.Source,"lin",new(0,0,width,height),[..shapes.Select(shape=>new DiagramGroup(
+                        plan.Source,"tx",shape.Box,[]))])]
+                };
+            }
+            if(layout is not null&&composed is null)composed=ArrangeDiagram(layout,graph,parts,width,height);
+            if(composed is null)
+            {
+                reason="Disposition SmartArt sans dessin enregistré hors profil ("+(algorithm??"algorithme absent")+
+                    "). Vérifier le graphe, les contraintes, les styles et les libellés.";
                 return null;
             }
-            if(layout is null||ReadLinearPlan(layout) is not {} plan)
-            {
-                reason="La disposition linéaire demande des itérations, contraintes ou formes hors du profil natif.";
-                return null;
-            }
-            var shapes=ArrangeLinear(graph,plan,width,height,parts,token);
-            if(shapes.IsDefaultOrEmpty)
-            {
-                reason="Les dimensions, couleurs, styles ou libellés de la disposition linéaire ne sont pas résolus.";
-                return null;
-            }
-            return new(drawing.Id,drawing.Source,width,height,0,0,semantic!.SnapshotId)
-                {Diagram=new(shapes){LayoutProfile="linear-direct"}};
+            return new(drawing.Id,drawing.Source,width,height,0,0,semantic!.SnapshotId){Diagram=composed};
         }
 
         DiagramGraph? ReadDiagramGraph(InventoryNode data)
@@ -71,6 +72,7 @@ public static partial class LayoutReader
             var linked=new Dictionary<string,Dictionary<int,string>>(StringComparer.OrdinalIgnoreCase);
             var targets=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var ids=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var edges=ImmutableArray.CreateBuilder<DiagramEdge>();
             foreach(var connection in Elements(connections))
             {
                 token.ThrowIfCancellationRequested();
@@ -83,6 +85,7 @@ public static partial class LayoutReader
                     return null;
                 if(!linked.TryGetValue(parent,out var ordered))linked.Add(parent,ordered=[]);
                 if(!ordered.TryAdd(order,target))return null;
+                edges.Add(new(parent,target,connection.Source));
             }
             if(targets.Count is 0 or >64||targets.Count+1!=pointNodes.Count||
                 linked.Values.Any(v=>!v.Keys.Order().SequenceEqual(Enumerable.Range(0,v.Count))))return null;
@@ -98,7 +101,7 @@ public static partial class LayoutReader
                 if(children.TryGetValue(id,out var descendants))
                     foreach(var child in descendants)visit.Push(child);
             }
-            return seen.Count==pointNodes.Count?new(rootId,pointNodes,children):null;
+            return seen.Count==pointNodes.Count?new(rootId,pointNodes,children,edges.ToImmutable()):null;
         }
 
         LinearPlan? ReadLinearPlan(InventoryNode layout)
@@ -134,7 +137,7 @@ public static partial class LayoutReader
             }
             return values.Count==3&&values.TryGetValue("primFontSz",out float pointSize)&&pointSize<=96&&
                 values.TryGetValue("w",out float w)&&values.TryGetValue("h",out float h)?
-                new(Value(shape,"type")!,direction,w*72/25.4f,h*72/25.4f,pointSize,label):null;
+                new(Value(shape,"type")!,direction,w*72/25.4f,h*72/25.4f,pointSize,label,node.Source):null;
         }
 
         ImmutableArray<DiagramShape> ArrangeLinear(DiagramGraph graph,LinearPlan plan,float width,float height,
@@ -159,7 +162,7 @@ public static partial class LayoutReader
                 int slot=backward?count-1-i:i;
                 PageRect box=new(horizontal?slot*plan.Width:0,horizontal?0:slot*plan.Height,plan.Width,plan.Height);
                 if(!ReadLinearLabel(point,box,plan.FontSize,request,textColor,out var textBox,out var label))return [];
-                shapes.Add(new(point.Source,box,plan.Shape,16_667,0,fill,null,textBox,label));
+                shapes.Add(new(point.Source,box,plan.Shape,16_667,0,fill,null,textBox,label){LayoutSource=plan.Source});
             }
             return shapes.MoveToImmutable();
         }

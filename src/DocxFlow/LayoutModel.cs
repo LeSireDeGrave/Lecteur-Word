@@ -659,12 +659,18 @@ public static partial class LayoutReader
                                 else if(ReadInlineImage(leaf) is {} image)
                                     runs.Add(new(leaf.Id,leaf.Source,"",effective,"image"){Image=image});
                             }
-                            else if(nativeComposition&&(!readingStory||runningStory&&!inCell)&&IsFloatingTextAlternative(leaf))
+                            else if(nativeComposition&&(!readingStory||runningStory&&!inCell)&&(IsFloatingTextAlternative(leaf)||IsRunningDrawing(leaf)))
                             {
-                                if(ReadFloatingTextFrame(leaf,inCell) is {} frame)
+                                if((IsRunningDrawing(leaf)?ReadRunningDrawing(leaf):ReadFloatingTextFrame(leaf,inCell)) is {} frame)
                                     runs.Add(new(frame.Id,leaf.Source,"",effective,"floatingTextFrame"){FloatingTextFrame=frame});
                                 else Issue("LAYOUT_FLOATING_TEXTBOX_UNQUALIFIED",leaf,
                                     "Branche de dessin ou zone de texte hors profil natif.");
+                            }
+                            else if(nativeComposition&&runningStory&&!inCell&&IsRunningVmlGroup(leaf))
+                            {
+                                if(ReadRunningVmlGroup(leaf) is {} frame)
+                                    runs.Add(new(frame.Id,leaf.Source,"",effective,"floatingTextFrame"){FloatingTextFrame=frame});
+                                else Issue("LAYOUT_VML_RUNNING_GROUP_UNQUALIFIED",leaf,"Groupe VML auxiliaire hors profil.");
                             }
                             else if(nativeComposition&&runningStory&&!inCell&&Is(leaf,"pict")&&HasVmlTextFrame(leaf))
                             {

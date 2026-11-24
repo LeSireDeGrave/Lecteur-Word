@@ -151,7 +151,7 @@ public static partial class LayoutReader
             foreach(var leaf in children[run.Id].Where(c=>!Is(c,"rPr")))
             {
                 if(nativeComposition&&SemanticIndex.IsAlternative(leaf)&&
-                    !(preserveFloatingAlternatives&&IsFloatingTextAlternative(leaf)))
+                    !(preserveFloatingAlternatives&&(IsFloatingTextAlternative(leaf)||IsRunningDrawing(leaf))))
                 {
                     foreach(var selected in semantic!.StylePropertyChildren(leaf.Id))yield return selected;
                 }

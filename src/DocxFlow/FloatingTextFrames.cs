@@ -25,36 +25,47 @@ internal sealed record FloatingTextFrame(string Id,SourceLocation Drawing,string
     internal string? VerticalAlignment {get;init;}
     internal SourceLocation? VmlSource {get;init;}
     internal InlineImage? Vector {get;init;}
+    internal RunningDrawing? RunningDrawing {get;init;}
+    internal bool BottomAligned {get;init;}
+    internal int ChildOrder {get;init;}
     internal SideExclusion? Exclusion=>Square is {} wrap?wrap.At(X,Y,Width,Height) with
         {ClipToSheet=AutoFit&&!WrapText&&Rotation==0}:null;
     internal (float X,float Y) PageOrigin(PageGeometry page,int physicalPage,float paragraphTop,
         (float Left,float Width)? column=null,float? character=null)
     {
         bool facingLeft=physicalPage%2==0;
-        var (left,width)=HorizontalReference switch
-        {
-            "page"=>(0f,page.Width),
-            "column" when column is {} span=>span,
-            "character"=>(character??throw new InvalidDataException("PAGE_FLOATING_CHARACTER_REFERENCE"),0f),
-            "leftMargin"=>(0f,page.Left),
-            "rightMargin"=>(page.Width-page.Right,page.Right),
-            "insideMargin"=>(facingLeft?(page.Width-page.Right,page.Right):(0f,page.Left)),
-            "outsideMargin"=>(facingLeft?(0f,page.Left):(page.Width-page.Right,page.Right)),
-            _=>(page.Left,page.Width-page.Left-page.Right)
-        };
-        var (top,height)=VerticalReference switch
-        {
-            "margin"=>(page.Top,page.Height-page.Top-page.Bottom),
-            "paragraph" or "line"=>(paragraphTop,0f),
-            "topMargin"=>(0f,page.Top),
-            "bottomMargin"=>(page.Height-page.Bottom,page.Bottom),
-            _=>(0f,page.Height)
-        };
+        var (left,width)=ReferenceSpan(page,physicalPage,HorizontalReference,true,paragraphTop,column,character);
+        var (top,height)=ReferenceSpan(page,physicalPage,VerticalReference,false,paragraphTop);
         return (X+left+(HorizontalAlignment switch
             {"center"=>(width-Width)/2,"right"=>width-Width,"inside" when facingLeft=>width-Width,
                 "outside" when !facingLeft=>width-Width,_=>0}),
             Y+top+(VerticalAlignment switch{"center"=>(height-Height)/2,"bottom"=>height-Height,_=>0}));
     }
+    internal static (float Origin,float Size) ReferenceSpan(PageGeometry page,int physicalPage,string reference,bool horizontal,
+        float paragraphTop=0,(float Left,float Width)? column=null,float? character=null)
+    {
+        bool facingLeft=physicalPage%2==0;
+        if(horizontal)return reference switch
+        {
+            "page"=>(0,page.Width),
+            "column" when column is {} span=>span,
+            "character"=>(character??throw new InvalidDataException("PAGE_FLOATING_CHARACTER_REFERENCE"),0),
+            "leftMargin"=>(0,page.Left),
+            "rightMargin"=>(page.Width-page.Right,page.Right),
+            "insideMargin"=>(facingLeft?(page.Width-page.Right,page.Right):(0,page.Left)),
+            "outsideMargin"=>(facingLeft?(0,page.Left):(page.Width-page.Right,page.Right)),
+            _=>(page.Left,page.Width-page.Left-page.Right)
+        };
+        return reference switch
+        {
+            "margin"=>(page.Top,page.Height-page.Top-page.Bottom),
+            "paragraph" or "line"=>(paragraphTop,0),
+            "topMargin" or "insideMargin"=>(0,page.Top),
+            "bottomMargin" or "outsideMargin"=>(page.Height-page.Bottom,page.Bottom),
+            _=>(0,page.Height)
+        };
+    }
+
 }
 internal readonly record struct FrameStroke(uint Color,float Width);
 internal sealed record FrameSquareWrap(string Side,long Left,long Right,long Bottom,long EffectRight,long EffectBottom,bool AllowOverlap)
@@ -126,17 +137,19 @@ internal static partial class PageComposer
     static (FloatingTextFrame Frame,ComposedPage Page)? PrepareFrame(FloatingTextFrame frame,SemanticStory story,
         LayoutReader.Reader reader,LineComposer painter,Dictionary<string,TextParagraph> textParagraphs,
         Dictionary<string,InlineImage> imageRuns,IEnumerable<TextParagraph> ordered,Action Check,Action<FlowIssue> Add,
-        CancellationToken token,float? adjustedWidth=null)
+        CancellationToken token,float? adjustedWidth=null,PaginatedDocument? layout=null,
+        IReadOnlyDictionary<string,GeneratedPageField>? generated=null)
     {
         const float maximum=1584;
-        if(frame.Width>maximum||frame.Height>maximum||frame.AutoFit&&frame.Center)return null;
+        if(frame.Width>maximum||frame.Height>maximum||frame.Width<=frame.Left+frame.Right||
+            frame.Height<=frame.Top+frame.Bottom||frame.AutoFit&&(frame.Center||frame.BottomAligned))return null;
         var region=frame.Geometry;
         // bodyPr vertOverflow=overflow (also the DrawingML default). Only the
         // cross axis grows; the original frame still supplies the rotation origin.
         bool allowOverflow=frame.Rotation!=0&&!frame.Center&&frame.Square is null;
         if(allowOverflow)region=region with{Height=maximum};
         if(frame.AutoFit)region=region with{Height=maximum,Width=adjustedWidth??region.Width};
-        var frameLayout=reader.ReadStory(story,region);
+        var frameLayout=layout??reader.ReadStory(story,region);
         foreach(var issue in frameLayout.Issues)Add(issue);
         if(frameLayout.Issues.Any(i=>i.BlocksRendering))return null;
         if(!frame.WrapText&&frameLayout.Tables.Count>0)return null;
@@ -180,7 +193,7 @@ internal static partial class PageComposer
 
         ComposedPage? MeasureFrame(FloatingTextFrame frame,SemanticStory story,PaginatedDocument frameLayout)
         {
-            if(frameLayout.Tables.Count==0&&frameLayout.Paragraphs is [var paragraph]&&
+            if(generated is null&&!frame.BottomAligned&&frameLayout.Tables.Count==0&&frameLayout.Paragraphs is [var paragraph]&&
                 textParagraphs.GetValueOrDefault(paragraph.Id) is {RightToLeft:false,Controls.IsEmpty:true} text&&
                 !paragraph.Properties.PageBreakBefore&&!paragraph.Properties.HasBorders)
             {
@@ -196,9 +209,10 @@ internal static partial class PageComposer
             var diagnostics=ImmutableArray.CreateBuilder<FlowIssue>();
             try
             {
+                var overrides=generated is null?null:ordered.ToDictionary(p=>p.Id,StringComparer.Ordinal);
                 var result=ComposeAuxiliaryLayout(story,frameLayout,frameLayout.Paragraphs.ToDictionary(p=>p.Id),
-                    painter,imageRuns,textParagraphs,id=>textParagraphs.GetValueOrDefault(id),ordered,
-                    null,diagnostics,Check,token,unwrappedFrame:!frame.WrapText);
+                    painter,imageRuns,textParagraphs,id=>overrides?.GetValueOrDefault(id)??textParagraphs.GetValueOrDefault(id),ordered,
+                    generated,diagnostics,Check,token,unwrappedFrame:!frame.WrapText);
                 foreach(var issue in diagnostics)Add(issue);
                 if(result.Page is not {} page)
                 {
@@ -209,7 +223,7 @@ internal static partial class PageComposer
                 float bottom=FrameBottom(page,frameLayout,frame.Top);
                 float slack=frame.Height-frame.Bottom-bottom;
                 if(slack<-.01f)return null;
-                return frame.Center?MoveFrame(page,0,Math.Max(0,slack)/2,page.Section,page.Geometry):page;
+                return frame.Center||frame.BottomAligned?MoveFrame(page,0,Math.Max(0,slack)/(frame.Center?2:1),page.Section,page.Geometry):page;
             }
             catch(TableWidthFailure error)
             {

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using LecteurWord.DocxCore;
 using SkiaSharp;
@@ -8,10 +9,18 @@ namespace LecteurWord.Flow;
 
 internal sealed record DiagramTextLine(float X,float Baseline,TextFragment Fragment);
 internal sealed record DiagramShape(SourceLocation Source,PageRect Box,string Geometry,float FirstAdjustment,
-    float SecondAdjustment,uint? Fill,FrameStroke? Stroke,PageRect? TextBox,ImmutableArray<DiagramTextLine> Text);
+    float SecondAdjustment,uint? Fill,FrameStroke? Stroke,PageRect? TextBox,ImmutableArray<DiagramTextLine> Text)
+{
+    internal SourceLocation? LayoutSource {get;init;}
+    internal float Rotation {get;init;}
+    internal ImmutableArray<Vector2> Outline {get;init;}=[];
+}
 internal sealed record DiagramDrawing(ImmutableArray<DiagramShape> Shapes)
 {
     internal string LayoutProfile {get;init;}="cached";
+    internal ImmutableArray<DiagramConnector> Connectors {get;init;}=[];
+    internal ImmutableArray<DiagramGroup> Groups {get;init;}=[];
+    internal DiagramModel? Model {get;init;}
 }
 
 public static partial class LayoutReader
@@ -458,53 +467,105 @@ public static partial class Composer
         try
         {
             canvas.Translate(x,y);
+            foreach(var connector in diagram.Connectors)DrawConnector(canvas,connector);
             foreach(var shape in diagram.Shapes)
             {
-                var box=shape.Box;
-                using var path=new SKPath();
-                var rect=new SKRect(box.Left,box.Top,box.Left+box.Width,box.Top+box.Height);
-                if(shape.Geometry=="roundRect")
+                if(shape.Rotation==0)DrawDiagramShape(canvas,shape,painter);
+                else
                 {
-                    float radius=Math.Min(box.Width,box.Height)*Math.Clamp(shape.FirstAdjustment,0,50_000)/100_000;
-                    path.AddRoundRect(rect,radius,radius);
+                    int shapeSave=canvas.Save();
+                    try
+                    {
+                        canvas.RotateDegrees(shape.Rotation,shape.Box.Left+shape.Box.Width/2,shape.Box.Top+shape.Box.Height/2);
+                        DrawDiagramShape(canvas,shape,painter);
+                    }
+                    finally{canvas.RestoreToCount(shapeSave);}
                 }
-                else if(shape.Geometry=="rightArrow")
-                {
-                    float shoulder=rect.Right-Math.Min(box.Width,Math.Min(box.Width,box.Height)*shape.SecondAdjustment/100_000);
-                    float pad=box.Height*(1-Math.Clamp(shape.FirstAdjustment,0,100_000)/100_000)/2;
-                    path.MoveTo(rect.Left,rect.Top+pad);
-                    path.LineTo(shoulder,rect.Top+pad);
-                    path.LineTo(shoulder,rect.Top);
-                    path.LineTo(rect.Right,rect.MidY);
-                    path.LineTo(shoulder,rect.Bottom);
-                    path.LineTo(shoulder,rect.Bottom-pad);
-                    path.LineTo(rect.Left,rect.Bottom-pad);
-                    path.Close();
-                }
-                else path.AddRect(rect);
-                using var paint=new SKPaint{IsAntialias=true};
-                if(shape.Fill is {} fill)
-                {
-                    paint.Color=new(fill);
-                    canvas.DrawPath(path,paint);
-                }
-                if(shape.Stroke is {} stroke)
-                {
-                    paint.IsStroke=true;
-                    paint.StrokeWidth=stroke.Width;
-                    paint.Color=new(0xff000000|stroke.Color);
-                    canvas.DrawPath(path,paint);
-                }
-                if(shape.TextBox is not {} content)continue;
-                int textSave=canvas.Save();
-                try
-                {
-                    canvas.ClipRect(new(content.Left,content.Top,content.Left+content.Width,content.Top+content.Height));
-                    foreach(var line in shape.Text)painter.PaintDiagramLabel(canvas,line);
-                }
-                finally{canvas.RestoreToCount(textSave);}
             }
         }
         finally{canvas.RestoreToCount(save);}
+    }
+
+    static void DrawDiagramShape(SKCanvas canvas,DiagramShape shape,LineComposer painter)
+    {
+        var box=shape.Box;
+        using var path=new SKPath();
+        var rect=new SKRect(box.Left,box.Top,box.Left+box.Width,box.Top+box.Height);
+        if(!shape.Outline.IsDefaultOrEmpty)
+        {
+            path.MoveTo(shape.Outline[0].X,shape.Outline[0].Y);
+            foreach(var point in shape.Outline.Skip(1))path.LineTo(point.X,point.Y);
+            path.Close();
+        }
+        else if(shape.Geometry=="ellipse")path.AddOval(rect);
+        else if(shape.Geometry=="roundRect")
+        {
+            float radius=Math.Min(box.Width,box.Height)*Math.Clamp(shape.FirstAdjustment,0,50_000)/100_000;
+            path.AddRoundRect(rect,radius,radius);
+        }
+        else if(shape.Geometry=="rightArrow")
+        {
+            float shoulder=rect.Right-Math.Min(box.Width,Math.Min(box.Width,box.Height)*shape.SecondAdjustment/100_000);
+            float pad=box.Height*(1-Math.Clamp(shape.FirstAdjustment,0,100_000)/100_000)/2;
+            path.MoveTo(rect.Left,rect.Top+pad);
+            path.LineTo(shoulder,rect.Top+pad);
+            path.LineTo(shoulder,rect.Top);
+            path.LineTo(rect.Right,rect.MidY);
+            path.LineTo(shoulder,rect.Bottom);
+            path.LineTo(shoulder,rect.Bottom-pad);
+            path.LineTo(rect.Left,rect.Bottom-pad);
+            path.Close();
+        }
+        else path.AddRect(rect);
+        using var paint=new SKPaint{IsAntialias=true};
+        if(shape.Fill is {} fill)
+        {
+            paint.Color=new(fill);
+            canvas.DrawPath(path,paint);
+        }
+        if(shape.Stroke is {} stroke)
+        {
+            paint.IsStroke=true;
+            paint.StrokeWidth=stroke.Width;
+            paint.Color=new(0xff000000|stroke.Color);
+            canvas.DrawPath(path,paint);
+        }
+        if(shape.TextBox is not {} content)return;
+        int textSave=canvas.Save();
+        try
+        {
+            canvas.ClipRect(new(content.Left,content.Top,content.Left+content.Width,content.Top+content.Height));
+            foreach(var line in shape.Text)painter.PaintDiagramLabel(canvas,line);
+        }
+        finally{canvas.RestoreToCount(textSave);}
+    }
+
+    static void DrawConnector(SKCanvas canvas,DiagramConnector connector)
+    {
+        var points=connector.Points;
+        var start=points[0];
+        var end=points[^1];
+        using var brush=new SKPaint{Color=new(0xff000000|connector.Stroke.Color),IsStroke=true,IsAntialias=true,
+            StrokeWidth=connector.Stroke.Width};
+        using var path=new SKPath();
+        path.MoveTo(start.X,start.Y);
+        if(connector.Route=="curve")path.CubicTo(points[1].X,points[1].Y,points[2].X,points[2].Y,end.X,end.Y);
+        else foreach(var point in points.Skip(1))path.LineTo(point.X,point.Y);
+        canvas.DrawPath(path,brush);
+        brush.IsStroke=false;
+        if(connector.ArrowAtStart)Arrow(start,points.Skip(1).First(p=>p!=start));
+        if(connector.ArrowAtEnd)Arrow(end,points.Reverse().Skip(1).First(p=>p!=end));
+
+        void Arrow(Vector2 tip,Vector2 from)
+        {
+            var direction=Vector2.Normalize(tip-from);
+            float length=Math.Min(connector.Stroke.Width*4,Vector2.Distance(tip,from));
+            var basePoint=tip-direction*length;
+            var normal=new Vector2(-direction.Y,direction.X)*length*.45f;
+            path.Reset();
+            path.AddPoly([new(tip.X,tip.Y),new(basePoint.X+normal.X,basePoint.Y+normal.Y),
+                new(basePoint.X-normal.X,basePoint.Y-normal.Y)],true);
+            canvas.DrawPath(path,brush);
+        }
     }
 }

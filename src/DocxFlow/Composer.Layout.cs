@@ -1444,10 +1444,11 @@ public static partial class Composer
         {
             canvas.ClipRect(new(0,0,page.Geometry.Width,page.Geometry.Height));
             var drawing=page.FloatingPictures.Where(p=>p.Picture.BehindText==behind)
-                .Select(p=>(Order:p.Picture.Order,Picture:(PlacedFloatingPicture?)p,Frame:(PlacedFloatingTextFrame?)null));
+                .Select(p=>(Order:p.Picture.Order,ChildOrder:0,Picture:(PlacedFloatingPicture?)p,Frame:(PlacedFloatingTextFrame?)null));
             drawing=drawing.Concat(page.FloatingTextFrames.Where(f=>f.Frame.BehindText==behind)
-                .Select(f=>(f.Frame.Order,(PlacedFloatingPicture?)null,(PlacedFloatingTextFrame?)f)));
-            foreach(var (_,picture,frame) in drawing.OrderBy(p=>p.Order).ThenBy(p=>p.Picture?.Picture.Id??p.Frame?.Frame.Id,StringComparer.Ordinal))
+                .Select(f=>(f.Frame.Order,f.Frame.ChildOrder,(PlacedFloatingPicture?)null,(PlacedFloatingTextFrame?)f)));
+            foreach(var (_,_,picture,frame) in drawing.OrderBy(p=>p.Order)
+                .ThenBy(p=>p.Picture?.Picture.Id??p.Frame?.Frame.Id,StringComparer.Ordinal).ThenBy(p=>p.ChildOrder))
             {
                 if(picture is {} placement)
                 {

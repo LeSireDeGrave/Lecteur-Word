@@ -9,6 +9,7 @@ internal sealed record PageStoryRegion(int Section,string Kind,string Variant,Ru
     internal ImmutableArray<int> PhysicalPages {get;init;}=[];
     internal int FloatingFrames {get;init;}
     internal long? FlowHeight {get;init;}
+    internal long DrawingMargin {get;init;}
 }
 internal sealed record PageStoryPlacement(RunningStory Selection,PageRegion Region,IReadOnlyList<PageLine> Lines,IReadOnlyList<PageCell> Cells);
 
@@ -21,6 +22,7 @@ internal static partial class PageComposer
         internal long? StructuralHeight {get;init;}
         internal ImmutableArray<PendingStoryField> Fields {get;init;}=[];
         internal PaginatedDocument? Layout {get;init;}
+        internal bool AnchorOnly {get;init;}
 
         internal StoryTemplate FitHeader(long available)=>Height>available&&StructuralHeight is {} minimum?
             this with{Height=minimum}:this;
@@ -47,9 +49,12 @@ internal static partial class PageComposer
                 if((adjustedTop>top||adjustedBottom>bottom)&&section.PhysicalHeight-adjustedTop-adjustedBottom>=Emu(36))
                     margins.Add(variant.Key,new(adjustedTop,adjustedBottom));
 
-                long Reserve(string kind,long? distance,long declared)=>
-                    distance is {} offset&&variant.Single(r=>r.Kind==kind).FlowHeight is >0 and var occupied?
-                        Math.Max(declared,offset+occupied):declared;
+                long Reserve(string kind,long? distance,long declared)
+                {
+                    var region=variant.Single(r=>r.Kind==kind);
+                    long flow=distance is {} offset&&region.FlowHeight is >0 and var occupied?offset+occupied:0;
+                    return Math.Max(declared,Math.Max(flow,region.DrawingMargin));
+                }
             }
             return margins.Count==0?section:section with{RunningMargins=margins.ToImmutable()};
         }).ToImmutableArray();
@@ -67,11 +72,12 @@ internal static partial class PageComposer
         var paragraphs=typography.Paragraphs.Where(p=>roots.ContainsKey(p.StoryId)).ToLookup(p=>p.StoryId,StringComparer.Ordinal);
         var frameRoots=model.Stories.Where(s=>s.Kind=="txbxContent").ToDictionary(s=>s.RootId,StringComparer.Ordinal);
         var frameText=typography.Paragraphs.Where(p=>frameRoots.ContainsKey(p.StoryId)).ToLookup(p=>p.StoryId,StringComparer.Ordinal);
-        var frameFields=model.Fields.Where(f=>frameRoots.ContainsKey(f.StoryId)).Select(f=>f.StoryId).ToHashSet(StringComparer.Ordinal);
+        var frameFields=model.Fields.Where(f=>frameRoots.ContainsKey(f.StoryId)).ToLookup(f=>f.StoryId,StringComparer.Ordinal);
         var frameTemplates=new Dictionary<string,(FloatingTextFrame Frame,ComposedPage Page)>(StringComparer.Ordinal);
         var fields=model.Fields.Where(f=>roots.ContainsKey(f.StoryId)&&!model.TocMarkerFields.Contains(f.Id))
             .ToLookup(f=>f.StoryId,StringComparer.Ordinal);
-        var storyTokens=typography.Tokens.Where(t=>t.ParagraphId is not null&&t.StoryId is {} id&&roots.ContainsKey(id))
+        var storyTokens=typography.Tokens.Where(t=>t.ParagraphId is not null&&t.StoryId is {} id&&
+            (roots.ContainsKey(id)||frameRoots.ContainsKey(id)))
             .ToLookup(t=>t.ParagraphId!,StringComparer.Ordinal);
         var properties=fields.Any(story=>story.Any(f=>f.Command=="DOCPROPERTY"))?model.TextDocumentProperties(check):null;
         var parentFields=model.Fields.Where(f=>f.ParentFieldId is not null).Select(f=>f.ParentFieldId!).ToHashSet(StringComparer.Ordinal);
@@ -83,7 +89,8 @@ internal static partial class PageComposer
         var templates=new Dictionary<(string Root,PageGeometry Geometry),StoryTemplate>();
         var resolvedTemplates=new Dictionary<(string Root,PageGeometry Geometry,string Value),StoryTemplate>();
         var placedBookmarks=PlaceBookmarks(body,bookmarks,check);
-        var sectionTotals=completeBody&&fields.Any(group=>group.Any(f=>f.Command=="SECTIONPAGES"))?
+        var sectionTotals=completeBody&&model.Fields.Any(f=>f.Command=="SECTIONPAGES"&&
+            (roots.ContainsKey(f.StoryId)||frameRoots.ContainsKey(f.StoryId)))?
             SectionPageTotals(body,check):null;
         var generatedRegions=new HashSet<(int Section,string Kind,string Variant)>();
         var unresolvedRegions=new HashSet<(int Section,string Kind,string Variant)>();
@@ -115,7 +122,8 @@ internal static partial class PageComposer
             long height=distance is {} d?(kind=="header"?bodyTop:bodyBottom)-d:0;
             var geometry=section.Format with{Top=0,Bottom=0};
             var template=Template(story,geometry);
-            if(kind=="header")template=template.FitHeader(height);
+            if(template.AnchorOnly&&distance is not null)height=Math.Max(0,height);
+            else if(kind=="header")template=template.FitHeader(height);
             if(prepareOnly&&distance is not null&&height<0&&template is {Fields.IsEmpty:false,Layout:{} fieldLayout})
             {
                 // Measure the stored result to reserve the auxiliary region. The calculated result
@@ -154,7 +162,8 @@ internal static partial class PageComposer
                 plan.Add(key,(new(key.Number,kind,variant,selection,available,status,prepared?.Page?.Lines.Count??0,
                     prepared?.Page?.Cells.Count??0,issues.IsDefault?[]:issues)
                     {FloatingFrames=prepared?.Page?.FloatingTextFrames.Count??0,
-                        FlowHeight=prepared?.Page is null?estimatedHeight:prepared.Height},prepared));
+                        FlowHeight=prepared?.Page is null?estimatedHeight:prepared.Height,
+                        DrawingMargin=prepareOnly?MeasureDrawingMargin(section,kind,prepared):0},prepared));
             }
         }
         if(prepareOnly)return (body,plan.Values.Select(p=>p.Region).ToImmutableArray(),0,0);
@@ -284,6 +293,11 @@ internal static partial class PageComposer
                     {
                         check();
                         var frame=placement.Frame;
+                        if(frame.RunningDrawing is {} drawing)
+                        {
+                            PlaceDrawing(drawing,frame,page,section,displayedNumber,root,key,pageFrames);
+                            continue;
+                        }
                         float paragraphTop=0;
                         if(frame.VerticalReference=="paragraph")
                         {
@@ -303,6 +317,7 @@ internal static partial class PageComposer
                                 "L’ancre est conservée et la peinture est découpée aux limites de la feuille.",false));
                         pageFrames.Add(placed);
                     }
+                if(prepared?.AnchorOnly==true)continue;
                 if(flowOverlap)
                 {
                     Gap(root,"PAGE_STORY_OVERLAP");
@@ -371,6 +386,164 @@ internal static partial class PageComposer
                     ResolveBookmarkText(bookmarks.GetValueOrDefault(id),field.Style),
                 _=>null
             };
+        }
+
+        void PlaceDrawing(RunningDrawing drawing,FloatingTextFrame anchor,ComposedPage page,PageSection section,
+            int? displayedNumber,string root,(int Section,string Kind,string Variant) key,
+            ImmutableArray<PlacedFloatingTextFrame>.Builder pageFrames)
+        {
+            var declared=page.Geometry with{Top=section.Format.Top,Bottom=section.Format.Bottom};
+            var (box,leaves)=drawing.Place(anchor,declared,page.Number);
+            if(!ValidDrawing(box,leaves))
+            {
+                Unplaced("PAGE_RUNNING_DRAWING_GEOMETRY",anchor.Drawing,"Étendue du dessin hors profil.");
+                return;
+            }
+            if(drawing.Wrap is {} wrap&&AffectsBody(drawing.WrapBounds(box,leaves),page.Geometry,wrap))
+            {
+                Unplaced("PAGE_RUNNING_DRAWING_WRAP_UNQUALIFIED",anchor.Drawing,
+                    "L’habillage du dessin traverse la région du corps.");
+                return;
+            }
+            var placed=new List<PlacedFloatingTextFrame>();
+            bool generatedAny=false;
+            foreach(var frame in leaves)
+            {
+                check();
+                ComposedPage content=new(1,[]){Geometry=frame.Geometry,NativePainter=painter};
+                if(frame.StoryId.Length>0)
+                {
+                    if(!frameRoots.TryGetValue(frame.StoryId,out var story))
+                    {
+                        Unplaced("PAGE_RUNNING_DRAWING_TEXT",frame.Drawing,"Histoire de la forme introuvable.");
+                        return;
+                    }
+                    var layout=reader.ReadStory(story,frame.Geometry);
+                    var ordered=frameText[story.RootId].ToArray();
+                    Dictionary<string,GeneratedPageField>? generated=null;
+                    if(frameFields.Contains(story.RootId))
+                    {
+                        long started=Stopwatch.GetTimestamp();
+                        generated=new(StringComparer.Ordinal);
+                        var overrides=new Dictionary<string,TextParagraph>(StringComparer.Ordinal);
+                        foreach(var group in frameFields[story.RootId].GroupBy(f=>Ancestor(model,f.Id,SemanticKind.Paragraph)))
+                        {
+                            if(group.Key is not {} paragraphId||!text.TryGetValue(paragraphId,out var paragraph))
+                            {
+                                Unplaced("PAGE_RUNNING_DRAWING_FIELD",model.Source(group.First().Id).Location,
+                                    "Paragraphe du champ auxiliaire introuvable.");
+                                return;
+                            }
+                            var members=group.Take(9).ToArray();
+                            if(members.Length>8)throw new InvalidDataException("PAGE_STORY_FIELD_COUNT_LIMIT");
+                            var inline=new List<GeneratedPageField>();
+                            foreach(var field in members)
+                            {
+                                check();
+                                if(++fieldOccurrences>MaxStoryPlacements)throw new InvalidDataException("PAGE_STORY_FIELD_OCCURRENCE_LIMIT");
+                                var planField=members.Length==1?ReadStoryField(model,field,layout,text,session,parentFields,check):null;
+                                if(planField is null&&layout.Tables.Count==0)
+                                    planField=ReadInlineStoryField(model,field,paragraph,session,parentFields,check);
+                                if(planField is null||Resolve(planField,section,displayedNumber) is not {} value)
+                                {
+                                    Unplaced("PAGE_RUNNING_DRAWING_FIELD",model.Source(field.Id).Location,
+                                        "Champ auxiliaire de la forme hors profil.");
+                                    return;
+                                }
+                                var origin=model.Source(field.Id);
+                                var measured=session.ShapeLineDecoration(paragraphId,value,planField.Style,origin,0,check,count=>
+                                {
+                                    fieldGlyphs+=count;
+                                    if(fieldGlyphs>500_000)throw new InvalidDataException("PAGE_STORY_FIELD_GLYPH_LIMIT");
+                                });
+                                if(measured is null)
+                                {
+                                    Unplaced("PAGE_FIELD_GLYPH_UNRESOLVED",origin.Location,"Glyphes du résultat calculé indisponibles.");
+                                    return;
+                                }
+                                var generatedField=new GeneratedPageField(origin,value,planField.Style)
+                                    {Measured=measured,StoredRange=planField.StoredRange};
+                                if(planField.Inline)inline.Add(generatedField);
+                                else
+                                {
+                                    overrides.Add(paragraphId,planField.Paragraph);
+                                    generated.Add(paragraphId,generatedField);
+                                }
+                            }
+                            if(inline.Count>0)overrides.Add(paragraphId,session.ShapeInlineStoryFields(paragraph,
+                                storyTokens[paragraphId],inline,members.SelectMany(f=>f.StoredResultIds).ToHashSet(StringComparer.Ordinal)));
+                        }
+                        ordered=ordered.Select(p=>overrides.GetValueOrDefault(p.Id)??p).ToArray();
+                        resolutionTicks+=Stopwatch.GetTimestamp()-started;
+                        generatedAny=true;
+                    }
+                    long composing=Stopwatch.GetTimestamp();
+                    if(PrepareFrame(frame,story,reader,painter,text,images,ordered,check,add,token,layout:layout,
+                        generated:generated) is not {} prepared)
+                    {
+                        Unplaced("PAGE_RUNNING_DRAWING_TEXT",frame.Drawing,"Texte de la forme non composé.");
+                        return;
+                    }
+                    recompositionTicks+=Stopwatch.GetTimestamp()-composing;
+                    content=prepared.Page;
+                }
+                occurrences+=content.Lines.Count+content.Cells.Count+1;
+                if(occurrences>MaxStoryPlacements)throw new InvalidDataException("PAGE_STORY_PLACEMENT_LIMIT");
+                var hit=new PlacedFloatingTextFrame(frame,MoveFrame(content,frame.X,frame.Y,page.Section,page.Geometry)).ClipOn(page.Geometry);
+                if(hit.CrossesSheet(page.Geometry)||hit.OutsideSheet)
+                    add(new("PAGE_FLOATING_TEXTBOX_CLIPPED_BY_SHEET",frame.Drawing,
+                        "L’ancre est conservée et la peinture est découpée aux limites de la feuille.",false));
+                placed.Add(hit);
+            }
+            pageFrames.AddRange(placed);
+            if(generatedAny)generatedRegions.Add(key);
+
+            void Unplaced(string code,LecteurWord.DocxCore.SourceLocation source,string detail)
+            {
+                add(new(code,source,detail,true));
+                unresolvedRegions.Add(key);
+                Gap(root,code);
+            }
+        }
+
+        long MeasureDrawingMargin(PageSection section,string kind,StoryTemplate? template)
+        {
+            var frames=template?.Page?.FloatingTextFrames.Select(f=>f.Frame)??template?.Layout?.Paragraphs.SelectMany(p=>p.Runs)
+                .Select(r=>r.FloatingTextFrame).OfType<FloatingTextFrame>();
+            if(frames is null)return 0;
+            long margin=0;
+            foreach(var frame in frames)
+            {
+                if(frame.RunningDrawing is not {Wrap:{} wrap} drawing)continue;
+                for(int parity=1;parity<=2;parity++)
+                {
+                    check();
+                    var geometry=section.GeometryOn(parity,false,parity);
+                    var (box,leaves)=drawing.Place(frame,geometry,parity);
+                    if(!ValidDrawing(box,leaves))continue;
+                    var bounds=drawing.WrapBounds(box,leaves);
+                    float bottom=bounds.Top+bounds.Height;
+                    if(!AffectsBody(bounds,geometry,wrap)||wrap.Kind=="square"&&
+                        (bounds.Left>geometry.Left+.01f||bounds.Left+bounds.Width<geometry.Width-geometry.Right-.01f))continue;
+                    if(kind=="header"&&bounds.Top<=geometry.Top)margin=Math.Max(margin,Emu(bottom));
+                    if(kind=="footer"&&bottom>=geometry.Height-geometry.Bottom)
+                        margin=Math.Max(margin,Emu(geometry.Height-bounds.Top));
+                }
+            }
+            return margin;
+        }
+
+        static bool ValidDrawing(PageRect box,FloatingTextFrame[] leaves)=>!box.Empty&&box.Width<=1584&&box.Height<=1584&&
+            leaves.Length>0&&leaves.All(f=>f.Width is >0 and <=1584&&f.Height is >0 and <=1584&&
+                Math.Abs(f.X)<=16_000&&Math.Abs(f.Y)<=16_000);
+
+        static bool AffectsBody(PageRect bounds,PageGeometry geometry,RunningDrawingWrap wrap)
+        {
+            if(bounds.Left>=geometry.Width||bounds.Left+bounds.Width<=0)return false;
+            float left=wrap.Kind=="topAndBottom"?0:bounds.Left;
+            float right=wrap.Kind=="topAndBottom"?geometry.Width:bounds.Left+bounds.Width;
+            return left<geometry.Width-geometry.Right-.01f&&right>geometry.Left+.01f&&
+                bounds.Top<geometry.Height-geometry.Bottom-.01f&&bounds.Top+bounds.Height>geometry.Top+.01f;
         }
 
         StoryTemplate Template(SemanticStory story,PageGeometry geometry)
@@ -477,7 +650,7 @@ internal static partial class PageComposer
                     if(!frameTemplates.TryGetValue(frame.Id,out var positioned))
                     {
                         if(frameTemplates.Count>=512)throw new InvalidDataException("PAGE_FLOATING_PICTURE_LIMIT");
-                        if(frame.Vector is not null)
+                        if(frame.Vector is not null||frame.RunningDrawing is not null)
                             positioned=(frame,new(1,[]){Geometry=frame.Geometry,NativePainter=painter});
                         else if(!frameRoots.TryGetValue(frame.StoryId,out var frameStory)||frameFields.Contains(frame.StoryId)||
                             PrepareFrame(frame,frameStory,reader,painter,text,images,frameText[frame.StoryId],check,
@@ -507,8 +680,9 @@ internal static partial class PageComposer
                     native.Generated.IsEmpty&&line.Images.Count==0&&line.ParagraphBorder is null&&
                     line.LeftBorder is null&&line.RightBorder is null&&line.ParagraphShading is null)
                     structuralHeight=line.ParagraphTopBorder is {} rule?Emu(rule.Top+rule.Border.Width):0;
-                return new(page with{FloatingTextFrames=frames.ToImmutable()},Emu(bottom)-Emu(top),storyIssues.ToImmutable())
-                {TopInk=Emu(top),StructuralHeight=structuralHeight};
+                bool anchorOnly=structuralHeight==0&&frames.Count>0&&frames.All(f=>f.Frame.RunningDrawing is not null);
+                return new(page with{FloatingTextFrames=frames.ToImmutable()},anchorOnly?0:Emu(bottom)-Emu(top),storyIssues.ToImmutable())
+                {TopInk=Emu(top),StructuralHeight=structuralHeight,AnchorOnly=anchorOnly};
             }
             catch(TableWidthFailure error){return Failed(error.Message,error.Location??source.Location);}
             catch(InvalidDataException error) when (!error.Message.EndsWith("_LIMIT",StringComparison.Ordinal))
