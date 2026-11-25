@@ -1,0 +1,24 @@
+{
+  "files": {
+    "docs/maquettes/lecteur-word-maquette-clair-sombre.png": "079276d8a88699c393622cd1500c1b753c6dc47cbcc03d75d00f4948105aa177",
+    "src/DocxFlow/Fonts/DejaVuSerif-Bold.ttf": "3f704f75238454f68a8202e5098cb0687887480dd63d3dc20b34bdbdfa9d9f3f",
+    "src/DocxFlow/Fonts/DejaVuSerif-BoldItalic.ttf": "f2c39b5964cb27d94bd4c02504cc4471f8c80571abb8df7923c51d13afdca989",
+    "src/DocxFlow/Fonts/DejaVuSerif-Italic.ttf": "730469e7a8dce387a760160f05e62ddf021870bd277505bbc5b250e909edeabf",
+    "src/DocxFlow/Fonts/DejaVuSerif.ttf": "a52c2a69dfc93d0b511b98c1019a57eb3d6a62d328bdf1387f00851b02e3a315",
+    "src/LecteurWord/Assets/LecteurWord.ico": "bcd904ad9d4012782bb2d657da215a747199ae1ea28f89d6b40ff0dee0fb4174",
+    "src/LecteurWord/Assets/lecteur-word-logo.png": "b770a4910776c755d04c29e107c176abb01c0225498263f9009dabdcfe4ca401",
+    "src/LecteurWord/Assets/lecteur-word.png": "5ee007dfd6578399030f6efe495120bd521c528ab08f95c523b1281d6da367db"
+  },
+  "matches": {},
+  "private_paths": [
+    "exemples",
+    "examples-private",
+    "reports",
+    "build-reports",
+    "private",
+    "testdata",
+    "target",
+    "tools/verify-workspace.py",
+    "tools/write-final-report.py"
+  ]
+}

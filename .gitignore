@@ -135,3 +135,31 @@ Thumbs.db
 /docs/maquettes/LecteurWord.ico
 !src/LecteurWord/Assets/lecteur-word.png
 !src/LecteurWord/Assets/lecteur-word-logo.png
+
+# SECURITY-GIT-001 — qualifications autonomes, bases et identifiants
+[Qq]ualification/
+[Qq]ualifications/
+[Ss]creenshots/
+[Cc]aptures/
+/private/
+/examples-private/
+/build-reports/
+AGENTS.md
+credentials.json
+kubeconfig
+id_dsa
+id_ecdsa
+passwords.csv
+passwords.txt
+mots de passe.csv
+mots de passe.ods
+*.sqlite
+*.sqlite3
+*.db
+*.kdbx
+*.har
+*.trace
+*.backup
+*.bak
+*.ico
+!src/LecteurWord/Assets/LecteurWord.ico
