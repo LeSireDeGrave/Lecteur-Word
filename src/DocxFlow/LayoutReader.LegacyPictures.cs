@@ -22,7 +22,7 @@ public static partial class LayoutReader
 
         InlineImage? ReadLegacyPicture(InventoryNode picture)
         {
-            if(Is(picture,"pict")&&ReadInlineVmlGroup(picture) is {} vector)return vector;
+            if(Is(picture,"pict")&&(ReadInlineVmlGroup(picture)??ReadInlineVmlShape(picture)) is {} vector)return vector;
             int before=issues.Count;
             bool embedded=Is(picture,"object");
             var members=Elements(picture).Take(4).ToArray();

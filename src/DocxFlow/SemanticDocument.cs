@@ -110,6 +110,19 @@ internal sealed class SemanticDocument(
     internal string? RelatedPart(string type) => index.Related(MainPart, type)?.ResolvedPart;
     internal string? RelatedRoot(string type, string name) =>
         RelatedPart(type) is {} part ? index.Root(part, name)?.Id : null;
+
+    internal string? ExternalHyperlinkBase()
+    {
+        const string ns="{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}";
+        if(index.Related("/","extended-properties")?.ResolvedPart is not {} part||
+            !Parts.Any(p=>p.PartUri==part&&p.ContentType=="application/vnd.openxmlformats-officedocument.extended-properties+xml")||
+            SemanticIndex.Unique(index.ByPart[part].Where(node=>node.ParentId is null&&node.Name==ns+"Properties")) is not {} root||
+            SemanticIndex.Unique(index.RawChildren(root).Where(node=>node.Name==ns+"HyperlinkBase")) is not {} basis)
+            return null;
+        var text=index.RawChildren(basis).Take(2).ToArray();
+        return text is [{Kind:"textValue",Text:{Length:>0 and <=4096} value}]?value:null;
+    }
+
     internal IReadOnlyDictionary<string,string> TextDocumentProperties(Action check)
     {
         const string properties="{http://schemas.openxmlformats.org/officeDocument/2006/custom-properties}";

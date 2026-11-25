@@ -20,7 +20,8 @@ public sealed partial class ReaderWindow
     static readonly IBrush ChocolateMarks=Brush("#795238");
     readonly PageRuler ruler=new(){Name="PageRuler",Height=31,ClipToBounds=true};
     readonly Border rulerBar=new(){Name="RulerBar"};
-    readonly ComboBox rulerUnits=new(){Name="RulerUnits",ItemsSource=new[]{"cm","mm"},SelectedIndex=0,Padding=new Thickness(6,1),MinHeight=23};
+    readonly RadioButton rulerCentimeters=new(){Name="RulerCentimeters",GroupName="RulerUnit",Content="cm",IsChecked=true};
+    readonly RadioButton rulerMillimeters=new(){Name="RulerMillimeters",GroupName="RulerUnit",Content="mm"};
     readonly TextBlock rulerInfo=new(){Name="RulerGeometry",FontSize=10,VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
     readonly Dictionary<string,PageLine> paragraphEnds=new(StringComparer.Ordinal);
     readonly Dictionary<string,LayoutParagraph> pageParagraphs=new(StringComparer.Ordinal);
@@ -33,10 +34,11 @@ public sealed partial class ReaderWindow
     {
         var stack=new StackPanel();
         var details=new Grid{ColumnDefinitions=new("Auto,*"),Margin=new Thickness(8,1)};
-        details.Children.Add(rulerUnits);Grid.SetColumn(rulerInfo,1);details.Children.Add(rulerInfo);rulerInfo.Margin=new Thickness(7,0,0,0);
+        var units=new StackPanel{Orientation=Orientation.Horizontal,Spacing=4,Children={rulerCentimeters,rulerMillimeters}};
+        details.Children.Add(units);Grid.SetColumn(rulerInfo,1);details.Children.Add(rulerInfo);rulerInfo.Margin=new Thickness(7,0,0,0);
         stack.Children.Add(details);stack.Children.Add(ruler);rulerBar.Child=stack;
-        AutomationProperties.SetName(rulerUnits,"Unité de la règle / Ruler unit");
-        rulerUnits.SelectionChanged+=(_,_)=>UpdateRuler();
+        rulerCentimeters.IsCheckedChanged+=(_,_)=>UpdateRuler();
+        rulerMillimeters.IsCheckedChanged+=(_,_)=>UpdateRuler();
         viewport.LayoutUpdated+=(_,_)=>AlignRuler();
         return rulerBar;
     }
@@ -106,28 +108,35 @@ public sealed partial class ReaderWindow
         if(!rulerBar.IsVisible)return;
         var pg=composition!.Pages[page];
         var g=pg.Geometry;
-        bool cm=rulerUnits.SelectedIndex==0;
+        AutomationProperties.SetName(rulerCentimeters,T("Règle en centimètres","Ruler in centimeters"));
+        AutomationProperties.SetName(rulerMillimeters,T("Règle en millimètres","Ruler in millimeters"));
+        bool cm=rulerMillimeters.IsChecked!=true;
         double divisor=PointsPerMillimeter*(cm?10:1);
         string unit=cm?"cm":"mm";
         bool a4=Math.Abs(g.Width/PointsPerMillimeter-210)<.8&&Math.Abs(g.Height/PointsPerMillimeter-297)<.8;
         bool a4Landscape=Math.Abs(g.Width/PointsPerMillimeter-297)<.8&&Math.Abs(g.Height/PointsPerMillimeter-210)<.8;
-        string dimensions=$"{g.Width/divisor:0.0} × {g.Height/divisor:0.0} {unit}";
+        string dimensions=string.Create(uiCulture,$"{g.Width/divisor:0.0} × {g.Height/divisor:0.0} {unit}");
         var props=ruledParagraph?.Properties;
-        string margin=T($"Marges G/D {g.Left/divisor:0.0} / {g.Right/divisor:0.0} {unit}",$"Margins L/R {g.Left/divisor:0.0} / {g.Right/divisor:0.0} {unit}");
+        string margin=LocalFormat("ruler.margins","Marges G/D {0:F1} / {1:F1} {2}","Margins L/R {0:F1} / {1:F1} {2}",
+            g.Left/divisor,g.Right/divisor,unit);
         var p=ruledParagraph;
-        rulerInfo.Text=T($"Section {p?.Section??pg.Section}","Section "+(p?.Section??pg.Section))+" · "+(a4||a4Landscape?"A4 · ":"")+dimensions+" · "+margin;
-        string paragraph=props is null?"":T($" · Retraits G {props.Left/divisor:0.0}, D {props.Right/divisor:0.0}, 1ʳᵉ {props.FirstLine/divisor:0.0} {unit} · {props.Tabs.Count} tabulations",
-            $" · Indents L {props.Left/divisor:0.0}, R {props.Right/divisor:0.0}, first {props.FirstLine/divisor:0.0} {unit} · {props.Tabs.Count} tab stops");
-        rulerBar.Background=PanelColor;rulerInfo.Foreground=SecondaryInk;
+        rulerInfo.Text=LocalFormat("document.section","Section {0}","Section {0}",p?.Section??pg.Section)+" · "+(a4||a4Landscape?"A4 · ":"")+dimensions+" · "+margin;
+        string paragraph=props is null?"":LocalFormat("ruler.indents",
+            " · Retraits G {0:F1}, D {1:F1}, 1ʳᵉ {2:F1} {3}"," · Indents L {0:F1}, R {1:F1}, first {2:F1} {3}",
+            props.Left/divisor,props.Right/divisor,props.FirstLine/divisor,unit)+" · "+
+            LocalCount("ruler.tabs",props.Tabs.Count,"{0:N0} tabulation","{0:N0} tabulations","{0:N0} tab stop","{0:N0} tab stops");
         rulerInfo.Text+=paragraph;
         var cell=p?.CellOwner is {} cellId?pg.Cells.FirstOrDefault(c=>c.CellId==cellId):null;
         var cellModel=p?.CellOwner is {} owner?pageModel?.Tables.SelectMany(t=>t.Cells).FirstOrDefault(c=>c.Id==owner):null;
         (float Left,float Right)? textArea=cell is not null&&cellModel is not null?
             (cell.X+cellModel.Margins.Left,cell.X+cell.Width-cellModel.Margins.Right):null;
-        string label=rulerInfo.Text+T($" · Marges haut/bas {g.Top/divisor:0.0} / {g.Bottom/divisor:0.0} {unit} · Cliquez dans un paragraphe pour afficher ses repères",
-            $" · Top/bottom margins {g.Top/divisor:0.0} / {g.Bottom/divisor:0.0} {unit} · Click a paragraph to show its guides");
+        string label=rulerInfo.Text+LocalFormat("ruler.vertical-margins",
+            " · Marges haut/bas {0:F1} / {1:F1} {2} · Cliquez dans un paragraphe pour afficher ses repères",
+            " · Top/bottom margins {0:F1} / {1:F1} {2} · Click a paragraph to show its guides",
+            g.Top/divisor,g.Bottom/divisor,unit);
         AutomationProperties.SetName(ruler,label);ToolTip.SetTip(rulerBar,label);
-        ruler.Configure(g,props,textArea,cm,zoom,PanelColor,SecondaryInk,FineLine,AccentFill);
+        ruler.Configure(g,props,textArea,cm,zoom,appearance.Brush(ReaderAppearance.Surface),
+            appearance.Brush(ReaderAppearance.Secondary),appearance.Brush(ReaderAppearance.Line),appearance.Brush(ReaderAppearance.Selected));
         AlignRuler();
     }
 
@@ -152,7 +161,7 @@ public sealed partial class ReaderWindow
         {
             visual.Marks.IsVisible=marksRequested&&CurrentPage>0;
             if(!visual.Marks.IsVisible)continue;
-            visual.Marks.SetInk(ActualThemeVariant==ReaderPalette.BlueVariant?Palette.Accent:ChocolateMarks);
+            visual.Marks.SetInk(ChocolateMarks);
             if(visual.MarksPrepared){visual.Marks.SetScale(zoom);continue;}
             var marks=CollectPageMarks(composition!.Pages[index],paragraphEnds);
             visual.Marks.Set(marks,zoom);

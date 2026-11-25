@@ -1,3 +1,4 @@
+using Avalonia.Interactivity;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Avalonia;
@@ -22,14 +23,15 @@ static class LayoutCases
         string path=Fixtures.Write(root,name+".docx",Fixtures.Parts(body,extra,relationships));string before=Sha(path);
         var result=DocumentInspector.InspectDocument(path);Check(result.Manifest.InspectionComplete,"Fixture inspection refused");Check(Sha(path)==before,"Source modified");return result;
     }
-    public static string Compatible(string root)
+    public static string Compatible(string root,bool nativeView=false)
     {
         string styles=Fixtures.Xml("styles","<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val=\"24\"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:pPr><w:spacing w:after=\"120\"/></w:pPr><w:rPr><w:rFonts w:ascii=\"Times New Roman\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:basedOn w:val=\"Normal\"/><w:pPr><w:outlineLvl w:val=\"0\"/><w:keepNext/><w:spacing w:before=\"180\" w:after=\"160\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"36\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Emphasis\"><w:rPr><w:i/><w:color w:val=\"245B9B\"/></w:rPr></w:style>");
         string body="<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Composition expérimentale</w:t></w:r></w:p>";
         for(int i=0;i<45;i++)body+="<w:p><w:pPr><w:spacing w:line=\"300\"/></w:pPr><w:r><w:t>Paragraphe "+(i+1)+" — Texte français conservé, espaces compris. </w:t></w:r><w:r><w:rPr><w:rStyle w:val=\"Emphasis\"/></w:rPr><w:t>Italique et couleur.</w:t></w:r><w:r><w:rPr><w:b/><w:u w:val=\"single\"/></w:rPr><w:t> Accentuation explicite.</w:t></w:r></w:p>";
         body+="<w:p><w:pPr>"+Section(11906,16838,1134)+"</w:pPr><w:r><w:t>Fin de la section portrait.</w:t></w:r></w:p>";
         body+="<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Section paysage</w:t><w:br w:type=\"page\"/><w:t>Après le saut manuel</w:t></w:r></w:p>"+Section(16838,11906,1134);
-        return Fixtures.Write(root,"Composition-compatible.docx",Fixtures.Parts(body,new(){["word/styles.xml"]=styles},Fixtures.Relationship("style","styles","styles.xml")));
+        if(nativeView)body=body.Replace("<w:u w:val=\"single\"/>","",StringComparison.Ordinal);
+        return Fixtures.Write(root,nativeView?"Composition-compatible-native.docx":"Composition-compatible.docx",Fixtures.Parts(body,new(){["word/styles.xml"]=styles},Fixtures.Relationship("style","styles","styles.xml")));
     }
     public static void Geometry(string root)
     {
@@ -85,25 +87,31 @@ static class LayoutCases
     public static void Gui(string root)
     {
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).UseSkia().WithInterFont().SetupWithoutStarting();
-        var window=new ReaderWindow();window.Show();AboutCases.Complete(window.OpenDocumentAsync(Compatible(root)));VerifyGui(window);window.Close();
+        var window=new ReaderWindow();window.Show();
+        AboutCases.Complete(window.OpenDocumentAsync(Compatible(root)));
+        Check(window.CurrentReadingView==ReadingView.SinglePage&&window.CurrentPage==1&&
+            window.CurrentComposition!.Pages.SelectMany(p=>p.Lines).Any(l=>l.Native is {Underlines.IsEmpty:false}),
+            "Le soulignement simple doit être placé en Page simple.");
+        AboutCases.Complete(window.OpenDocumentAsync(Compatible(root,nativeView:true)));
+        VerifyGui(window);window.Close();
     }
     static void VerifyGui(ReaderWindow window)
     {
         Check(window.CurrentComposition?.Available==true&&window.CurrentPage==1,"Compatible GUI has no calculated pages");
-        Check(window.GetVisualDescendants().OfType<TextBlock>().Any(t=>t.Text?.Contains("Pagination expérimentale",StringComparison.Ordinal)==true),"Experimental label missing");
+        Check(window.GetVisualDescendants().OfType<TextBlock>().Any(t=>t.Text?.Contains("pagination expérimentale",StringComparison.OrdinalIgnoreCase)==true),"Experimental label missing");
         window.GoToPage(1);Check(window.CurrentPage==2,"Next page failed");window.FitToWidth();Check(window.Zoom>0&&window.Zoom<=2,"Fit failed");
-        Dispatcher.UIThread.RunJobs();var image=window.GetVisualDescendants().OfType<Image>().Single(i=>i.Name=="CalculatedPage");Check(image.Width<window.ClientSize.Width-224&&Math.Abs(image.Width/image.Height-window.CurrentComposition!.Pages[1].Geometry.Width/window.CurrentComposition.Pages[1].Geometry.Height)<.001,"Fit or physical page ratio incorrect");
-        var mode=window.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="ReadingMode");mode.SelectedIndex=1;Dispatcher.UIThread.RunJobs();Check(window.IsSimplifiedReading&&window.CurrentPage==0,"Simplified comparison mode lost");mode.SelectedIndex=0;Dispatcher.UIThread.RunJobs();Check(window.CurrentPage>0,"Return to pages failed");
-        Check(!window.ExportAvailable(ExportFormat.Pdf),"New layout incorrectly qualified complex export");
+        Dispatcher.UIThread.RunJobs();var image=window.GetVisualDescendants().OfType<Image>().Single(i=>i.Name=="CalculatedPage"&&i.Tag is int n&&n==window.CurrentPage);Check(image.Width<window.ClientSize.Width-224&&Math.Abs(image.Width/image.Height-window.CurrentComposition!.Pages[1].Geometry.Width/window.CurrentComposition.Pages[1].Geometry.Height)<.001,"Fit or physical page ratio incorrect");
+        window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewContinuous").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();Check(window.IsSimplifiedReading&&window.CurrentPage==0,"Simplified comparison mode lost");window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewSinglePage").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();Check(window.CurrentPage>0,"Return to pages failed");
+        Check(window.ExportAvailable(ExportFormat.Pdf),"The qualified PDF export remains available after switching reading views.");
     }
     public static async Task Native(ReaderWindow window,string root)
     {
-        string path=Compatible(root),before=Sha(path);var timer=System.Diagnostics.Stopwatch.StartNew();await window.OpenDocumentAsync(path);await Task.Delay(250);VerifyGui(window);
+        string path=Compatible(root,nativeView:true),before=Sha(path);var timer=System.Diagnostics.Stopwatch.StartNew();await window.OpenDocumentAsync(path);await Task.Delay(250);VerifyGui(window);
         foreach(int theme in new[]{1,2})
         {
             window.SetTheme(theme);window.GoToPage(0);window.FitToWidth();await Task.Delay(200);Capture("layout-native-"+theme);
             window.Width=860;window.Height=620;await Task.Delay(250);Check(window.CurrentPage>0,"Resize lost pages");Capture("layout-native-small-"+theme);
-            var mode=window.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="ReadingMode");mode.SelectedIndex=1;await Task.Delay(150);Check(window.IsSimplifiedReading,"Native simplified mode failed");mode.SelectedIndex=0;await Task.Delay(150);
+            window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewContinuous").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(150);Check(window.IsSimplifiedReading,"Native simplified mode failed");window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewSinglePage").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(150);
         }
         Check(Sha(path)==before,"Native GUI modified DOCX");File.WriteAllBytes(Path.Combine(root,"diagnostics.json"),window.DetailedDiagnosticReport());
         File.WriteAllText(Path.Combine(root,"native-layout-measures.json"),JsonSerializer.Serialize(new{elapsedMs=timer.ElapsedMilliseconds,workingSet=Environment.WorkingSet,pages=window.CurrentComposition!.Pages.Count,geometry=window.CurrentComposition.Pages.Select(p=>p.Geometry),sourceSha256=before,window.RenderScaling},new JsonSerializerOptions{WriteIndented=true}));

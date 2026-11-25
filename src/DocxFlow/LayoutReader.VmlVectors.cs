@@ -15,6 +15,43 @@ public static partial class LayoutReader
     {
         static readonly Regex VmlCoordinates=new(@"\s*,\s*|\s+",RegexOptions.CultureInvariant|RegexOptions.NonBacktracking);
 
+        InlineImage? ReadInlineVmlShape(InventoryNode picture)
+        {
+            string anchor="{"+TextStyleResolver.W14+"}anchorId";
+            if(Elements(picture).Take(2).ToArray() is not [var shape]||
+                shape.Name is not (VmlName+"rect" or VmlName+"shape")||
+                !OnlyAttributes(picture,anchor)||
+                !OnlyAttributes(shape,"{}id",Office+"spid","{}style","{}filled","{}fillcolor","{}stroked",
+                    "{}coordsize","{}coordorigin","{}path","{}alt","{}title")||
+                !TryStyle(shape,out var box)||box.Keys.Any(key=>key is not ("width" or "height"))||
+                !Length(box.GetValueOrDefault("width"),out float width)||width<=0||
+                !Length(box.GetValueOrDefault("height"),out float height)||height<=0||
+                Value(shape,"filled") is not (null or "t" or "true" or "1")||
+                Value(shape,"stroked") is not ("f" or "false" or "0")||
+                Value(shape,"fillcolor") is not {Length:7} fill||fill[0]!='#'||
+                !uint.TryParse(fill.AsSpan(1),NumberStyles.AllowHexSpecifier,CultureInfo.InvariantCulture,out uint color)||
+                Elements(shape).Any())return null;
+
+            ImmutableArray<VmlVertex> vertices;
+            if(shape.Name==VmlName+"rect")
+            {
+                if(Value(shape,"path") is not null||Value(shape,"coordsize") is not null||Value(shape,"coordorigin") is not null)return null;
+                vertices=[new(0,0),new(width,0),new(width,height),new(0,height)];
+            }
+            else
+            {
+                if(!Pair(Value(shape,"coordsize"),out int horizontal,out int vertical)||horizontal<=0||vertical<=0||
+                    !Pair(Value(shape,"coordorigin")??"0,0",out int left,out int top)||
+                    !PolygonPoints(Value(shape,"path"),out var points)||
+                    points.Any(point=>point.X<left||point.X>left+horizontal||point.Y<top||point.Y>top+vertical))
+                    return null;
+                vertices=points.Select(point=>new VmlVertex(width*(point.X-left)/horizontal,
+                    height*(point.Y-top)/vertical)).ToImmutableArray();
+            }
+            return new(picture.Id,picture.Source,width,height,0,0,semantic!.SnapshotId)
+            {VmlVector=new([new(shape.Source,color,vertices)])};
+        }
+
         InlineImage? ReadInlineVmlGroup(InventoryNode picture)
         {
             string anchor="{"+TextStyleResolver.W14+"}anchorId";

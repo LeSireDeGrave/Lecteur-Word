@@ -75,7 +75,12 @@ public sealed partial class ReaderWindow
             navItems.Children.Add(new Expander{Header=T("Sources sans position de page","Sources without a page position"),
                 Content=new StackPanel{Children={gaps,go}}});
         }
-        var technical=groups.Select(g=>$"{g.Category} · {g.Severity} · ×{g.Count}\n{g.Code}\n{g.Component}\n{g.Example}").ToArray();
+        var technical=groups.Select(g=>
+        {
+            string translated=DiagnosticText(g.Code,g.Example);
+            return $"{g.Category} · {g.Severity} · ×{g.Count.ToString("N0",uiCulture)}\n{g.Code}\n{g.Component}\n{translated}"
+                +(translated==g.Example?"":"\n"+g.Example);
+        }).ToArray();
         navItems.Children.Add(new Expander{Name="DiagnosticTechnicalDetails",Header=T("Détails techniques et XML","Technical and XML details"),IsExpanded=false,HorizontalAlignment=HorizontalAlignment.Stretch,
             Content=new StackPanel{Children={Explain(groups.Sum(g=>g.Count)+T(" occurrences conservées dans "," retained occurrences in ")+groups.Count+T(" groupes."," groups.")),new ListBox{ItemsSource=technical,Height=340,FontSize=11,ItemTemplate=new Avalonia.Controls.Templates.FuncDataTemplate<string>((s,_)=>new TextBlock{Text=s,TextWrapping=TextWrapping.Wrap})}}}});
         var report=new Button{Content=T("Enregistrer le rapport détaillé…","Save detailed report…"),HorizontalAlignment=HorizontalAlignment.Stretch};
@@ -86,8 +91,8 @@ public sealed partial class ReaderWindow
     {
         ShowPanel("diagnostics");
         bool Related(SourceLocation? source)=>source is not null&&source.PartUri==block.Source.PartUri&&(source.Path==block.Source.Path||source.Path.StartsWith(block.Source.Path+"/",StringComparison.Ordinal));
-        var details=(inspection?.Manifest.Diagnostics.Where(d=>Related(d.Source)).Select(d=>d.Code+"\n"+d.Message)??[])
-            .Concat(readable?.Issues.Concat(readable.Presentation.Issues).Where(i=>Related(i.Source)).Select(i=>i.Code+"\n"+i.Message)??[]).ToList();
+        var details=(inspection?.Manifest.Diagnostics.Where(d=>Related(d.Source)).Select(d=>d.Code+"\n"+DiagnosticText(d.Code,d.Message))??[])
+            .Concat(readable?.Issues.Concat(readable.Presentation.Issues).Where(i=>Related(i.Source)).Select(i=>i.Code+"\n"+DiagnosticText(i.Code,i.Message))??[]).ToList();
         details.Insert(0,(block.Label??"")+"\n"+block.Text);
         if(block.LinkTarget is {} target)details.Insert(0,T("Cible du lien : ","Link target: ")+target);
         if(readable?.Presentation.Fields.TryGetValue(block.Id,out var field)==true)details.Insert(0,T("Code du champ : ","Field code: ")+field.Code+"\n"+T("Valeur enregistrée : ","Stored value: ")+field.StoredValue);

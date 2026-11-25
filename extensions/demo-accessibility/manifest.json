@@ -1,0 +1,22 @@
+{
+  "id": "org.lecteurword.demo.accessibility",
+  "name": "Lecture agrandie",
+  "description": "Applique un contraste élevé et agrandit l’interface.",
+  "author": "LeSireDeGrave",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "0.1.0",
+    "maximumExclusive": "1.0.0"
+  },
+  "apiVersion": 1,
+  "features": [
+    "reading.accessibility"
+  ],
+  "permissions": [],
+  "license": "MIT",
+  "provenance": {
+    "publisher": "LeSireDeGrave",
+    "source": "https://github.com/LeSireDeGrave/Lecteur-Word"
+  },
+  "payloadSha256": "3ef6cf26bb2ce4c63ef1c4e935e97f2ab6c5cf08f9ec83a708bc753e6f6ba2ff"
+}

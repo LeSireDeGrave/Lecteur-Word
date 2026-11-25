@@ -23,7 +23,7 @@ public sealed partial class ReaderWindow
         var layout=snapshot?.ReadingGrids.GetValueOrDefault(block.Id);
         var scene=snapshot?.ReadingTables.GetValueOrDefault(block.Id);
         var table=new ScrollViewer{Name="ReadingTable",Tag=block.Id,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility=ScrollBarVisibility.Disabled,IsScrollChainingEnabled=true,Background=ReaderPalette.ReadingPaper};
+            VerticalScrollBarVisibility=ScrollBarVisibility.Disabled,IsScrollChainingEnabled=true,Background=ReadingSurface};
         var content=scene is null?ReadingTableGrid(block,layout,scale):ReadingTableScene(block,scene,scale);
         var position=new Border{Child=content,HorizontalAlignment=layout?.Alignment switch
         {
@@ -42,8 +42,8 @@ public sealed partial class ReaderWindow
     Control ReadingTableScene(ReadableBlock block,ComposedPage scene,double scale)
     {
         var canvas=new Canvas{Name="ReadingTableScene",Width=scene.Geometry.Width*scale,Height=scene.Geometry.Height*scale,
-            Background=ReaderPalette.ReadingPaper,ClipToBounds=true};
-        canvas.Children.Add(new TablePicture(scene,scale){Width=canvas.Width,Height=canvas.Height,IsHitTestVisible=false});
+            Background=ReadingSurface,ClipToBounds=true};
+        canvas.Children.Add(new TablePicture(scene,scale,ToSkia(Solid(ReadingSurface)),ReadingPageInk()){Width=canvas.Width,Height=canvas.Height,IsHitTestVisible=false});
         var cells=block.Children.SelectMany(row=>row.Children).ToDictionary(c=>c.Id,StringComparer.Ordinal);
         foreach(var cell in scene.Cells)
         {
@@ -127,8 +127,8 @@ public sealed partial class ReaderWindow
             if(covered.Contains(cell.Id))continue;
             var group=new StackPanel();
             if(cell.Kind=="cell")
-                foreach(var child in cell.Children)group.Children.Add(RenderReadingBlock(child,inCell:true));
-            else group.Children.Add(RenderReadingBlock(cell,inCell:true));
+                foreach(var child in cell.Children)group.Children.Add(RenderReadingBlock(child,inCell:true,surface:resolved?.Fill is {} color ? Brush("#"+color) : ReadingSurface));
+            else group.Children.Add(RenderReadingBlock(cell,inCell:true,surface:resolved?.Fill is {} fillColor ? Brush("#"+fillColor) : ReadingSurface));
             var target=ReadingCell(cell,group,aliases.GetValueOrDefault(cell.Id)??[]);
             var (across,down)=spans.GetValueOrDefault(cell.Id,(span,1));
             if(resolved is not null&&layout is not null)
@@ -200,11 +200,11 @@ public sealed partial class ReaderWindow
         }
     }
 
-    sealed class TablePicture(ComposedPage table,double scale) : Control
+    sealed class TablePicture(ComposedPage table,double scale,SKColor paper,Func<SKColor,SKColor,SKColor>? ink) : Control
     {
         public override void Render(DrawingContext context)
         {
-            context.Custom(new PictureDraw(new Rect(Bounds.Size),Composer.RecordContinuousTable(table),(float)scale));
+            context.Custom(new PictureDraw(new Rect(Bounds.Size),Composer.RecordContinuousTable(table,paper,ink),(float)scale));
         }
     }
 

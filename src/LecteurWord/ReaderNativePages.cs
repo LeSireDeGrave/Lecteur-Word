@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using LecteurWord.Flow;
 
@@ -94,8 +95,8 @@ public sealed partial class ReaderWindow
                 if(hit is null)continue;
                 var clusters=hit.SelectMany(x=>PageCoordinates.Clusters(x.Line)).Where(c=>c.ContextRange.Start<offset&&c.ContextRange.EndExclusive>at).ToArray();
                 if(clusters.Length==0)continue;
-                var button=new Button{Content=SearchExcerpt(p.Context),HorizontalAlignment=Avalonia.Layout.HorizontalAlignment.Stretch};
-                ToolTip.SetTip(button,T($"Page {hit.Key} de la composition","Calculated page "+hit.Key));
+                var button=ReadingSearchResult(SearchExcerpt(p.Context));
+                ToolTip.SetTip(button,LocalFormat("search.calculated-page","Page {0} de la composition","Calculated page {0}",hit.Key));
                 button.Click+=(_,_)=>
                 {
                     GoToPage(hit.Key-1);SetNativeSelection(hit.Key,clusters);
@@ -119,7 +120,7 @@ public sealed partial class ReaderWindow
     {
         IReadOnlyList<PageRect> rectangles=[];
         double scale;
-        static readonly IBrush Fill=new SolidColorBrush(Color.FromArgb(100,106,169,222));
+        static NativeSelectionOverlay()=>AffectsRender<NativeSelectionOverlay>(TextElement.ForegroundProperty);
         internal void Set(IReadOnlyList<PageRect> items,double zoom)
         {
             double requested=zoom*PointsToDip;
@@ -128,7 +129,10 @@ public sealed partial class ReaderWindow
         }
         public override void Render(DrawingContext context)
         {
-            foreach(var r in rectangles)context.FillRectangle(Fill,new Rect(r.Left*scale,r.Top*scale,r.Width*scale,r.Height*scale));
+            if(GetValue(TextElement.ForegroundProperty) is not {} brush)return;
+            var pen=new Pen(brush,1.5);
+            foreach(var r in rectangles)
+                context.DrawRectangle(null,pen,new Rect(r.Left*scale,r.Top*scale,r.Width*scale,r.Height*scale));
         }
     }
 }

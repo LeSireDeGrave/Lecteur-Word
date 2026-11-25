@@ -1347,9 +1347,9 @@ public static partial class Composer
         }
         if(group.Count>0)yield return group;
     }
-    static void DrawStyledPage(SKCanvas canvas,ComposedPage page)
+    static void DrawStyledPage(SKCanvas canvas,ComposedPage page,SKColor? paper=null,Func<SKColor,SKColor,SKColor>? ink=null)
     {
-        DrawFloatingDrawings(canvas,page,behind:true);
+        DrawFloatingDrawings(canvas,page,behind:true,paper:paper,ink:ink);
         DrawCells(canvas,page);
         foreach(var line in page.MainDisplayLines)DrawParagraphShading(canvas,line);
         var bitmaps=new Dictionary<string,SKBitmap>();
@@ -1371,12 +1371,20 @@ public static partial class Composer
         using var fonts=new LayoutFonts();using var paint=new SKPaint{IsAntialias=true};
         foreach(var line in page.MainDisplayLines)
         {
+            SKColor background=paper??SKColors.White;
+            if(ink is not null)
+            {
+                var cell=page.Cells.LastOrDefault(c=>c.Fill is not null && line.X>=c.X && line.X<c.X+c.Width &&
+                    line.Baseline>=c.Y && line.Baseline<c.Y+c.Height);
+                if(cell?.Fill is {} fill)background=SKColor.Parse("#"+fill);
+                if(line.ParagraphShading is {} shade)background=SKColor.Parse("#"+shade.Shading.Color);
+            }
             if(line.Native is {} native)
             {
                 int save=BeginLineClip(line);
                 try
                 {
-                    (page.NativePainter??throw new InvalidDataException("PAGE_DRAW_LEASE")).Paint(canvas,native,line.NativeOffsetX,line.Baseline,SKColors.Black);
+                    (page.NativePainter??throw new InvalidDataException("PAGE_DRAW_LEASE")).Paint(canvas,native,line.NativeOffsetX,line.Baseline,SKColors.Black,background,ink);
                 }
                 finally{if(save>=0)canvas.RestoreToCount(save);}
             }
@@ -1405,7 +1413,9 @@ public static partial class Composer
             }
             foreach(var f in line.Fragments)
             {
-                var font=fonts.Get(f.Style);paint.Color=SKColor.Parse("#"+f.Style.Color);canvas.DrawText(f.Text,f.X,line.Baseline,font,paint);
+                var font=fonts.Get(f.Style);paint.Color=SKColor.Parse("#"+f.Style.Color);
+                if(ink is not null)paint.Color=ink(paint.Color,background);
+                canvas.DrawText(f.Text,f.X,line.Baseline,font,paint);
                 if(f.Style.Underline)
                 {
                     if(f.Style.UnderlineColor is {} color)paint.Color=SKColor.Parse("#"+color);
@@ -1416,7 +1426,7 @@ public static partial class Composer
             }
         }
         DrawCellBorders(canvas,page);
-        DrawFloatingDrawings(canvas,page,behind:false);
+        DrawFloatingDrawings(canvas,page,behind:false,paper:paper,ink:ink);
 
         int BeginLineClip(PageLine line)
         {
@@ -1435,7 +1445,7 @@ public static partial class Composer
             line.NativeTop+line.Height),paint);
     }
 
-    static void DrawFloatingDrawings(SKCanvas canvas,ComposedPage page,bool behind,bool clipToSheet=true)
+    static void DrawFloatingDrawings(SKCanvas canvas,ComposedPage page,bool behind,bool clipToSheet=true,SKColor? paper=null,Func<SKColor,SKColor,SKColor>? ink=null)
     {
         if(page.FloatingPictures.Count==0&&page.FloatingTextFrames.Count==0)return;
         int save=canvas.Save();
@@ -1482,7 +1492,8 @@ public static partial class Composer
                             canvas.Translate(transform.X,transform.Y);
                             canvas.RotateDegrees(transform.Degrees);
                         }
-                        DrawStyledPage(canvas,frame.Content);
+                        DrawStyledPage(canvas,frame.Content,bounds.Fill is uint rgbFill ?
+                            new SKColor((byte)(rgbFill>>16),(byte)(rgbFill>>8),(byte)rgbFill) : paper,ink);
                     }
                     finally{canvas.RestoreToCount(frameSave);}
                 }

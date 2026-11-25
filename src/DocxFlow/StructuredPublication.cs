@@ -24,7 +24,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
     internal sealed record Asset(string Path,string Mime,byte[] Data);
     internal sealed record Inline(SemanticSource Source,string? Value,TextStyle? Style,FontResolution? Font,
         string? Anchor=null,SemanticReference? Link=null,SemanticReference? Note=null,InlineImage? Image=null,string? Field=null,
-        string? AnchorEnd=null,string? Target=null,string? NumberFormat=null,string? DeclaredFont=null,FloatingTextFrame? TextFrame=null);
+        string? AnchorEnd=null,string? Target=null,string? NumberFormat=null,string? DeclaredFont=null,
+        FloatingTextFrame? TextFrame=null,string? RecoveredStory=null);
 
     internal readonly List<FlowIssue> Issues=[];
     readonly List<FlowIssue> reservations=[];
@@ -60,6 +61,7 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         .Where(e=>e.Kind==SemanticKind.BookmarkStart&&e.Coverage==SemanticCoverage.Represented)
         .ToLookup(e=>(e.StoryId,source.Semantic!.Attribute(e.Id,"id")));
     readonly HashSet<string> writtenNotes=new(StringComparer.Ordinal);
+    readonly Dictionary<string,string> writtenNoteLabels=new(StringComparer.Ordinal);
     readonly IReadOnlyDictionary<string,string> noteLabels=(source.Pagination?.Composition.Pages??[])
         .SelectMany(p=>p.DisplayLines).SelectMany(line=>line.Native?.Generated??[])
         .Where(part=>part.Kind=="noteNumber").GroupBy(part=>part.Cause.NodeId,StringComparer.Ordinal)
@@ -83,11 +85,11 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             return new(Publications.Blocked("EXPORT_SEMANTIC_UNAVAILABLE","Les styles et la structure vérifiés du document sont indisponibles."),[]);
         var format=request.Format;
         var book=new StructuredPublication(source,format,token,request.UseCoverImage,request.Cover,request.Policy);
-        var body=book.BuildBody();
         IReadOnlyList<PublicationPackages.Entry> entries=[];
         ImmutableArray<PublicationContent> contents=[];
         try
         {
+            var body=book.BuildBody();
             if(format==ExportFormat.Nova)entries=NovaPublication.Build(book,token);
             else if(!book.Issues.Any(i=>i.BlocksExport))
                 entries=PublicationPackages.Entries(source,book,body,format);
@@ -181,7 +183,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
             {
                 continue;
             }
-            else if(field is not {StructureVerified:true,Locked:true,StoredResultIds.IsEmpty:false})
+            else if(field is not {StructureVerified:true,Locked:true,StoredResultIds.IsEmpty:false}||
+                format==ExportFormat.Nova&&!HasVisibleFieldResult(field))
             {
                 if(format==ExportFormat.Nova&&field.Command!="TC"&&!HasVisibleFieldResult(field))
                     Issue("EXPORT_NOVA_FIELD_VALUE_MISSING",model.Source(field.Id),"Champ sans résultat visible vérifié · "+field.Command+".");
@@ -238,8 +241,12 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
                                 Reserve("EXPORT_OBJECT_FLOW",item.Source,"L’objet est rapproché de son ancre dans le flux de lecture. Son habillage peut changer.");
                             parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,Link:link,Image:image)));
                         }
-                        else if(ObjectText(item.Source.NodeId) is not null)
-                            Issue("EXPORT_OBJECT_TEXT",item.Source,"Seule la description de l’objet est disponible. L’export exige une représentation graphique vérifiée.");
+                        else if(RecoverTextBox(item.Source.NodeId) is {} story)
+                        {
+                            Reserve("EXPORT_TEXT_FRAME_TEXT",item.Source,
+                                "Le texte de la zone est repris dans le flux éditable. Le cadre et sa mise en page ne sont pas reproduits.");
+                            parts.Add((model.Element(item.Source.NodeId).Order,new(item.Source,null,null,null,RecoveredStory:story)));
+                        }
                         else Issue("EXPORT_DRAWING_UNSUPPORTED",item.Source,"Dessin, graphique ou équation sans restitution vérifiée. Consultez cet objet dans le DOCX.");
                         continue;
                     case "Symbol":
@@ -454,25 +461,29 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
                 continue;
             }
             if(item.Field=="FLOAT"){AppendOdtDrawing(block,item.Source);continue;}
-            if(item.TextFrame is {} frame)
+            if(item.TextFrame is not null||item.RecoveredStory is not null)
             {
+                var frame=item.TextFrame;
+                string story=item.RecoveredStory??frame!.StoryId;
                 if(flow is null)
                 {
-                    flow=new XElement(Html+"div",new XAttribute("id",Id(id)),block);
+                    flow=Odt?new XElement(Text+"section",new XAttribute(Text+"name","LwTextFrame"+Id(id)),block):
+                        new XElement(Html+"div",new XAttribute("id",Id(id)),block);
                     block.Attribute("id")?.Remove();
                 }
                 else if(current.FirstNode is not null)flow.Add(current);
-                var content=Blocks(TextFrameBlocks(frame));
-                var inset=new XElement(Html+"aside",new XAttribute(Epub+"type","sidebar"),
-                    new XAttribute("class","text-frame"),content);
+                var content=Blocks(frame is null?model.BlocksOf(story).Select(element=>element.Id):TextFrameBlocks(frame));
+                var inset=Odt?new XElement(Text+"section",new XAttribute(Text+"name","LwInset"+Id(item.Source.NodeId)),content):
+                    new XElement(Html+"aside",new XAttribute(Epub+"type","sidebar"),new XAttribute("class","text-frame"),content);
                 var decoration=new List<string>();
-                if(frame.Fill is uint fill)decoration.Add($"background-color:#{fill:X6}");
-                if(frame.Stroke is {} stroke)decoration.Add($"border:{Pt(stroke.Width)} solid #{stroke.Color:X6}");
+                if(frame?.Fill is uint fill)decoration.Add($"background-color:#{fill:X6}");
+                if(frame?.Stroke is {} stroke)decoration.Add($"border:{Pt(stroke.Width)} solid #{stroke.Color:X6}");
                 if(decoration.Count>0)inset.SetAttributeValue("style",string.Join(';',decoration));
                 flow.Add(inset);
-                Represent(frame.StoryId,PublicationRepresentation.Presentation);
+                Represent(story,PublicationRepresentation.Presentation);
                 Represent(item.Source.NodeId,PublicationRepresentation.Presentation);
-                current=new XElement(Html+"p",block.Attributes().Where(a=>a.Name!="aria-level").Select(a=>new XAttribute(a)));
+                current=Odt?new XElement(Text+"p"):
+                    new XElement(Html+"p",block.Attributes().Where(a=>a.Name!="aria-level").Select(a=>new XAttribute(a)));
                 continue;
             }
             var element=WriteInline(item);
@@ -602,12 +613,22 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         string id=Id(note.TargetId!),reference=Id(item.Source.NodeId);
         if(!writtenNotes.Add(id))
         {
-            Issue("EXPORT_NOTE_REPEATED",item.Source,"Référence de note partagée hors du profil de numérotation.");
-            return new XElement(Odt?Text+"span":Html+"span");
+            if(!writtenNoteLabels.TryGetValue(id,out string? firstLabel))
+            {
+                Issue("EXPORT_NOTE_CYCLE",item.Source,"Les références de notes forment un cycle.");
+                return new XElement(Odt?Text+"span":Html+"span");
+            }
+            string repeatedLabel=NoteLabel(item.Source.NodeId)??firstLabel;
+            Represent(item.Source.NodeId);
+            return Odt?new XElement(Text+"note-ref",new XAttribute(Text+"ref-name",id),
+                    new XAttribute(Text+"note-class",end?"endnote":"footnote"),new XAttribute(Text+"reference-format","text"),repeatedLabel):
+                new XElement(Html+"a",new XAttribute("href","#"+id),new XAttribute("id",reference),
+                    new XAttribute(Epub+"type","noteref"),new XAttribute("role","doc-noteref"),repeatedLabel);
         }
         string ordinal=(notes.Count(n=>n.End==end)+1).ToString(CultureInfo.InvariantCulture);
         string label=NoteLabel(item.Source.NodeId)??ordinal;
         var blocks=Blocks(model.BlocksOf(note.TargetId!).Select(e=>e.Id));
+        writtenNoteLabels.Add(id,label);
         notes.Add((id,end,label,blocks));
         Represent(note.TargetId!);
         Represent(item.Source.NodeId);
@@ -715,7 +736,8 @@ internal sealed partial class StructuredPublication(PublicationSource source,Exp
         while(candidates.TryPop(out string? candidate))
         {
             token.ThrowIfCancellationRequested();
-            string? label=model.Attribute(candidate,"descr",ns:"")??model.Attribute(candidate,"title",ns:"");
+            string? label=model.Attribute(candidate,"descr",ns:"")??model.Attribute(candidate,"alt",ns:"")??
+                model.Attribute(candidate,"title",ns:"");
             if(!string.IsNullOrWhiteSpace(label))return label;
             foreach(var child in model.Children(candidate).Reverse())candidates.Push(child.Id);
         }

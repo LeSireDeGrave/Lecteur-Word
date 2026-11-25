@@ -98,7 +98,35 @@ static partial class PageCases
             "<b:Source><b:Tag>essai</b:Tag></b:Source></b:Sources>",StringComparison.Ordinal)),DependencyImpact.Undetermined);
         CheckDecision(Input("relation-consommee",body.Replace("<w:p>","<w:p r:id=\"bib\">",StringComparison.Ordinal),bibliographyXml),
             DependencyImpact.Undetermined,"/word/document.xml");
-        CheckDecision(Input("xml-generique",body,"<x:business xmlns:x=\"urn:synthetic\">Contenu</x:business>"),DependencyImpact.Undetermined);
+        const string data="<x:business xmlns:x=\"urn:synthetic\">Contenu</x:business>";
+        var metadata=Input("xml-generique",Paragraph("""<w:fldSimple w:instr="PAGE"/>""")+body,data);
+        using(var metadataLease=PageComposer.Compose(metadata))
+        {
+            var s=metadataLease.Snapshot;
+            Complete(s,1);
+            Check(s.Semantic!.CustomXml.Single().Impact==DependencyImpact.NoLayoutEffect&&
+                s.FieldPasses[^1].Fields.Single().Text=="1","Le champ PAGE ne consomme pas le magasin générique.");
+        }
+        CheckDecision(Input("xml-generique-lie",mapping+body,data),DependencyImpact.AffectsLayout,"/word/document.xml");
+        string buildingBlock="""
+            <w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Page Numbers"/>
+              <w:docPartUnique/></w:docPartObj></w:sdtPr>
+              <w:sdtContent><w:p><w:fldSimple w:instr="PAGE"/></w:p></w:sdtContent></w:sdt>
+            """;
+        var building=Input("galerie-sans-liaison",P("Corps")+headerSection,data,
+            stories:new(){["word/header1.xml"]=Fixtures.Xml("hdr",buildingBlock)},
+            extra:Fixtures.Relationship("head","header","header1.xml"));
+        using(var lease=PageComposer.Compose(building))
+        {
+            Complete(lease.Snapshot,1);
+            Check(lease.Snapshot.Semantic!.CustomXml.Single().Impact==DependencyImpact.NoLayoutEffect&&
+                lease.Snapshot.Pages.Single().Geometry.RunningStories.Single().Lines.Single().Native!.Generated
+                    .Any(f=>f.Kind=="pageField"&&f.Fragment.Text=="1"),
+                "La galerie d’édition n’est pas une liaison. Le champ de son contenu reste calculé.");
+        }
+        CheckDecision(Input("galerie-malformee",body,data,stories:new()
+            {["word/header1.xml"]=Fixtures.Xml("hdr",buildingBlock.Replace("<w:docPartUnique/>","<w:dataBinding/>",StringComparison.Ordinal))},
+            extra:Fixtures.Relationship("head","header","header1.xml")),DependencyImpact.Undetermined,"/word/header1.xml");
         Unavailable(Input("cible-absente",body,null,withStore:false));
         Unavailable(Input("xml-malforme",body,"<Sources>"));
         Unavailable(Input("xml-dtd",body,"<!DOCTYPE Sources [<!ELEMENT Sources ANY>]><Sources/>"));

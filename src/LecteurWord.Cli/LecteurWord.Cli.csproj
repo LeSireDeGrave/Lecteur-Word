@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>lecteur-word-cli</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DocxFlow/DocxFlow.csproj" />
+    <Compile Include="../LecteurWord/BuildReference.cs" Link="BuildReference.cs" />
+  </ItemGroup>
+</Project>

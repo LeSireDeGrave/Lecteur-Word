@@ -4,7 +4,7 @@ Cette page accompagne la préparation du premier commit. Elle distingue les fich
 
 ## Code et tests synthétiques
 
-Les bibliothèques C#, la visionneuse, les outils du projet et les cas ciblés ont été écrits pour Lecteur Word. Aucun historique ou code d'OpusNova/ODG n'a été copié. La licence de ce nouveau code reste à décider par le propriétaire ; préparer un index ne vaut pas autorisation de commit ou de diffusion.
+Les bibliothèques C#, la visionneuse, les outils du projet et les cas ciblés ont été écrits pour Lecteur Word. Aucun historique ou code d'OpusNova/ODG n'a été copié. Les développements originaux dont les droits appartiennent à l’auteur sont couverts par [MIT](../LICENSE).
 
 Les générateurs `tests/DocxCore.Targeted/Fixtures.cs` et les cas C#/Rust créent des documents synthétiques : textes de test, XML OOXML, petit PNG de test et structures volontairement hostiles ou hors couverture. Ils ne contiennent ni manuscrit, ni document `.nova`, ni export personnel. Les exemples XML décrivent les formats testés et les assertions portent sur l'inventaire, la conservation, les refus et le périmètre réellement qualifié.
 
@@ -51,7 +51,7 @@ Cette inclusion est une exception explicite à l'exclusion des images privées e
 
 ## Identité visuelle de l’application
 
-À la demande du propriétaire, les fichiers fournis `docs/maquettes/LecteurWord.ico` et `Logo Lecteur Word avec livre ouvert.png` sont copiés dans `src/LecteurWord/Assets/`. ICO : SHA-256 `bcd904ad9d4012782bb2d657da215a747199ae1ea28f89d6b40ff0dee0fb4174`. Grand logo PNG : `b770a4910776c755d04c29e107c176abb01c0225498263f9009dabdcfe4ca401`. L’icône PNG 256 × 256 de l’application est extraite octet pour octet de la plus grande image PNG déjà incorporée à l’ICO ; aucun dessin ou redimensionnement ajouté. Les originaux et la maquette UX restent inchangés. L’autorisation présente concerne l’intégration demandée ; aucune licence nouvelle du projet n’est choisie.
+À la demande du propriétaire, les fichiers fournis `docs/maquettes/LecteurWord.ico` et `Logo Lecteur Word avec livre ouvert.png` sont copiés dans `src/LecteurWord/Assets/`. ICO : SHA-256 `bcd904ad9d4012782bb2d657da215a747199ae1ea28f89d6b40ff0dee0fb4174`. Grand logo PNG : `b770a4910776c755d04c29e107c176abb01c0225498263f9009dabdcfe4ca401`. L’icône PNG 256 × 256 de l’application est extraite octet pour octet de la plus grande image PNG déjà incorporée à l’ICO ; aucun dessin ou redimensionnement ajouté. Les originaux et la maquette UX restent inchangés. D’après la déclaration de l’auteur, le logo et la maquette ont été créés pour Lecteur Word avec l’assistance de ChatGPT (OpenAI). La décision LICENSE-002 fixe [les conditions d’utilisation et le périmètre exact des fichiers](../BRANDING.md). Les dessins vectoriels des commandes, créés pour le projet, sont couverts par MIT.
 
 ## Fixtures LAYOUT-001B
 
@@ -64,6 +64,12 @@ Cette inclusion est une exception explicite à l'exclusion des images privées e
 ## Reproduction RENDER-001
 
 `tests/Viewer.Targeted/RenderCases.cs` construit une fixture DrawingML minimale pour distinguer les valeurs de géométrie du texte du dessin. Elle vérifie que les nombres du vrai texte et les contenus d’espaces de noms inconnus restent consultables, tandis que les paramètres techniques gardent leur inventaire et leur provenance. Le cas réel exige une copie explicitement désignée par `LECTEUR_WORD_QA_INPUT`. Les binaires, sources externes examinées, prototypes, copies privées, mesures et captures de comparaison restent sous `.local/qualification/render-001`, sans intégration de code externe au produit.
+
+## Fixtures ENGINE-001
+
+Statut historique : expérience abandonnée par ENGINE-ABANDON-001. Ses sources de test et de raccordement restent archivées, exclues du build actif ; les rapports et ressources privés sont conservés avec leurs provenances. Les enseignements fonctionnels servent uniquement à définir des cas et une implémentation C# indépendante fondée sur les spécifications publiques.
+
+`tests/Viewer.Targeted/EngineCases.cs` construit ses DOCX synthétiques : corps, notes, en-tête/pied avec accents, caractères hors BMP et caractères privés, ainsi qu'une image PNG verte produite en mémoire avec Skia existant. Les vérifications portent sur le texte original, les positions dessinées, les pixels de l'image, les macros/plugins désactivés, les refus et l'annulation. Aucun document privé ni code de moteur tiers n'est copié dans ces fixtures. Le runtime, ses sources d'audit, notices, empreintes, mesures et captures restent dans la qualification locale ignorée. L'adaptateur du SDK est expérimental et sa diffusion reste soumise à la décision explicite prévue par ENGINE-001.
 
 ## Vérification ENGINE-ABANDON-001
 
@@ -119,12 +125,78 @@ La reprise UX-OPUS-001 complète les mêmes témoins avec une cellule placée, u
 
 Le cas ciblé `exchange-quality` crée un DOCX synthétique de deux paragraphes et produit trois exports du profil texte à partir de ce témoin. Les fichiers produits et les résultats des validateurs restent dans la qualification locale ignorée. Le témoin à deux corps dans `DocxCore.Targeted` génère un paquet OOXML syntaxiquement lisible dont la structure de document est ambiguë.
 
+Le cas `publication-core` construit une zone de texte VML synthétique dont la forme est hors profil. Il rouvre les sorties ODT, EPUB et NOVA et vérifie la présence du texte en mode compatible, le refus en conservation intégrale et le refus d’un dessin sans alternative. Un second témoin synthétique mesure une variante paire sur un document d’une seule feuille. Il contrôle la provenance de la représentation, le cadre éditable ODT et le regroupement des libellés équivalents dans le flux EPUB et le manuscrit NOVA. Le cas `running-drawing-groups` contrôle aussi le transfert d’un champ de total de pages dans le flux d’en-tête ODT.
+
 `PageDependencyCases.cs` construit la collection bibliographique, le magasin, les champs et les liaisons avec des valeurs synthétiques. Il contrôle le contenu éditorial, le raster et les refus de composition et d’export. Les sources bibliographiques du corpus privé, l’audit OPC et les fichiers produits restent dans la qualification locale ignorée.
 
 ## Témoins RENDER-QUALITY-001
 
 `RenderQualityCases.cs` génère un DOCX synthétique avec des champs imbriqués, un signet, un lien de sommaire, un renvoi de page vide et trois fonds de cellule. Le cas modèle vérifie le texte visible, les résultats enregistrés et les pixels du raster. Le cas X11 utilise trois copies saisies explicitement dans la qualification locale et vérifie la lecture et les refus d’export. Les captures, les mesures, les copies et les références LibreOffice restent locales.
 
+### LECTEUR-WORD-PAGINATION-TOC-002
+
+`tests/Viewer.Targeted/PageTocCases.cs` construit ses propres DOCX synthétiques. Les témoins couvrent un sommaire multipage, les instructions réparties, les signets, la mesure du numéro, le changement de page causé par sa largeur, le cycle de pagination et les coordonnées en fenêtre headless. Les DOCX, inventaires, mesures, rasters et résultats de recette restent dans les sorties locales ignorées.
+
+### LECTEUR-WORD-PAGINATION-HIDDEN-TC-003
+
+`tests/Viewer.Targeted/HiddenTcCases.cs` génère le texte masqué, les styles, les marqueurs TC, les opérandes et les structures de tableau et de pied à partir de données synthétiques. Les tests de lecteur exercent la recherche et la copie de la projection visible. Les fichiers DOCX, inventaires détaillés, mesures et captures restent dans la qualification locale ignorée.
+
+### LECTEUR-WORD-PAGINATION-STORIES-004
+
+`tests/Viewer.Targeted/Story004Cases.cs` génère des interlignes et marques de paragraphe, une image unie avec Skia, des tableaux d’en-tête et de pied, des champs et des sections synthétiques. Les deux copies A4, les mesures de placement, les rasters et les captures de fenêtre restent dans la qualification locale ignorée.
+
+### LECTEUR-WORD-PAGINATION-STAGE2-001
+
+`tests/Viewer.Targeted/Stage2Cases.cs` génère son image unie avec Skia et construit des ancrages, des propriétés de mise en page et des zones de texte synthétiques. Le JPEG CMJN, son profil ICC, les copies réelles, le PDF de comparaison produit par Writer, les rasters et les mesures restent dans la qualification locale ignorée.
+
+`tests/Viewer.Targeted/FlowEngineCases.cs` construit les témoins OOXML et leur image de test avec Skia. Le cas `docx-flow-engine` contrôle la conservation du texte, les intervalles UTF-16, les largeurs de composition, les fragments de rangée et de note et les renvois de page. Les paquets générés sont vérifiés avec OpenXmlValidator. Les DOCX générés, les copies privées, les rasters et les mesures restent locaux.
+
+Les témoins de reprise couvrent aussi les contours synthétiques, les tableaux AutoFit sur deux largeurs, les coupures internes d’une note et les marques numériques. Le témoin intégré combine les colonnes, le dessin, la réserve de note, les tableaux et le champ de total dans un paquet synthétique validé par OpenXmlValidator.
+
+Les cas de flux et de renvois construisent aussi une fusion verticale répartie sur plusieurs feuilles, une bordure de paragraphe, des seuils de crénage et un résultat PAGEREF stocké. Les valeurs, les lignes des cellules et les pixels testés proviennent de ces témoins synthétiques.
+
+Les témoins de la même reprise ajoutent les totaux de section dans le corps et un pied hérité, les références de styles liées et les parents inapplicables, ainsi qu’une table contenant un trait d’union insécable. La vignette VML et l’objet OLE utilisent une image synthétique et un conteneur binaire vide produit par les fixtures. Les tests contrôlent les pixels, la sélection des occurrences et le refus d’une relation contradictoire. Les paquets et les résultats restent locaux.
+
+Les témoins de la continuation normative construisent des enregistrements linéaires WMF et EMF et un objet OLE synthétique. Le test contrôle les trajectoires, les pixels, les relations et le refus d’un enregistrement hors profil. Les tests de flux exercent aussi les marges par rangée, les signets entre blocs et un refus de note rattaché à son appel. Les témoins de champs utilisent des renvois et caches fictifs. Les paquets et les mesures restent locaux.
+
+Les cas `microsoft-strict` et `microsoft-compatibility` construisent un paquet Strict et des branches MCE synthétiques. Le témoin Strict couvre le corps, un en-tête, un taquet signé, un champ et une racine incompatible. Les cas MCE couvrent un conteneur déclaré par `ProcessContent`, la portée des préfixes, la sélection de branche et le refus d’une déclaration requise inconnue. Les fichiers générés restent dans les sorties de qualification locales.
+
+`tests/Viewer.Targeted/WordFormattingCases.cs` produit six témoins ciblés. Les styles, branches MCE et entrées de thème sont synthétiques. Les attentes de couleur proviennent d’un exemple Microsoft et d’un calcul HSL sur une couleur témoin. Les tests vérifient les déclarations héritées et directes, leur provenance, le placement et le raster. Les fichiers générés et le rejeu du corpus restent locaux.
+
+`tests/Viewer.Targeted/ManuscriptPaginationCases.cs` génère une note avec exposant et séparateurs, un tableau suivi d’une légende solidaire et des champs DOCPROPERTY avec leurs propriétés OPC. Le manuscrit réel, son audit et ses rasters restent dans la qualification locale ignorée.
+
+`tests/Viewer.Targeted/PageTocRegenerationCases.cs` génère ses titres, styles, champs et sections. Il contrôle un sommaire sans cache sur une ou plusieurs feuilles, les numéros logiques et les liens en Page simple et Double page. Le cas `docx-v1-corpus` charge ses références par un manifeste privé. Les copies, leurs empreintes de recette et les comparaisons Word restent locales.
+
+`tests/Viewer.Targeted/PageEffectiveStyleCases.cs` génère les deux parties de styles, les variants de compatibilité 14 et 15, les textes, les alternatives MCE et les cellules du tableau. Les attentes portent sur les sources OOXML, les mesures, les coupures et les rasters du lecteur. Les témoins et leurs empreintes appariables à des PDF Word restent dans la qualification locale.
+
+`tests/Viewer.Targeted/PageParagraphConformanceCases.cs` associe des tabulations à un texte en capitales, une bordure de paragraphe, une trame et des modèles de notes synthétiques. Les tests Custom XML et WMF génèrent aussi leur propre sélecteur de galerie, leur champ et leur stylet passif. Les paquets, rasters et mesures restent locaux.
+
+Les témoins de sommaire réparti sur plusieurs paragraphes, de propriétés de document dans le corps, de fonds de caractères et de coexistence des types de notes utilisent du XML synthétique. Le cas `docx-raster-admission` dérive ses entrées du petit PNG de test et construit les chunks témoins avec leur CRC. Les profils analysés dans le corpus réel, les mesures CPU et les rendus de qualification restent dans les sorties locales.
+
+Le témoin `page-endnotes` construit deux sections, les notes, séparateurs et champs de total. Le cas VML utilise les formules du cadre de type 75 documenté par Microsoft et un métafichier synthétique. Le témoin de magasin XML utilise des valeurs fictives. Les fontes de substitution sont chargées localement avec leur identité. Les copies DOCX, polices du système et sorties de comparaison ne font pas partie des sources.
+
+Le cas `word-style-observed-collections` construit deux collections synthétiques avec tailles et couleurs opposables et vérifie leur provenance sur trois profils. Il exerce aussi les replis des variantes d’Aptos et un saut manuel isolé. `table-page-widths` utilise un retrait et une marge directe inventés pour le témoin. Le couple Guide et PDF Word 365, le rapport d’origine et les mesures avant/après restent dans la qualification locale ignorée.
+
+Les témoins de copies sans extension, de chaînes et de styles absents, de ligatures et d’ombrages utilisent des déclarations synthétiques. L’essai de composition avec les faces locales Carlito utilise une configuration Fontconfig privée au processus de recette. Les faces, sources DOCX/PDF appariées, comparaisons et rasters demeurent dans les sorties locales.
+
+Les témoins de reprise DOCX V1 construisent le taquet marginal, le dessin flottant laissant un seul corridor, les marques à soulignement double et les tracés EMF remplis. Les enregistrements et pixels attendus sont synthétiques. Les métafichiers privés, le PDF Word apparié et les relevés des lignes et des métriques HarfBuzz restent dans la qualification locale.
+
+Les témoins de continuation construisent un aperçu OLE dont les avances WMF et le commentaire de ligne de base sont synthétiques, ainsi qu’une zone flottante de deux paragraphes et d’un tableau. Le test de l’alias symbolique réemploie la face DejaVu modifiée dans le témoin de table cmap. Les images, données de caractères du corpus et comparaisons PDF restent dans les sorties locales.
+
+Les cas `open-reliability` et `word-text-effects` construisent leurs documents avec des paragraphes, couleurs, styles et propriétés d’ombre synthétiques. Le premier contrôle l’ordre de publication et l’annulation avec un point de synchronisation déterministe. Le second compare les avances et le raster avec et sans effet. Les journaux de mémoire et le rejeu des documents privés restent dans la qualification locale.
+
+Les témoins de note dans une cellule, de dessin polygonal VML, de débordement vertical et de bordures jointes utilisent des dimensions, textes, styles et couleurs synthétiques. Les tests vérifient les pixels, la réserve et les coordonnées de sélection. Le contrôle de remplacement utilise deux pages synthétiques pour éprouver la libération du compositeur précédent. Les DOCX privés, les fichiers de polices examinés et les relevés cmap restent locaux.
+
+Les témoins d’enveloppe WMF, d’échelle horizontale et de zones flottantes génèrent des enregistrements, des positions et des paragraphes synthétiques. La vérification des relations SmartArt utilise une copie du corpus désignée par le manifeste local. Les relevés libwmf et HarfBuzz, les sous-ensembles de polices extraits du PDF Word et les images de contrôle restent locaux.
+
+Les témoins de zones VML en en-tête génèrent leurs formes, couleurs, calques et ancres. Les essais de taille latine utilisent un témoin synthétique pour la provenance. Les variantes du DOCX de Stage 2, le PDF Writer, les relevés et les rasters restent dans la qualification locale.
+
 ## Plateforme et extensions de démonstration
 
-Les sources JSON des démonstrations sont originales au projet et accompagnées d’une licence MIT. Les paquets construits à partir de ces sources, rapports, captures et corpus de qualification restent locaux.
+Les tests `PlatformCases` construisent des états, paquets et incidents synthétiques. Les sources JSON des démonstrations, les modèles, les schémas du SDK et les catalogues intégrés sont des ressources originales du projet couvertes par MIT. Les dix-huit catalogues de contribution demandent encore une relecture native. Les paquets `.lwext` construits à partir de ces sources, rapports, instantanés XDG, captures et corpus de qualification restent locaux.
+
+Le cas `theme-kde` ouvre un DOCX synthétique et des paquets de test déclaratifs. Il observe les couleurs des contrôles Avalonia dans une session KDE avec XWayland. Les captures et leur planche restent dans les sorties locales.
+
+Le cas `language-layout` utilise les vingt catalogues intégrés et une extension de langue synthétique aux libellés longs. Il mesure l’encombrement des commandes dans les fenêtres compactes et contrôle les glyphes et le sens de lecture de l’interface. Le cas `platform-kde` exerce le sélecteur à partir d’événements clavier XWayland dans une session KDE isolée, avec des extensions synthétiques.
+
+Les nouveaux catalogues intégrés dérivent des libellés français et anglais du projet. Une traduction initiale M2M100 a été produite localement, puis les libellés du sélecteur, les formes de compteurs et les paramètres de format ont été contrôlés. Le modèle et ses caches restent dans la qualification locale. La relecture linguistique des catalogues reste ouverte.

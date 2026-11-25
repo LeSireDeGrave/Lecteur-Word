@@ -14,7 +14,7 @@ static class LineCases
     {
         const string rPr="""
             <w:rPr><w:rFonts w:ascii="DejaVu Serif" w:hAnsi="DejaVu Serif"/><w:sz w:val="24"/>
-            <w:lang w:val="fr-FR"/><w:spacing w:val="3"/><w:kern w:val="2"/>
+            <w:lang w:val="fr-FR"/><w:kern w:val="2"/>
             <w14:ligatures xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:val="standard"/></w:rPr>
             """;
         const string tab="<w:r><w:tab/></w:r>";
@@ -41,7 +41,10 @@ static class LineCases
             P(R("left")+tab+R("text"),"<w:bidi/>"),
             P(R("alpha\u00adbêta")),
             P(R("alpha\u00adbêta")),
-            P(R("abc\u2029سلام"))
+            P(R("abc\u2029سلام")),
+            P("""<w:r><w:rPr><w:spacing w:val="3"/></w:rPr><w:t>ABC</w:t></w:r>"""),
+            P(R("a b")+tab+R("a b c d e f g h i j k l m n o p q"),
+                """<w:jc w:val="both"/><w:tabs><w:tab w:val="left" w:pos="900" w:leader="dot"/></w:tabs>""")
         ];
         var parts=new Dictionary<string,string>
         {
@@ -64,7 +67,7 @@ static class LineCases
         var doc=typography.Measure();
         var paragraphIndex=doc.Paragraphs.Select((p,i)=>(p.Id,i)).ToDictionary(v=>v.Id,v=>v.i);
         LineRegion Region(LineRequest request)=>new("synthetic",14*Pt,
-            (paragraphIndex[request.ParagraphId] switch { 0=>105,1=>270,2=>66,4 or 13=>39,6=>110,10=>10,_=>160 })*Pt);
+            (paragraphIndex[request.ParagraphId] switch { 0=>105,1=>270,2=>66,4 or 13=>39,6=>110,10=>10,17=>100,_=>160 })*Pt);
         using var composer=new LineComposer(model,doc,typography);
         var composed=composer.Compose(Region);
         Verify(model,composed);
@@ -85,6 +88,14 @@ static class LineCases
             "Ancre des champs de tabulation.");
         Check(byParagraph[2].Length>1&&byParagraph[2].SelectMany(l=>l.Tabs).Single().Stop.Source?.Location.PartUri=="/word/settings.xml",
             "Retour automatique et taquet documentaire.");
+        var tabJustified=byParagraph[17][0];
+        var justifyStop=tabJustified.Tabs.Single();
+        Check(justifyStop.To==tabJustified.Region.Left+45*Pt&&
+            tabJustified.Occupied==tabJustified.ContentRight-tabJustified.ContentLeft&&
+            tabJustified.Visual.Where(p=>p.ExtraAfter>0).Any()&&
+            tabJustified.Visual.Where(p=>p.ExtraAfter>0).All(p=>p.X>=justifyStop.To)&&
+            tabJustified.Generated.Any(d=>d.Kind=="leader")&&byParagraph[17][^1].Visual.All(p=>p.ExtraAfter==0),
+            "La justification atteint la marge après le taquet fixe et préserve les points de suite.");
         var toc=byParagraph[3].Single();
         Check(toc.Generated.Any(d=>d.Kind=="leader"&&d.Count>3)&&toc.Parts.SelectMany(p=>p.Fragment?.Sources??[]).Any(s=>s.Role==TextRole.StoredField),
             "Points de suite ou champ stocké.");
@@ -111,8 +122,11 @@ static class LineCases
             byParagraph[14].Single().Generated.IsEmpty,"Trait facultatif Unicode et source exacte.");
         Check(byParagraph[15].Select(l=>l.Cut).SequenceEqual(new[]{LineCutKind.Mandatory,LineCutKind.End}),
             "Séparateur Unicode obligatoire.");
-        Check(byParagraph[16].Single().Properties.Origins["left"].Location.PartUri=="/word/styles.xml"&&
-            byParagraph[16].Single().Properties.Left==76200,"Héritage de paragraphe depuis le style de tableau.");
+        var tracked=byParagraph[16].Single();
+        Check(tracked is {Coverage:LineCoverage.Complete,Occupied:not null}&&tracked.Parts.Single().Fragment?.Style.Tracking==.15f,
+            "Espacement source sur des clusters latins simples.");
+        Check(byParagraph[18].Single().Properties.Origins["left"].Location.PartUri=="/word/styles.xml"&&
+            byParagraph[18].Single().Properties.Left==76200,"Héritage de paragraphe depuis le style de tableau.");
         ComparePaint(root,composer,typography,byParagraph[11].Single());
         var warm=composer.Compose(Region);
         Check(composed.Performance.Reshaped>0&&warm.Performance.ShapeHits>0,"Recalcul de bord et cache.");

@@ -29,7 +29,9 @@ public sealed partial class ReaderWindow
     void FillProperties()
     {
         if(inspection is null){navItems.Children.Add(Explain(T("Aucun document","No document")));return;}
-        navItems.Children.Add(Explain($"{fileName}\n{inspection.Manifest.Format}\n{inspection.Manifest.Parts.Count} parties / parts\n{inspection.Manifest.Nodes.Count} éléments / nodes\nSHA-256\n{inspection.Manifest.SourceSha256}"));
+        string parts=LocalCount("properties.parts",inspection.Manifest.Parts.Count,"{0:N0} partie","{0:N0} parties","{0:N0} part","{0:N0} parts");
+        string nodes=LocalCount("properties.nodes",inspection.Manifest.Nodes.Count,"{0:N0} élément","{0:N0} éléments","{0:N0} node","{0:N0} nodes");
+        navItems.Children.Add(Explain($"{fileName}\n{inspection.Manifest.Format}\n{parts}\n{nodes}\nSHA-256\n{inspection.Manifest.SourceSha256}"));
         if(nativePageLease?.Snapshot is {} snapshot)
         {
             var render=snapshot.Rendering;

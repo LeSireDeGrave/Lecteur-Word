@@ -1,0 +1,22 @@
+{
+  "id": "org.lecteurword.demo.language",
+  "name": "Français canadien",
+  "description": "Ajoute la locale fr-CA avec des exemples de traduction et le français intégré en secours.",
+  "author": "LeSireDeGrave",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "0.1.0",
+    "maximumExclusive": "1.0.0"
+  },
+  "apiVersion": 1,
+  "features": [
+    "appearance.translation"
+  ],
+  "permissions": [],
+  "license": "MIT",
+  "provenance": {
+    "publisher": "LeSireDeGrave",
+    "source": "https://github.com/LeSireDeGrave/Lecteur-Word"
+  },
+  "payloadSha256": "529afecaab1b01240951d9bd03dc749f05cd746a64fcc0ccba7132c8275c91b4"
+}

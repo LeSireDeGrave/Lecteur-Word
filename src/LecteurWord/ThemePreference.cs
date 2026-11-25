@@ -5,7 +5,7 @@ using Avalonia.Styling;
 
 namespace LecteurWord;
 
-internal enum ReaderTheme { System, Chocolate, MicrosoftBlue }
+internal enum ReaderTheme { System, Chocolate, MicrosoftBlue, Night, Light }
 
 internal sealed class ThemePreference(string path)
 {
@@ -32,6 +32,8 @@ internal sealed class ThemePreference(string path)
             {
                 "light" or "chocolate" or "clair"=>ReaderTheme.Chocolate,
                 "blue" or "microsoftblue" or "microsoft blue" or "bleu microsoft"=>ReaderTheme.MicrosoftBlue,
+                "night"=>ReaderTheme.Night,
+                "daylight"=>ReaderTheme.Light,
                 "dark" or "sombre" or "espresso" or "espresso & lin" or "espresso & linen"=>MigrateBlue(),
                 _=>ReaderTheme.System
             };
@@ -60,6 +62,8 @@ internal sealed class ThemePreference(string path)
             {
                 ReaderTheme.Chocolate=>"light",
                 ReaderTheme.MicrosoftBlue=>"blue",
+                ReaderTheme.Night=>"night",
+                ReaderTheme.Light=>"daylight",
                 _=>"system"
             };
             string key=ThemeKey(settings);
@@ -105,8 +109,12 @@ internal sealed class ThemePreference(string path)
     static string ThemeKey(JsonObject settings)=>
         settings.Select(p=>p.Key).FirstOrDefault(k=>k.Equals("theme",StringComparison.OrdinalIgnoreCase))??"theme";
 
-    internal static ThemeVariant Resolve(ReaderTheme choice,PlatformThemeVariant platform) =>
-        choice==ReaderTheme.MicrosoftBlue||choice==ReaderTheme.System&&platform==PlatformThemeVariant.Dark
-            ? ReaderPalette.BlueVariant
-            : ThemeVariant.Light;
+    internal static ThemeVariant Resolve(ReaderTheme choice, PlatformThemeVariant platform) => choice switch
+    {
+        ReaderTheme.Chocolate => ReaderPalette.ChocolateVariant,
+        ReaderTheme.MicrosoftBlue => ReaderPalette.BlueVariant,
+        ReaderTheme.Night => ThemeVariant.Dark,
+        ReaderTheme.System when platform == PlatformThemeVariant.Dark => ThemeVariant.Dark,
+        _ => ThemeVariant.Light
+    };
 }

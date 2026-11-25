@@ -44,7 +44,8 @@ internal sealed record PublicationPlan(string Profile,ImmutableArray<Publication
 internal sealed record PublicationMetadata(string Title,string? Author,string? Subject,string? Description,
     string? Keywords,string? Language,DateTimeOffset? Created,DateTimeOffset? Modified)
 {
-    internal SourceLocation? Origin {get;init;}
+    internal (string? Value,SourceLocation Origin)? DeclaredCreation {get;init;}
+    internal (string? Value,SourceLocation Origin)? DeclaredModification {get;init;}
 
     internal static PublicationMetadata Read(InspectionManifest manifest,string title)
     {
@@ -65,8 +66,15 @@ internal sealed record PublicationMetadata(string Title,string? Author,string? S
         }
         DateTimeOffset? Date(string name)=>DateTimeOffset.TryParse(Value(terms,name),CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal,out var date)?date:null;
+        (string? Value,SourceLocation Origin)? Declared(string name)
+        {
+            if(root is null)return null;
+            var declaration=nodes[root.Id].FirstOrDefault(n=>n.Name=="{"+terms+"}"+name);
+            return declaration is null?null:(Value(terms,name),declaration.Source);
+        }
         return new(Value(dc,"title")??title,Value(dc,"creator"),Value(dc,"subject"),Value(dc,"description"),
-            Value(cp,"keywords"),Value(dc,"language"),Date("created"),Date("modified")){Origin=root?.Source};
+            Value(cp,"keywords"),Value(dc,"language"),Date("created"),Date("modified"))
+        {DeclaredCreation=Declared("created"),DeclaredModification=Declared("modified")};
     }
 }
 
@@ -83,17 +91,23 @@ internal sealed class PublicationSource(InspectionResult inspection,PageComposit
 
 internal static class Publications
 {
+    internal sealed record Prepared(PublicationSource Source,PublicationRequest Request,PublicationPlan Plan,
+        StructuredPublication.Package? Package);
+
     internal static string Extension(ExportFormat format)=>format switch
     {
         ExportFormat.Pdf=>"pdf",ExportFormat.Odt=>"odt",ExportFormat.Epub3=>"epub",ExportFormat.Nova=>"nova",
         _=>throw new ArgumentOutOfRangeException(nameof(format))
     };
 
-    internal static PublicationPlan Prepare(PublicationSource source,PublicationRequest request,CancellationToken token)
+    internal static PublicationPlan Prepare(PublicationSource source,PublicationRequest request,CancellationToken token)=>
+        PrepareWrite(source,request,token).Plan;
+
+    internal static Prepared PrepareWrite(PublicationSource source,PublicationRequest request,CancellationToken token)
     {
-        if(Invalid(source,request,token) is {} invalid)return invalid;
-        return request.Format==ExportFormat.Pdf?PdfPublication.Prepare(source,request,token):
-            StructuredPublication.Compile(source,request,token).Plan;
+        if(Invalid(source,request,token) is {} invalid)return new(source,request,invalid,null);
+        var package=request.Format==ExportFormat.Pdf?null:StructuredPublication.Compile(source,request,token);
+        return new(source,request,package?.Plan??PdfPublication.Prepare(source,request,token),package);
     }
 
     static PublicationPlan? Invalid(PublicationSource source,PublicationRequest request,CancellationToken token)
@@ -123,11 +137,14 @@ internal static class Publications
     }
 
     internal static string Write(PublicationSource source,PublicationRequest request,string destination,bool overwrite=false,
+        IProgress<PublicationProgress>? progress=null,CancellationToken token=default)=>
+        Write(PrepareWrite(source,request,token),destination,overwrite,progress,token);
+
+    internal static string Write(Prepared prepared,string destination,bool overwrite=false,
         IProgress<PublicationProgress>? progress=null,CancellationToken token=default)
     {
-        if(Invalid(source,request,token) is {} invalid)throw new PublicationRefusal(invalid.Issues);
-        var package=request.Format==ExportFormat.Pdf?null:StructuredPublication.Compile(source,request,token);
-        var plan=package?.Plan??PdfPublication.Prepare(source,request,token);
+        token.ThrowIfCancellationRequested();
+        var (source,request,plan,package)=prepared;
         if(!plan.Allowed)throw new PublicationRefusal(plan.Issues);
         string path=Path.GetFullPath(destination);
         if(!Path.GetExtension(path).Equals("."+Extension(request.Format),StringComparison.OrdinalIgnoreCase))

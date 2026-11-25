@@ -15,6 +15,7 @@ internal static class ReadingProtocol
     internal const string WorkerArgument = "--extension-worker-v1";
     const int InputLimit = 40 * 1024;
     const int OutputLimit = 12 * 1024;
+    const int ConfinementUnavailable = 78;
 
     internal static void Validate(ReadingContribution? contribution)
     {
@@ -61,6 +62,9 @@ internal static class ReadingProtocol
         else if (System.Reflection.Assembly.GetEntryAssembly() != assembly)
             throw new InvalidOperationException("Hôte du processus d’extension non reconnu.");
         start.ArgumentList.Add(WorkerArgument);
+        start.Environment.Clear();
+        start.Environment["DOTNET_EnableDiagnostics"] = "0";
+        start.Environment["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1";
 
         using var worker = Process.Start(start) ?? throw new IOException("Le processus d’extension n’a pas démarré.");
         using var stop = token.Register(() =>
@@ -76,6 +80,8 @@ internal static class ReadingProtocol
             await worker.StandardInput.WriteAsync(JsonSerializer.Serialize(request,PlatformFiles.Json).AsMemory(),token);
             worker.StandardInput.Close();
             await Task.WhenAll(output,stderr,worker.WaitForExitAsync(token));
+            if (worker.ExitCode == ConfinementUnavailable)
+                throw new PlatformNotSupportedException("Le noyau ne permet pas le confinement du processus d’extension.");
             if (worker.ExitCode != 0) throw new InvalidDataException("Le processus de l’extension s’est interrompu.");
             var response = ExtensionPackage.Decode<ReadingResponse>(await output);
             ExtensionPackage.Require(response.ApiVersion == request.ApiVersion && response.RequestId == request.RequestId,
@@ -97,28 +103,39 @@ internal static class ReadingProtocol
         }
     }
 
-    internal static int RunWorker(Stream input, Stream output)
+    internal static int RunIsolatedWorker()
     {
+        // Initialize the runtime and serializers with an internal request before denying all file opens.
+        var metrics = new DocumentMetrics(1, 1, 1, 0, 0, 1);
+        var sample = new ReadingContribution([new("Épreuve", ["paragraphs", "1", "+"])]);
+        var request = new ReadingRequest(ExtensionPackage.Api, Guid.Empty.ToString("N"), metrics, sample);
         try
         {
-            var request = ExtensionPackage.Decode<ReadingRequest>(PlatformFiles.ReadBounded(input,InputLimit));
-            ExtensionPackage.Require(request.ApiVersion == ExtensionPackage.Api &&
-                Guid.TryParseExact(request.RequestId,"N",out _) && request.Document is not null, "Requête du lecteur invalide.");
-            Validate(request.Contribution);
-            ReadingResponse response;
-            try
-            {
-                response = new(request.ApiVersion,request.RequestId,request.Contribution.Metrics.Select(
-                    m => new MetricResult(m.Label,Evaluate(m.Expression,request.Document))).ToArray(),null);
-            }
-            catch (ArithmeticException)
-            {
-                response = new(request.ApiVersion,request.RequestId,null,"arithmetic");
-            }
-            JsonSerializer.Serialize(output,response,PlatformFiles.Json);
+            EvaluateRequest(JsonSerializer.SerializeToUtf8Bytes(request, PlatformFiles.Json));
+            if (!ReadingWorkerIsolation.Apply()) return ConfinementUnavailable;
+            ReadingWorkerIsolation.WriteResponse(EvaluateRequest(ReadingWorkerIsolation.ReadRequest(InputLimit)));
             return 0;
         }
         catch (Exception error) when (error is IOException or InvalidDataException or JsonException) { return 65; }
+    }
+
+    static byte[] EvaluateRequest(byte[] input)
+    {
+        var request = ExtensionPackage.Decode<ReadingRequest>(input);
+        ExtensionPackage.Require(request.ApiVersion == ExtensionPackage.Api &&
+            Guid.TryParseExact(request.RequestId,"N",out _) && request.Document is not null, "Requête du lecteur invalide.");
+        Validate(request.Contribution);
+        ReadingResponse response;
+        try
+        {
+            response = new(request.ApiVersion,request.RequestId,request.Contribution.Metrics.Select(
+                m => new MetricResult(m.Label,Evaluate(m.Expression,request.Document))).ToArray(),null);
+        }
+        catch (ArithmeticException)
+        {
+            response = new(request.ApiVersion,request.RequestId,null,"arithmetic");
+        }
+        return JsonSerializer.SerializeToUtf8Bytes(response, PlatformFiles.Json);
     }
 
     static decimal Evaluate(string[] expression, DocumentMetrics m)

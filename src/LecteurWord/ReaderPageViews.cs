@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -272,12 +273,14 @@ public sealed partial class ReaderWindow
         var image=new Image{Name="CalculatedPage",Tag=numberValue,Stretch=Stretch.Fill};
         image.PointerPressed+=(_,e)=>PagePointerPressed(index,image,e);
         var selection=new NativeSelectionOverlay{Name="NativePageSelection",IsHitTestVisible=false,ClipToBounds=true};
+        ReaderAppearance.Use(selection,TextElement.ForegroundProperty,ReaderAppearance.Accent);
         var marks=new PageMarksOverlay{Name="PageNonprintingMarks",IsHitTestVisible=false,ClipToBounds=true};
         var layers=new Panel{ClipToBounds=true,Children={image,selection,marks}};
         var paper=new Border{Background=Brushes.White,Child=layers,
             BoxShadow=new BoxShadows(new BoxShadow{Blur=12,Color=Color.Parse("#36000000"),OffsetY=2})};
         var number=new TextBlock{Text=numberValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Foreground=SecondaryInk,FontSize=10,Height=PageNumberSpace,HorizontalAlignment=HorizontalAlignment.Center};
+            FontSize=10,Height=PageNumberSpace,HorizontalAlignment=HorizontalAlignment.Center};
+        ReaderAppearance.Use(number,TextBlock.ForegroundProperty,ReaderAppearance.Secondary);
         var container=new Border{Name="PhysicalPage",Tag=id,Child=new StackPanel{Children={paper,number}}};
         AutomationProperties.SetName(container,T("Page physique ","Physical page ")+numberValue);
         pageDeck.Children.Add(container);
@@ -298,7 +301,7 @@ public sealed partial class ReaderWindow
         {
             long pixels=(long)Math.Ceiling(geometry.Width*scale)*(long)Math.Ceiling(geometry.Height*scale);
             TrimRasters(RasterBudget-pixels);
-            using var stream=new MemoryStream(Composer.PagePng(source,scale));
+            using var stream=ReadingPagePng(source,scale);
             var image=new Bitmap(stream);
             raster=new(image,(long)image.PixelSize.Width*image.PixelSize.Height);
             pageRasters.Add(key,raster);
@@ -339,7 +342,6 @@ public sealed partial class ReaderWindow
         foreach(var (index,visual) in pageVisuals)
         {
             AutomationProperties.SetName(visual.Frame,T("Page physique ","Physical page ")+(index+1));
-            if(((StackPanel)visual.Frame.Child!).Children[1] is TextBlock number)number.Foreground=SecondaryInk;
         }
     }
 }

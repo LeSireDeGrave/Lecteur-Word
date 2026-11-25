@@ -32,7 +32,8 @@ static partial class PageCases
         var style=Fixtures.Xml("styles","""
             <w:style w:type="paragraph" w:styleId="ListBase"><w:pPr>
               <w:numPr><w:numId w:val="7"/></w:numPr></w:pPr></w:style>
-            <w:style w:type="paragraph" w:styleId="ListDerived"><w:basedOn w:val="ListBase"/></w:style>
+            <w:style w:type="paragraph" w:styleId="ListDerived"><w:basedOn w:val="ListBase"/>
+              <w:pPr><w:ind w:left="1360"/></w:pPr></w:style>
             """);
         const string inherited="""<w:pStyle w:val="ListDerived"/>""";
         const string directTab="""<w:tabs><w:tab w:val="clear" w:pos="900"/><w:tab w:val="left" w:pos="1040"/></w:tabs>""";
@@ -70,6 +71,8 @@ static partial class PageCases
         var rightWidth=right.Decoration!.Fragment.Measure!.Metrics.Width;
         Check(center.X==400*635-centerWidth/2&&center.TextStart>center.X+centerWidth&&
             right.X+rightWidth==400*635&&right.TextStart==400*635,"Alignement ou avance du suffixe.");
+        Check(center.Properties.Left==900*635&&s.RulerModel!.Paragraphs.Single(p=>p.Text=="Hérité").Properties.Left==45,
+            "La numérotation Word doit surcharger le retrait du style de paragraphe dans la mesure et le modèle.");
         Check(first.Ascent>=firstMarker.Decoration!.Fragment.Measure!.Metrics.Ascent,"Métriques de marque.");
         Check(s.Composition.Pages.Any(p=>p.Lines.Any(l=>l.Text=="Reprise")&&p.Lines.Any(l=>l.Text=="Après reprise")),
             "Deux entrées de liste solidaires ont été séparées.");
@@ -87,6 +90,16 @@ static partial class PageCases
         Check(Enumerable.Range(y0,y1-y0).Any(y=>Enumerable.Range(x0,x1-x0).Any(x=>
             bitmap.GetPixel(x,y) is {Red:>100,Green:<95,Blue:<95})),"Le glyphe coloré n’est pas dessiné à la boîte mesurée.");
         File.WriteAllBytes(Path.Combine(root,"listes-natives.png"),png);
+
+        string numberedUnderline=number.Replace("<w:sz w:val=\"32\"/></w:rPr>",
+            """<w:sz w:val="32"/><w:u w:val="double" w:color="721919"/></w:rPr>""",StringComparison.Ordinal);
+        using var underlined=Compose(Fixture("page-numbered-underline",P("Libellé",ListProperties(7,0))+Section(),numberedUnderline));
+        Complete(underlined.Snapshot,1);
+        var marked=Line(underlined.Snapshot,"Libellé").Native!;
+        var underline=marked.Underlines;
+        Check(underline.Length==2&&underline.All(r=>r.Color=="721919"&&
+            r.Source.Location.PartUri=="/word/numbering.xml"&&r.Ink.Right<marked.ContentLeft),
+            "Le chiffre et son double soulignement restent distincts du suffixe et du texte courant.");
 
         using var field=Compose(Fixture("page-list-field",P("Item",ListProperties(7,0))+
             Paragraph("""<w:fldSimple w:instr="PAGEREF Signet"><w:r><w:t>42</w:t></w:r></w:fldSimple>""")+Section(),number));

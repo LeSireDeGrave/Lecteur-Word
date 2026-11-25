@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -22,7 +23,6 @@ public sealed partial class ReaderWindow
     readonly Button zoomReset=new(){Name="ZoomReset",Content="100 %",MinWidth=56,Height=31};
     readonly StackPanel pageActions=new(){Orientation=Orientation.Horizontal};
     readonly StackPanel zoomActions=new(){Orientation=Orientation.Horizontal,Spacing=2};
-    readonly List<Border> groupDividers=[];
     Button? rulerToggle,marksToggle,panelToggle,navigationToggle;
     bool elementsVisible;
     bool preferElements;
@@ -38,19 +38,33 @@ public sealed partial class ReaderWindow
 
     void InitializeWorkspace(Grid root)
     {
-        var titleRow=new Grid{ColumnDefinitions=new("Auto,Auto,*,Auto"),Margin=new Thickness(16,0)};
+        var titleRow=new Grid{ColumnDefinitions=new("Auto,Auto,*,Auto,Auto"),Margin=new Thickness(16,0)};
         titleRow.Children.Add(BrandAssets.CreateImage(26));
         var title=new TextBlock{Text="Lecteur Word",Margin=new Thickness(9,0,18,0),FontSize=15,FontWeight=FontWeight.SemiBold,VerticalAlignment=VerticalAlignment.Center};
         Grid.SetColumn(title,1);titleRow.Children.Add(title);
         Grid.SetColumn(fileLabel,2);titleRow.Children.Add(fileLabel);
-        var lang=IconButton("globe","Passer en anglais","Switch to French",()=>{SetLanguage(!english);return Task.CompletedTask;});
-        lang.Name="LanguageToggle";
+        var lang=BuildLanguageButton();
         lang.VerticalAlignment=VerticalAlignment.Center;
-        Grid.SetColumn(lang,3);titleRow.Children.Add(lang);
+        var puzzle=IconButton("puzzle","Gérer les extensions","Manage extensions",()=>ShowExtensionsAsync());
+        puzzle.Name="PlatformExtensions";
+        puzzle.IsEnabled=extensions is not null;
+        puzzle.VerticalAlignment=VerticalAlignment.Center;
+        var languageAndExtensions=new StackPanel{Orientation=Orientation.Horizontal,FlowDirection=FlowDirection.LeftToRight,
+            Children={lang,puzzle}};
+        Grid.SetColumn(languageAndExtensions,3);titleRow.Children.Add(languageAndExtensions);
+        var preferences=IconButton("system","Préférences d’accessibilité","Accessibility preferences",ShowPreferencesAsync);
+        preferences.Name="ReaderPreferences";
+        preferences.VerticalAlignment=VerticalAlignment.Center;
+        Grid.SetColumn(preferences,4);titleRow.Children.Add(preferences);
         header.Child=titleRow;root.Children.Add(header);
 
         toolbarBorder.Child=tools;Grid.SetRow(toolbarBorder,1);root.Children.Add(toolbarBorder);
         var navScroll=new ScrollViewer{Content=navigation,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};
+        viewport.Focusable=true;
+        viewport.FlowDirection=FlowDirection.LeftToRight;
+        ruler.FlowDirection=FlowDirection.LeftToRight;
+        readingList.FlowDirection=FlowDirection.LeftToRight;
+        viewport.GotFocus+=(_,_)=>AutomationProperties.SetName(viewport,T("Pages du document","Document pages"));
         sidebar.Child=navScroll;body.Children.Add(sidebar);Grid.SetColumn(navigationSplitter,1);body.Children.Add(navigationSplitter);
 
         var center=new Grid{RowDefinitions=new("Auto,*")};
@@ -76,8 +90,34 @@ public sealed partial class ReaderWindow
         navigationSplitter.KeyUp+=(_,_)=>RememberPanelWidths();
         elementSplitter.KeyUp+=(_,_)=>RememberPanelWidths();
         SizeChanged+=(_,_)=>UpdatePanels();
-        AutomationProperties.SetName(navigationSplitter,"Largeur de navigation / Navigation width");
-        AutomationProperties.SetName(elementSplitter,"Largeur des éléments / Elements width");
+        ReaderAppearance.Use(header,Border.BackgroundProperty,ReaderAppearance.Header);
+        ReaderAppearance.Use(header,TextElement.ForegroundProperty,ReaderAppearance.HeaderInk);
+        ReaderAppearance.Use(footer,Border.BackgroundProperty,ReaderAppearance.Footer);
+        ReaderAppearance.Use(toolbarBorder,Border.BackgroundProperty,ReaderAppearance.Toolbar);
+        ReaderAppearance.Use(stage,Border.BackgroundProperty,ReaderAppearance.Stage);
+        foreach(var border in new[]{sidebar,documentPanel,rulerBar})
+            ReaderAppearance.Use(border,Border.BackgroundProperty,ReaderAppearance.Surface);
+        foreach(var border in new[]{toolbarBorder,footer,sidebar,documentPanel})
+            ReaderAppearance.Use(border,Border.BorderBrushProperty,ReaderAppearance.Line);
+        toolbarBorder.BorderThickness=new Thickness(0,1,0,1);
+        footer.BorderThickness=new Thickness(0,1,0,0);
+        sidebar.BorderThickness=new Thickness(0,0,1,0);
+        documentPanel.BorderThickness=new Thickness(1,0,0,0);
+        ReaderAppearance.Use(fileLabel,TextBlock.ForegroundProperty,ReaderAppearance.HeaderMuted);
+        foreach(var label in new[]{buildLabel,warning,navPosition,rulerInfo,elementSummary})
+            ReaderAppearance.Use(label,TextBlock.ForegroundProperty,ReaderAppearance.Secondary);
+        foreach(var splitter in new[]{navigationSplitter,elementSplitter})
+            ReaderAppearance.Use(splitter,GridSplitter.BackgroundProperty,ReaderAppearance.Line);
+        foreach(var action in new[]{lang,puzzle,preferences})action.Classes.Add("reader-header");
+        NameWorkspaceRegions();
+    }
+
+    void NameWorkspaceRegions()
+    {
+        AutomationProperties.SetName(navigationSplitter,T("Largeur de navigation","Navigation width"));
+        AutomationProperties.SetName(elementSplitter,T("Largeur des éléments","Elements width"));
+        AutomationProperties.SetName(viewport,T("Pages du document","Document pages"));
+        AutomationProperties.SetName(readingList,T("Texte du document","Document text"));
     }
 
     StackPanel AddGroup(params Control[] controls)
@@ -86,7 +126,7 @@ public sealed partial class ReaderWindow
         if(tools.Children.Count>0)
         {
             var divider=new Border{Width=1,Height=17,Margin=new Thickness(6,0),VerticalAlignment=VerticalAlignment.Center};
-            group.Children.Add(divider);groupDividers.Add(divider);
+            ReaderAppearance.Use(divider,Border.BackgroundProperty,ReaderAppearance.Line);group.Children.Add(divider);
         }
         foreach(var c in controls)group.Children.Add(c);
         tools.Children.Add(group);return group;
@@ -106,7 +146,7 @@ public sealed partial class ReaderWindow
         bottom.Children.Add(facts);
         var identity=new StackPanel{Orientation=Orientation.Horizontal,Spacing=2,VerticalAlignment=VerticalAlignment.Center};
         zoomReset.Click+=(_,_)=>SetZoom(1);
-        zoomReset.Padding=new Thickness(5,2);zoomReset.Background=Brushes.Transparent;zoomReset.BorderThickness=new Thickness(0);
+        zoomReset.Padding=new Thickness(5,2);zoomReset.Classes.Add("reader-flat");
         zoomActions.Children.Add(zoomOut);zoomActions.Children.Add(zoomReset);zoomActions.Children.Add(zoomIn);zoomActions.Children.Add(fitWidth);
         identity.Children.Add(zoomActions);identity.Children.Add(properties);identity.Children.Add(diagnostics);
         identity.Children.Add(copyBuild);identity.Children.Add(buildLabel);identity.Children.Add(copyConfirmation);
@@ -158,9 +198,6 @@ public sealed partial class ReaderWindow
     void UpdateToggle(Button? button,bool active)
     {
         if(button is null)return;
-        button.Background=active?AccentFill:Brushes.Transparent;
-        button.BorderThickness=active&&ActualThemeVariant==ReaderPalette.BlueVariant?new Thickness(0,0,0,2):new Thickness(0);
-        button.BorderBrush=active&&ActualThemeVariant==ReaderPalette.BlueVariant?ReaderPalette.BluePrimary:Brushes.Transparent;
         if(active)button.Classes.Add("active");else button.Classes.Remove("active");
     }
 
@@ -173,7 +210,8 @@ public sealed partial class ReaderWindow
         if(countsLabel.IsVisible)
         {
             var n=documentIndex!;
-            countsLabel.Text=T($"{n.Words:N0} mots · {n.Characters:N0} car.",$"{n.Words:N0} words · {n.Characters:N0} chars");
+            countsLabel.Text=LocalCount("document.words",n.Words,"{0:N0} mot","{0:N0} mots","{0:N0} word","{0:N0} words")
+                +" · "+LocalCount("document.characters",n.Characters,"{0:N0} caractère","{0:N0} caractères","{0:N0} character","{0:N0} characters");
             ToolTip.SetTip(countsLabel,T("Corps lisible et cellules, y compris les valeurs de champs affichées. Notes, en-têtes et pieds exclus. Caractères comptés en points de code Unicode.",
                 "Readable body and cells, including visible stored fields. Excludes notes, headers and footers. Characters are Unicode code points."));
         }
@@ -182,7 +220,7 @@ public sealed partial class ReaderWindow
         ToolTip.SetTip(languageLabel,T("Langue déclarée du document ou langue par défaut des styles","Declared document language or style default"));
         zoomActions.IsVisible=paginated||IsSimplifiedReading;
         fitWidth.IsVisible=paginated;
-        zoomReset.Content=Zoom.ToString("P0");
+        zoomReset.Content=Zoom.ToString("P0",uiCulture);
         ToolTip.SetTip(zoomReset,T("Rétablir le zoom à 100 % (Ctrl+0)","Reset zoom to 100% (Ctrl+0)"));
         AutomationProperties.SetName(zoomReset,T("Rétablir le zoom à 100 %","Reset zoom to 100%"));
         sideTitle.Text=T("Éléments du document","Document elements");
@@ -190,9 +228,5 @@ public sealed partial class ReaderWindow
         AutomationProperties.SetName(elementQuery,elementQuery.PlaceholderText);
     }
 
-    IBrush AccentFill=>Palette.Selected;
-    IBrush FineLine=>Palette.Line;
-    IBrush PanelColor=>Palette.Panel;
-    IBrush SecondaryInk=>Palette.Secondary;
     static IBrush Brush(string value)=>new SolidColorBrush(Color.Parse(value));
 }

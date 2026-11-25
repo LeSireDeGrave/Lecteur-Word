@@ -84,6 +84,7 @@ static class ReadingUxCases
     {
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).UseSkia().WithInterFont().SetupWithoutStarting();
         var window=new ReaderWindow();window.Show();AboutCases.Complete(window.OpenDocumentAsync(Fixture(root)));
+        window.SetReadingView(ReadingView.Continuous);
         Check(window.IsSimplifiedReading&&window.CurrentPage==0,"Fictitious pagination");
         Check(!window.GetVisualDescendants().OfType<Button>().Any(b=>b.Content is string s&&s=="Miniatures"),"Non-contextual thumbnail command");
         Check(!VisibleText(window).Contains("urn:ux-test",StringComparison.Ordinal)&&!VisibleText(window).Contains("[Fin de note]",StringComparison.Ordinal),"Technical markup still dominates text");

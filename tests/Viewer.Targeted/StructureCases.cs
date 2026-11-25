@@ -1,3 +1,4 @@
+using Avalonia.Interactivity;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -169,7 +170,12 @@ static class StructureCases
         var sourceLine=composition.Pages.Last().Lines.Last(l=>l.CellId is not null&&!l.IsRepeated);
         var paragraph=ReadablePresentation.Walk(window.CurrentReading!.Blocks).First(b=>b.Source==sourceLine.Source&&(b.Kind=="paragraph"||b.Kind=="heading"));
         Check(window.NavigateToBlock(paragraph.Id)&&!window.IsSimplifiedReading&&window.CurrentPage==composition.Pages.Count,"Cell paragraph navigation did not reach the calculated page");
-        var mode=window.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="ReadingMode");mode.SelectedIndex=1;Dispatcher.UIThread.RunJobs();Check(window.IsSimplifiedReading,"Simplified mode unavailable");mode.SelectedIndex=0;Dispatcher.UIThread.RunJobs();Check(window.CurrentPage>0,"Return to pages failed");Check(!window.ExportAvailable(ExportFormat.Pdf),"Rich viewer loosened export guard");
+        window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewContinuous").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+        Check(window.IsSimplifiedReading&&window.ExportAvailable(ExportFormat.Pdf),"The qualified PDF stays available in continuous reading.");
+        window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewSinglePage").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+        Check(window.CurrentPage>0&&window.ExportAvailable(ExportFormat.Pdf),"Returning to the composed pages preserves the qualified PDF export.");
     }
     public static async Task Native(ReaderWindow window,string root)
     {

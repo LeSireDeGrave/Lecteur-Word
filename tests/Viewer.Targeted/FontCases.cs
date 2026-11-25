@@ -197,16 +197,17 @@ static partial class FontCases
     static void VerifyProperties(ReaderWindow window)
     {
         Check(window.CurrentComposition?.Available==true,"No paginated font fixture");
-        Check(!window.ExportAvailable(ExportFormat.Pdf)&&!window.ExportAvailable(ExportFormat.Odt)&&!window.ExportAvailable(ExportFormat.Epub3),"Font composition incorrectly extended export qualification");
+        Check(window.ExportAvailable(ExportFormat.Pdf)&&window.ExportAvailable(ExportFormat.Odt)&&window.ExportAvailable(ExportFormat.Epub3),
+            "The fixture with qualified font substitution remains available in the compatible formats.");
         foreach(bool en in new[]{false,true})
         {
             window.SetTheme(en?2:1);window.SetLanguage(en);window.Width=860;window.Height=620;Dispatcher.UIThread.RunJobs();
-            var properties=window.GetVisualDescendants().OfType<Button>().Single(b=>b.Content as string==(en?"Properties":"Propriétés"));properties.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
+            var properties=window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="DocumentProperties");properties.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
             var section=window.GetVisualDescendants().OfType<StackPanel>().Single(p=>p.Name=="DocumentFonts");Check(ReadingUxCases.VisibleText(section).Contains(en?"Document fonts":"Polices du document",StringComparison.Ordinal),"Font property section missing");
             foreach(var expander in section.Children.OfType<Expander>())expander.IsExpanded=true;Dispatcher.UIThread.RunJobs();Check(ReadingUxCases.VisibleText(section).Contains(Missing,StringComparison.Ordinal),"Missing font not visible");
             using var report=JsonDocument.Parse(window.DetailedDiagnosticReport());Check(report.RootElement.GetProperty("fonts").GetProperty("uses").GetArrayLength()>0,"Fonts absent from technical report");
             Check(!Encoding.UTF8.GetString(window.DetailedDiagnosticReport()).Contains("\"bytes\":\"",StringComparison.Ordinal),"Font payload exposed in report");
-            var mode=window.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="ReadingMode");mode.SelectedIndex=1;Dispatcher.UIThread.RunJobs();Check(window.IsSimplifiedReading,"Simplified mode lost");mode.SelectedIndex=0;Dispatcher.UIThread.RunJobs();Check(window.CurrentPage>0,"Paginated mode lost");
+            window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewContinuous").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();Check(window.IsSimplifiedReading,"Simplified mode lost");window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewSinglePage").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();Check(window.CurrentPage>0,"Paginated mode lost");
         }
     }
     public static async Task Native(ReaderWindow window,string root)

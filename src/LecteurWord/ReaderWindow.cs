@@ -51,17 +51,16 @@ public sealed partial class ReaderWindow:Window
     PageCompositionLease? nativePageLease;
     internal string? NativePageStatus {get;private set;}
     IReadOnlyList<PagePlacementGap> nativePageGaps=[];
-    int page;double zoom=1;bool english,navVisible=true,initialized,closed;
+    int page;double zoom=1;bool english,navVisible=true,closed;
     readonly ThemePreference? themePreference;
-    ReaderTheme themeChoice;
-    IPlatformSettings? themePlatform;
-    readonly Button chocolateTheme,blueTheme,systemTheme;
+    readonly ReaderAppearance appearance;
+    readonly Button chocolateTheme,blueTheme,nightTheme,systemTheme,lightTheme;
     string navMode="pages",fileName="";
     public InspectionResult? Inspection=>inspection;
     public Composition? CurrentComposition=>composition;
     public int CurrentPage=>composition?.Available==true&&!simplified?page+1:0;
     public double Zoom=>IsSimplifiedReading?readingZoom:zoom;
-    public string Language=>english?"en":"fr";
+    public string Language=>uiCulture.Name;
     public bool NavigationVisible=>navVisible;
     public bool ExportAvailable(ExportFormat format)
     {
@@ -69,12 +68,16 @@ public sealed partial class ReaderWindow:Window
         try{return Publications.Prepare(new(inspection,lease.Snapshot,fileName),new(format),default).Allowed;}
         catch(InvalidDataException){return false;}
     }
-    string T(string fr,string en)=>english?en:fr;
+    string T(string fr,string en)=>Translate(fr,en);
     public ReaderWindow():this(null){}
 
     internal ReaderWindow(ThemePreference? preference, SessionRecoveryService? recovery = null, string? startupWarning = null, ExtensionManagerService? extensions = null)
     {
         themePreference=preference;this.recovery=recovery;this.startupWarning=startupWarning;this.extensions=extensions;
+        appearance=ReaderAppearance.Current;
+        LoadLanguage();
+        LoadAccessibility();
+        LoadReadingColor();
         if(preference is not null)historicalFontPreferences=new(Path.Combine(preference.DirectoryPath,"historical-fonts.json"));
         Title="Lecteur Word";Icon=BrandAssets.WindowIcon;Width=1240;Height=850;MinWidth=640;MinHeight=500;
         FontFamily=new FontFamily("avares://Avalonia.Fonts.Inter/Assets#Inter");FontSize=13;
@@ -83,7 +86,7 @@ public sealed partial class ReaderWindow:Window
         var properties=IconButton("info","Propriétés du document","Document properties",()=>{ShowPanel("properties");return Task.CompletedTask;});
         properties.Name="DocumentProperties";
         export=IconButton("export","Exporter","Export",ShowPublicationAsync);
-        export.Name="OpenPublication";
+        export.Name="OpenPublication";UpdateToggle(export,true);
         AddGroup(open,properties,export);
 
         var outline=IconButton("nav","Sommaire","Outline",()=>{ShowPanel("outline");return Task.CompletedTask;});
@@ -99,10 +102,14 @@ public sealed partial class ReaderWindow:Window
         var fitPage=IconButton("fit","Ajuster à la largeur (Ctrl+9)","Fit to width (Ctrl+9)",()=>{FitToWidth();return Task.CompletedTask;});fitPage.Name="TopFitWidth";
         chocolateTheme=IconButton("sun","Chocolat & Crème","Chocolate & Cream",()=>{SetTheme(1);return Task.CompletedTask;});
         blueTheme=IconButton("palette","Bleu Microsoft","Microsoft Blue",()=>{SetTheme(2);return Task.CompletedTask;});
+        nightTheme=IconButton("moon","Sombre","Dark",()=>{SetTheme(3);return Task.CompletedTask;});
         systemTheme=IconButton("system","Système","System",()=>{SetTheme(0);return Task.CompletedTask;});
-        chocolateTheme.Name="ThemeChocolate";blueTheme.Name="ThemeMicrosoftBlue";systemTheme.Name="ThemeSystem";
+        lightTheme=IconButton("daylight","Clair","Light",()=>{SetTheme(4);return Task.CompletedTask;});
+        lightTheme.Name="ThemeLight";
+        chocolateTheme.Name="ThemeChocolate";blueTheme.Name="ThemeMicrosoftBlue";
+        nightTheme.Name="ThemeNight";systemTheme.Name="ThemeSystem";
         InitializeViewButtons();
-        AddGroup(rulerToggle,marksToggle,fitPage,chocolateTheme,blueTheme,systemTheme);
+        AddGroup(rulerToggle,marksToggle,fitPage,lightTheme,chocolateTheme,blueTheme,nightTheme,systemTheme,ReadingColorButton());
 
         navigationToggle=IconButton("sidebar","Afficher ou masquer la navigation (F9)","Toggle navigation (F9)",()=>{ToggleNavigation();return Task.CompletedTask;});navigationToggle.Name="ToggleNavigation";
         panelToggle=IconButton("drawer","Afficher ou masquer les éléments (F8)","Toggle document elements (F8)",()=>{ToggleElements();return Task.CompletedTask;});panelToggle.Name="ToggleElements";
@@ -113,12 +120,25 @@ public sealed partial class ReaderWindow:Window
         zoomIn=IconButton("plus","Agrandir (Ctrl++)","Zoom in (Ctrl++)",()=>{SetZoom(Zoom+.1);return Task.CompletedTask;});
         fitWidth=IconButton("fit","Ajuster à la largeur (Ctrl+9)","Fit to width (Ctrl+9)",()=>{FitToWidth();return Task.CompletedTask;});
         var copyBuild=IconButton("copy","Copier la référence du build","Copy build reference",CopyBuildReferenceAsync);copyBuild.Name="CopyBuildReference";
-        diagnostics=IconButton("info","À propos de Lecteur Word","About Lecteur Word",async()=>await new AboutWindow(english){RequestedThemeVariant=RequestedThemeVariant}.ShowDialog(this));diagnostics.Name="AboutLecteurWord";
+        diagnostics=IconButton("info","À propos de Lecteur Word","About Lecteur Word",
+            async()=>await TrackDialog(new AboutWindow(() => english,T)).ShowDialog(this));diagnostics.Name="AboutLecteurWord";
         var footerProperties=IconButton("properties","Propriétés du document","Document properties",()=>{ShowPanel("properties");return Task.CompletedTask;});
         footerProperties.Name="FooterDocumentProperties";
 
         InitializePlatformButtons();
+        tools.Children.Add(navigationExtensionsToolbar);
         InitializeWorkspace(root);InitializeFooter(root,footerProperties,copyBuild);
+        DragDrop.SetAllowDrop(root,true);
+        DragDrop.AddDragOverHandler(root,(_,args)=>
+        {
+            args.DragEffects=DroppedDocument(args) is null?DragDropEffects.None:DragDropEffects.Copy;
+            args.Handled=true;
+        });
+        DragDrop.AddDropHandler(root,async (_,args)=>
+        {
+            args.Handled=true;
+            if(DroppedDocument(args) is {} path)await OpenDocumentAsync(path);
+        });
         openReading.Click+=(_,_)=>SetReadingView(ReadingView.Continuous);
         openDiagnostics.Click+=(_,_)=>ShowPanel("diagnostics");
         sizeDependentControls=[fitPage];
@@ -127,12 +147,11 @@ public sealed partial class ReaderWindow:Window
         viewport.SizeChanged+=(_,_)=>{if(fittingWidth&&composition?.Available==true&&!simplified)FitToWidth();UpdateRuler();};
         AddHandler(KeyDownEvent,OnWorkspaceKeys,RoutingStrategies.Tunnel);
         KeyDown+=OnKeys;Closed+=(_,_)=>{closed=true;copyTimer.Stop();typographyCancellation?.Cancel();pending?.Cancel();exportCancellation?.Cancel();ResetPageDeck();nativePageLease?.Dispose();foreach(var thumb in thumbnails)thumb.Dispose();};
-        ActualThemeVariantChanged+=(_,_)=>{if(initialized)PaintTheme();};
-        themeChoice=themePreference?.Load()??ReaderTheme.System;
-        themePlatform=Application.Current?.PlatformSettings;
-        if(themePlatform is not null)themePlatform.ColorValuesChanged+=OnSystemColorsChanged;
-        Closed+=(_,_)=>{if(themePlatform is not null)themePlatform.ColorValuesChanged-=OnSystemColorsChanged;};
-        initialized=true;ApplyTheme();UpdateUi();
+        appearance.Changed+=UpdateThemeIndicators;
+        Closed+=(_,_)=>appearance.Changed-=UpdateThemeIndicators;
+        appearance.Configure(themePreference,HighContrast);
+        UpdateThemeIndicators();
+        ApplyInterfaceScale();UpdateUi();FillPanel();
         InitializeRecovery();
     }
     public async Task CopyBuildReferenceAsync()
@@ -147,7 +166,7 @@ public sealed partial class ReaderWindow:Window
     }
     Button IconButton(string icon,string fr,string en,Func<Task> action)
     {
-        var b=new Button{Content=Icons.Make(icon),Width=32,Height=31,Padding=new Thickness(6),CornerRadius=new CornerRadius(5),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Name="Action_"+icon+"_"+labels.Count};
+        var b=new Button{Content=Icons.Make(icon),Width=32,Height=31,Padding=new Thickness(6),CornerRadius=new CornerRadius(5),Classes={"reader-flat"},Name="Action_"+icon+"_"+labels.Count};
         labels.Add((b,fr,en));ToolTip.SetTip(b,T(fr,en));AutomationProperties.SetName(b,T(fr,en));
         b.Click+=async(_,_)=>{try{await action();}catch(Exception error){RecordIncident(error,SessionStage.Interface);status.Text=T("Action interrompue — consulter le rapport","Action interrupted — view incident report");}};return b;
     }
@@ -156,6 +175,15 @@ public sealed partial class ReaderWindow:Window
         var files=await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions{Title=T("Ouvrir un document Word","Open a Word document"),AllowMultiple=false,FileTypeFilter=[new FilePickerFileType("DOCX"){Patterns=["*.docx"]},FilePickerFileTypes.All]});
         if(files.Count>0 && files[0].TryGetLocalPath() is {} path)await OpenDocumentAsync(path);
     }
+
+    static string? DroppedDocument(DragEventArgs args)
+    {
+        if(args.DataTransfer.TryGetFiles() is not [IStorageFile file] || file.TryGetLocalPath() is not {} path)
+            return null;
+        return Path.IsPathFullyQualified(path)&&Path.GetExtension(path).Equals(".docx",StringComparison.OrdinalIgnoreCase)
+            ? path : null;
+    }
+
     public Task OpenDocumentAsync(string path) => OpenDocumentAsync(path, null);
 
     async Task OpenDocumentAsync(string path, ReadingSnapshot? restore)
@@ -262,10 +290,12 @@ public sealed partial class ReaderWindow:Window
     public void GoToPage(int index)
     {
         if(!ShowsCalculatedPages||simplified)return;
+        var before=restoringPosition?null:CapturePosition();
         ActivatePage(Math.Clamp(index,0,composition!.Pages.Count-1));
         if(fittingWidth)FitToWidth();
         RevealPage(page);
         UpdateActions();UpdateNavigationPosition();if(navMode=="pages")FillPanel();
+        RememberNavigation(before);
     }
     public void SetZoom(double value)
     {
@@ -308,81 +338,57 @@ public sealed partial class ReaderWindow:Window
             try { extensions.SetEnabled(extension.Manifest.Id,false); }
             catch (Exception error) { RecordIncident(error,SessionStage.ApplyExtension,extension.Manifest.Identity); return; }
             activeTheme=null;
-            extensionPalette=null;
-            Resources.Remove("SystemAccentColor");
         }
-        themeChoice=value switch{1=>ReaderTheme.Chocolate,2=>ReaderTheme.MicrosoftBlue,_=>ReaderTheme.System};
-        ApplyTheme();
-        if(themePreference?.Save(themeChoice)==false)
+        var choice=Enum.IsDefined((ReaderTheme)value)?(ReaderTheme)value:ReaderTheme.System;
+        appearance.Set(choice,null,HighContrast);
+        if(themePreference?.Save(choice)==false)
             status.Text=T("Thème appliqué · préférence non enregistrée","Theme applied · preference could not be saved");
     }
 
-    void OnSystemColorsChanged(object? sender,PlatformColorValues colors)
+    void ApplyTheme()
     {
-        void Update(){if(!closed&&themeChoice==ReaderTheme.System)ApplyTheme(colors.ThemeVariant);}
-        if(Avalonia.Threading.Dispatcher.UIThread.CheckAccess())Update();
-        else Avalonia.Threading.Dispatcher.UIThread.Post(Update);
+        ThemeColors? colors=activeTheme?.Package.Theme is {} palette
+            ? activeTheme.Settings.AlternateTheme ? palette.Alternate : palette.Default
+            : null;
+        appearance.Set(appearance.Choice,colors,HighContrast);
     }
 
-    void ApplyTheme(PlatformThemeVariant? platform=null)
+    readonly HashSet<Window> readerDialogs=[];
+
+    T TrackDialog<T>(T window) where T:Window
     {
-        var previous=ActualThemeVariant;
-        RequestedThemeVariant=extensionPalette is null ? ThemePreference.Resolve(themeChoice,
-            platform??themePlatform?.GetColorValues().ThemeVariant??PlatformThemeVariant.Light) : ThemeVariant.Light;
-        if(previous==ActualThemeVariant)PaintTheme();
-        foreach(var window in OwnedWindows)window.RequestedThemeVariant=RequestedThemeVariant;
+        window.FlowDirection=FlowDirection;
+        readerDialogs.Add(window);
+        window.Closed+=(_,_)=>readerDialogs.Remove(window);
+        window.Opened+=(_,_)=>ScaleWindow(window);
+        return window;
     }
 
-    ReaderPalette Palette=>extensionPalette??ReaderPalette.For(ActualThemeVariant);
-    public void SetLanguage(bool useEnglish){english=useEnglish;foreach(var item in labels){ToolTip.SetTip(item.Button,T(item.Fr,item.En));AutomationProperties.SetName(item.Button,T(item.Fr,item.En));}UpdateThemeSelection();RefreshReadingAppearance();RefreshElements();UpdateUi();}
-    void PaintTheme()
+    void UpdateThemeIndicators()
     {
-        header.Background=Palette.Header;footer.Background=Palette.Footer;
-        header.SetValue(TextElement.ForegroundProperty,Palette.HeaderInk);
-        toolbarBorder.Background=Palette.Toolbar;
-        footer.BorderBrush=toolbarBorder.BorderBrush=FineLine;
-        toolbarBorder.BorderThickness=new Thickness(0,1,0,1);footer.BorderThickness=new Thickness(0,1,0,0);
-        sidebar.Background=documentPanel.Background=PanelColor;
-        sidebar.BorderBrush=documentPanel.BorderBrush=FineLine;sidebar.BorderThickness=new Thickness(0,0,1,0);documentPanel.BorderThickness=new Thickness(1,0,0,0);
-        stage.Background=Palette.Stage;Foreground=Palette.Ink;
-        fileLabel.Foreground=Palette.HeaderMuted;buildLabel.Foreground=warning.Foreground=SecondaryInk;
-        navigationSplitter.Background=elementSplitter.Background=FineLine;
-        foreach(var divider in groupDividers)divider.Background=FineLine;
-        foreach(var item in labels)
-            if(item.Button.Content is Viewbox vb && vb.Child is Avalonia.Controls.Shapes.Path path)
-            {
-                bool inHeader=item.Button.Name=="LanguageToggle";
-                path.Stroke=inHeader?Palette.HeaderInk:Foreground;
-                if(inHeader)PaintHeaderAction(item.Button);
-            }
         UpdateThemeSelection();
-        RefreshPageLabels();UpdatePageMarks();UpdatePageViewButtons();
-        export.Background=AccentFill;PaintElementTheme();UpdateToggle(marksToggle,marksRequested);UpdatePanels();UpdateRuler();
-        if(initialized){RefreshReadingAppearance();RefreshElements();FillPanel();}
+        UpdateRuler();
+        InvalidateReadingPageColors();
+        string? anchor=IsSimplifiedReading?ContinuousAnchor():null;
+        var offset=IsSimplifiedReading?ReadingScroller()?.Offset:null;
+        RefreshReadingAppearance();
+        if(anchor is not null&&documentIndex?.BodyIndices.TryGetValue(anchor,out int index)==true)
+        {
+            MoveReadingBlock(index,alignAtTop:true);
+            if(offset is {} saved && ReadingScroller() is {} scroll)scroll.Offset=saved;
+        }
+        if(navMode=="search")FillSearch();
     }
 
     void UpdateThemeSelection()
     {
-        UpdateToggle(chocolateTheme,extensionPalette is null&&themeChoice==ReaderTheme.Chocolate);
-        UpdateToggle(blueTheme,extensionPalette is null&&themeChoice==ReaderTheme.MicrosoftBlue);
-        UpdateToggle(systemTheme,extensionPalette is null&&themeChoice==ReaderTheme.System);
-        foreach(var action in new[]{chocolateTheme,blueTheme,systemTheme})
-            AutomationProperties.SetItemStatus(action,action.Classes.Contains("active")?T("Sélectionné","Selected"):"");
-    }
-
-    void PaintHeaderAction(Button button)
-    {
-        if(ActualThemeVariant==ReaderPalette.BlueVariant)
+        foreach(var (action,choice) in new[]{
+            (lightTheme,ReaderTheme.Light),(chocolateTheme,ReaderTheme.Chocolate),(blueTheme,ReaderTheme.MicrosoftBlue),
+            (nightTheme,ReaderTheme.Night),(systemTheme,ReaderTheme.System)})
         {
-            button.Resources["ButtonBackgroundPointerOver"]=ReaderPalette.BluePrimary;
-            button.Resources["ButtonBackgroundPressed"]=ReaderPalette.BlueHeaderPressed;
-            button.Resources["SystemControlFocusVisualPrimaryBrush"]=ReaderPalette.BlueLight;
-        }
-        else
-        {
-            button.Resources.Remove("ButtonBackgroundPointerOver");
-            button.Resources.Remove("ButtonBackgroundPressed");
-            button.Resources.Remove("SystemControlFocusVisualPrimaryBrush");
+            bool selected=!appearance.CommunityActive&&appearance.Choice==choice;
+            UpdateToggle(action,selected);
+            AutomationProperties.SetItemStatus(action,selected?T("Sélectionné","Selected"):"");
         }
     }
     void UpdateUi()
@@ -426,7 +432,8 @@ public sealed partial class ReaderWindow:Window
         export.IsEnabled=inspection?.Manifest.InspectionComplete==true&&exportCancellation is null;
         export.IsVisible=inspection?.Manifest.InspectionComplete==true;
         pageLabel.IsVisible=available||IsSimplifiedReading;
-        pageLabel.Text=available?T($"Page {page+1} / {composition!.Pages.Count}",$"Page {page+1} / {composition!.Pages.Count}"):T("Lecture continue","Continuous reading");
+        pageLabel.Text=available?LocalFormat("document.page","Page {0} / {1}","Page {0} / {1}",page+1,composition!.Pages.Count)
+            :T("Lecture continue","Continuous reading");
         ToolTip.SetTip(pageLabel,available?T("Pages calculées par Lecteur Word","Pages calculated by Lecteur Word"):
             T("Lecture simplifiée, sans pagination calculée","Simplified reading, without calculated pages"));
         if(marksToggle is not null)marksToggle.IsVisible=available||IsSimplifiedReading;
@@ -438,6 +445,7 @@ public sealed partial class ReaderWindow:Window
     }
     void FillPanel()
     {
+        EnsureNavigationDocument();
         navigation.Children.Clear();outlineActions.Clear();
         foreach(var thumb in thumbnails)thumb.Dispose();thumbnails.Clear();
         navigation.Children.Add(new TextBlock{Text=T("NAVIGATION","NAVIGATION"),FontSize=11,FontWeight=FontWeight.Bold,Margin=new Thickness(0,4,0,1)});
@@ -446,10 +454,14 @@ public sealed partial class ReaderWindow:Window
         {
             if(key=="pages"&&(composition?.Available!=true||simplified)||key=="notes"&&readable?.Presentation.Notes.Count is not >0||key=="sections"&&readable?.Presentation.Sections.Any(s=>s.Stories.Count>0)!=true)continue;
             var button=new Button{Content=T(fr,en),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Left,
-                Background=navMode==key||navMode=="pages"&&simplified&&key=="outline"?AccentFill:Brushes.Transparent,BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(6),MinHeight=28,Padding=new Thickness(7,4)};
+                Classes={"reader-flat"},CornerRadius=new CornerRadius(6),MinHeight=28,Padding=new Thickness(7,4)};
+            UpdateToggle(button,navMode==key||navMode=="pages"&&simplified&&key=="outline");
             button.Click+=(_,_)=>{navMode=key;FillPanel();};navigation.Children.Add(button);
         }
+        foreach(var entry in navigationCommands.Where(entry=>entry.Command.Places.Contains("sidebar",StringComparer.Ordinal)))
+            navigation.Children.Add(NavigationCommandButton(entry));
         navItems.Children.Clear();navigation.Children.Add(navItems);
+        if(FillNavigationExtensionPanel())return;
         if(navMode=="search")
         {
             navigation.Children.Add(query);
@@ -464,8 +476,9 @@ public sealed partial class ReaderWindow:Window
         {
             foreach(int i in Enumerable.Range(Math.Max(0,page-1),Math.Min(composition.Pages.Count-1,page+1)-Math.Max(0,page-1)+1))
             {
-                using var s=new MemoryStream(Composer.PagePng(composition.Pages[i],.18f));var bitmap=new Bitmap(s);thumbnails.Add(bitmap);var image=new Image{Source=bitmap,Width=108,Height=108*composition.Pages[i].Geometry.Height/composition.Pages[i].Geometry.Width};
-                var button=new Button{Content=new StackPanel{Children={image,new TextBlock{Text=(i+1).ToString(CultureInfo.InvariantCulture),HorizontalAlignment=HorizontalAlignment.Center}}},HorizontalAlignment=HorizontalAlignment.Center,BorderThickness=new Thickness(i==page?2:1),BorderBrush=i==page?ReferenceEquals(Palette,ReaderPalette.Blue)?Palette.Accent:Brush("#986749"):Brushes.Gray,Padding=new Thickness(4),Background=Brushes.White,Foreground=Brushes.Black};
+                using var s=ReadingPagePng(composition.Pages[i],.18f);var bitmap=new Bitmap(s);thumbnails.Add(bitmap);var image=new Image{Source=bitmap,Width=108,Height=108*composition.Pages[i].Geometry.Height/composition.Pages[i].Geometry.Width};
+                var button=new Button{Content=new StackPanel{Children={image,new TextBlock{Text=(i+1).ToString(CultureInfo.InvariantCulture),HorizontalAlignment=HorizontalAlignment.Center}}},HorizontalAlignment=HorizontalAlignment.Center,BorderThickness=new Thickness(i==page?2:1),Padding=new Thickness(4)};
+                ReaderAppearance.Use(button,Button.BorderBrushProperty,i==page?ReaderAppearance.Accent:ReaderAppearance.Line);
                 AutomationProperties.SetName(button,T("Page ","Page ")+(i+1));button.Click+=(_,_)=>GoToPage(i);navItems.Children.Add(button);
             }
         }
@@ -501,6 +514,11 @@ public sealed partial class ReaderWindow:Window
     }
     void OnWorkspaceKeys(object? sender,KeyEventArgs e)
     {
+        if(e.Key==Key.F6&&e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift)
+        {
+            FocusWorkspaceRegion(e.KeyModifiers==KeyModifiers.Shift);e.Handled=true;return;
+        }
+        if(ReadNavigationShortcut(e)){e.Handled=true;return;}
         if(e.KeyModifiers!=KeyModifiers.None)return;
         switch(e.Key)
         {

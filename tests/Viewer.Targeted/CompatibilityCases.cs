@@ -1,3 +1,4 @@
+using Avalonia.Interactivity;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -134,8 +135,11 @@ static class CompatibilityCases
         byte[] badExif=Exif(raw,1);Array.Fill(badExif,(byte)255,16,4);
         foreach(var input in new[]{raw[..^2],raw.Concat(new byte[]{0}).ToArray(),huge,progressive,cmyk,Exif(raw,9),badExif})
             Check(!SafeJpeg.TryGetRenderableBytes(input,out _,out _,out _,out _,out _),"Malformed/oversize JPEG accepted");
+        byte[] unsupportedProfile=[..raw.AsSpan(0,2),255,226,0,17,.."ICC_PROFILE\0"u8,1,1,0,..raw.AsSpan(2)];
+        Check(!SafeJpeg.TryGetRenderableBytes(unsupportedProfile,out _,out _,out _,out _,out string profileDiagnostic)&&
+            profileDiagnostic==SafeJpeg.ColorUnqualified,"Un profil ICC RGB présent ne peut pas être éliminé du rendu.");
         using var cancel=new CancellationTokenSource();cancel.Cancel();try{SafeJpeg.TryGetRenderableBytes(raw,out _,out _,out _,out _,out _,cancel.Token);throw new InvalidOperationException("JPEG cancellation ignored");}catch(OperationCanceledException){}
-        File.WriteAllText(Path.Combine(root,"jpeg-safety.json"),JsonSerializer.Serialize(new{grayscale=true,orientations=results,refusals=7,cancellation=true},Json));
+        File.WriteAllText(Path.Combine(root,"jpeg-safety.json"),JsonSerializer.Serialize(new{grayscale=true,orientations=results,refusals=8,cancellation=true},Json));
     }
     public static void TableStyles(string root)
     {
@@ -191,9 +195,9 @@ static class CompatibilityCases
         foreach(int theme in new[]{1,2})
         {
             window.SetTheme(theme);window.FitToWidth();await Task.Delay(200);await Capture("real-theme-"+theme);
-            var mode=window.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="ReadingMode");mode.SelectedIndex=1;await Task.Delay(150);Check(window.IsSimplifiedReading,"Simplified real reading lost");mode.SelectedIndex=0;await Task.Delay(150);Check(window.CurrentPage==1,"Return to real calculated page failed");
+            window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewContinuous").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(150);Check(window.IsSimplifiedReading,"Simplified real reading lost");window.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ViewSinglePage").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(150);Check(window.CurrentPage==1,"Return to real calculated page failed");
             window.Width=860;window.Height=620;window.FitToWidth();await Task.Delay(200);await Capture("real-small-"+theme);
-            var image=window.GetVisualDescendants().OfType<Image>().Single(i=>i.Name=="CalculatedPage");Check(image.Bounds.Width>0&&image.Bounds.Height>0,"Native calculated bitmap missing");
+            var image=window.GetVisualDescendants().OfType<Image>().Single(i=>i.Name=="CalculatedPage"&&i.Tag is int n&&n==window.CurrentPage);Check(image.Bounds.Width>0&&image.Bounds.Height>0,"Native calculated bitmap missing");
             Check(!window.ExportAvailable(ExportFormat.Pdf)&&!window.ExportAvailable(ExportFormat.Odt)&&!window.ExportAvailable(ExportFormat.Epub3),"Native GUI extended real export qualification");
         }
         Check(Sha(original)==hash&&Sha(copy)==hash,"Native GUI changed input");File.WriteAllBytes(Path.Combine(root,"native-diagnostics.json"),window.DetailedDiagnosticReport());

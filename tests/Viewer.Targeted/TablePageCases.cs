@@ -44,6 +44,24 @@ static class TablePageCases
             "6000",grid:[6000],extras:"""<w:tblInd w:w="-5" w:type="dxa"/>""")));
         Check(Close(Solved(signed).Indent,-.25f)&&Close(signed.Snapshot.Composition.Pages[0].Cells[0].X,49.75f),"Retrait signé.");
 
+        string margin=Table(Row(Cell("Repère de cellule","""
+            <w:tcMar><w:left w:w="180" w:type="dxa"/></w:tcMar>
+            """)), "4800",grid:[4800],extras:"""<w:tblInd w:w="40" w:type="dxa"/>""");
+        foreach(int mode in new[]{12,14,15})
+        {
+            using var aligned=PageComposer.Compose(Input(root,"word-table-indent-"+mode,margin,new()
+            {
+                ["word/settings.xml"]=Fixtures.Xml("settings",$"""
+                    <w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{mode}"/></w:compat>
+                    """)
+            },Fixtures.Relationship("settings","settings","settings.xml")));
+            var solved=Solved(aligned);
+            var page=aligned.Snapshot.Pages.Single().Geometry;
+            Check(Close(solved.LeadingCellPadding,mode==14?9:0)&&Close(page.Cells.Single().Width,240)&&
+                Close(page.Cells.Single().X,mode==14?43:52)&&Close(page.Lines.Single().X,mode==14?52:61),
+                "Mode 14 explicite : le retrait détermine l’origine du texte de la cellule, grille et largeur conservées.");
+        }
+
         using var pref=PageComposer.Compose(Input(root,"fixed-natural",Table(Row(Cell("Préférence",Width("6000"))),grid:[5600])));
         Check(Close(Solved(pref).Columns.Single(),300),"La préférence de cellule agrandit la grille fixe sans tblW.");
         using var conflict=PageComposer.Compose(Input(root,"fixed-contradictory",Table(Row(Cell("Un",Width("3500"))+Cell("Deux",Width("1000"))),
@@ -61,6 +79,23 @@ static class TablePageCases
             Table(Row(Cell("mot",Width("60%","pct"))+Cell("suite",Width("2000","pct"))),"2500","pct",false)));
         var a=Solved(auto);
         Check(Close(a.WidthResult!.Effective,150)&&Close(a.Columns[0],90)&&Close(a.Columns[1],60),"Pourcentages AutoFit relatifs à 150 pt.");
+
+        const string noWrap="""<w:noWrap/>""";
+        using var protectedCell=PageComposer.Compose(Input(root,"auto-nowrap-dxa",Table(Row(
+            Cell("Un",Width("3200")+noWrap)+Cell("I",Width("2400"))),"4000",fixedGrid:false,grid:[2000,2000])));
+        var protectedFit=Solved(protectedCell);
+        Check(Close(protectedFit.Columns[0],160)&&Close(protectedFit.Columns[1],40),
+            "AutoFit protège la préférence dxa avant de distribuer le surplus aux autres cellules. "+
+            string.Join(", ",protectedFit.Columns));
+        using var contiguous=PageComposer.Compose(Input(root,"auto-nowrap-pct",Table(Row(
+            Cell("Quatre mots sur une seule ligne",Width("20%","pct")+noWrap)+Cell("Fin",Width("80%","pct"))),
+            "4000",fixedGrid:false,grid:[2000,2000])));
+        var measured=contiguous.Snapshot;
+        var contiguousTable=Solved(contiguous);
+        var unwrappedCell=contiguousTable.Cells[0];
+        Check(contiguousTable.WidthResult!.Cells[0].Minimum>100&&
+            measured.Composition.Pages.Single().Lines.Count(l=>l.CellId==unwrappedCell.Id)==1,
+            "La largeur minimale inclut tous les mots lorsque la préférence de cellule est un pourcentage.");
 
         string multi=Row(Cell(string.Join(' ',Enumerable.Repeat("long",20)),Width("10000"))+Cell("Fin",Width("1200")));
         using var longText=PageComposer.Compose(Input(root,"auto-wrapping",Table(multi,"11000",fixedGrid:false,grid:[1000,1000])));
@@ -114,6 +149,7 @@ static class TablePageCases
     {
         string styleXml=Fixtures.Xml("styles","""
             <w:style w:type="table" w:styleId="Base">
+              <w:tblPr><w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="1"/></w:tblPr>
               <w:rPr><w:sz w:val="20"/></w:rPr>
               <w:tblStylePr w:type="firstRow"><w:rPr><w:sz w:val="32"/><w:b/></w:rPr>
                 <w:pPr><w:spacing w:before="160"/></w:pPr>

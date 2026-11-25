@@ -7,6 +7,7 @@ internal enum SupportKind { Bug, Feature, Extension }
 internal sealed record CommunityConfiguration(string? SupportRepository, string? ReleasesRepository, string? CatalogUrl)
 {
     internal static CommunityConfiguration Empty { get; } = new(null, null, null);
+    public bool CatalogOffline { get; init; }
 }
 
 internal sealed class GitHubSupportService(CommunityConfiguration configuration)
@@ -31,6 +32,9 @@ internal sealed class GitHubSupportService(CommunityConfiguration configuration)
 
     internal static CommunityConfiguration Load(PlatformPaths paths) =>
         PlatformFiles.ReadOptional<CommunityConfiguration>(Path.Combine(paths.Config, "community.json")) ?? CommunityConfiguration.Empty;
+
+    internal static void Save(PlatformPaths paths, CommunityConfiguration configuration) =>
+        PlatformFiles.Write(Path.Combine(paths.Config, "community.json"), configuration);
 
     internal static string Draft(SupportKind kind, string steps, string extra, Incident? incident, bool english)
     {

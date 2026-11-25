@@ -82,17 +82,60 @@ static class TableAuditCases
                 placed=placedMarkers.Contains(n.ParagraphId),issues=marker?.Issues.Select(i=>i.Code).ToArray()};
         }).ToArray();
         int leaders=snapshot.Lines?.Lines.Count(l=>l.Generated.Any(d=>d.Kind=="leader"))??0;
+        if(id==0)
+        {
+            LineCases.Check(snapshot.Coverage==PageCoverage.Complete&&snapshot.Pages.Length==4&&snapshot.Gaps.IsEmpty&&
+                layout?.SmartArt is [var diagram]&&
+                diagram.Shapes.Count==11&&diagram.Shapes.Count(s=>s.TextLayout is not null)==6&&
+                diagram.Shapes.All(s=>s.ContentPoint.Source.PartUri==diagram.Data.Source.PartUri&&
+                    s.LayoutNode.Source.PartUri==diagram.Layout.Source.PartUri&&s.QuickStyle.Source.PartUri==diagram.Styles.Source.PartUri&&
+                    s.Colors.Source.PartUri==diagram.Colors.Source.PartUri)&&
+                snapshot.Composition.Pages.SelectMany(p=>p.DisplayLines).SelectMany(l=>l.Images)
+                    .Select(i=>i.Image.Diagram).OfType<DiagramDrawing>().ToArray() is [var placedDiagram]&&
+                placedDiagram.LayoutProfile=="cached"&&placedDiagram.Shapes.Length==11&&placedDiagram.Shapes.Count(s=>!s.Text.IsEmpty)==6,
+                "Quatre feuilles composées et maintien du SmartArt enregistré.");
+            foreach(var page in snapshot.Composition.Pages)
+            {
+                var footer=page.FloatingTextFrames.Where(f=>f.Frame.RunningDrawing is not null).OrderBy(f=>f.Frame.Order).
+                    ThenBy(f=>f.Frame.ChildOrder).ToArray();
+                LineCases.Check(footer is [var number,var rule,var title]&&
+                    number.Frame.RunningDrawing is {Y:{Reference:"bottomMargin",Fraction:.2f},Root.Children.IsEmpty:true}&&
+                    rule.Frame.RunningDrawing is {Width:{Reference:"margin",Fraction:1},Root.Children.Length:2}&&
+                    Math.Abs(number.Frame.Y-(page.Geometry.Height-11.2f))<.01f&&Math.Abs(rule.Frame.Y-number.Frame.Y)<.01f&&
+                    Math.Abs(number.Frame.X-(page.Geometry.Width-page.Geometry.Right))<.01f&&
+                    Math.Abs(rule.Frame.Width-(page.Geometry.Width-page.Geometry.Left-page.Geometry.Right)*5943600f/5962650)<.01f&&
+                    number.Frame.Fill==0xF15B4E&&rule.Frame.Stroke is {Color:0xF15B4E,Width:2}&&
+                    number.Content.Lines.SelectMany(l=>l.Native?.Generated??[]).Single(d=>d.Kind=="pageField")
+                        .Fragment.Text==page.PrintedPageNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture)&&
+                    number.SheetClip is not null&&title.Content.Lines.All(l=>l.NativeTop>page.Geometry.Height)&&title.Frame.BottomAligned&&title.Frame.Bottom==0&&
+                    title.Content.Lines.Any(l=>l.Text.Length>0)&&footer.All(f=>f.Frame.VmlSource is not null),
+                    "Deux ancres, trois feuilles vectorielles, PAGE calculé et sources VML conservées.");
+            }
+        }
         if(id==5)
-            LineCases.Check(snapshot.Sections.Length==10&&grids.Count==16&&leaders==19&&
-                firstObstacle is {Reason:"LAYOUT_RUN_CONTENT_UNQUALIFIED",Source.Location.Path:"/2/1/1"}&&
+            LineCases.Check(snapshot.Coverage==PageCoverage.Complete&&snapshot.Pages.Length==47&&snapshot.Gaps.IsEmpty&&
+                snapshot.Sections.Length==10&&grids.Count==16&&leaders==19&&snapshot.FieldStability=="Stable"&&
+                snapshot.Pages.Single(p=>p.Geometry.IntercalarySectionBreak is not null).Id.PhysicalIndex==4&&
+                snapshot.Pages[^1].SectionPageNumber==43&&
+                snapshot.Composition.Pages.SelectMany(p=>p.FloatingTextFrames).Count(f=>f.Frame.VmlSource is not null&&
+                    Math.Abs(f.Frame.Width-612)<.01f&&Math.Abs(f.Frame.Height-34.85f)<.01f)==43&&
+                snapshot.Composition.Pages.SelectMany(p=>p.RunningStories).Where(s=>s.Selection.Kind=="footer")
+                    .SelectMany(s=>s.Lines).Sum(l=>l.Native?.Generated.Count(d=>d.Kind=="pageField")??0)==43&&
+                snapshot.Composition.Pages.SelectMany(p=>p.DisplayLines).SelectMany(l=>l.Images)
+                    .Count(i=>i.Image.Metafile is not null)==14&&
+                snapshot.FieldPasses[^1].Fields is { Length:19 } fields&&fields.All(f=>f.PhysicalPage is not null&&f.Diagnostic is null)&&
+                !snapshot.Composition.Issues.Any(i=>i.BlocksRendering&&i.Code.StartsWith("PAGE_METAFILE_",StringComparison.Ordinal))&&
+                !snapshot.Gaps.Any(g=>g.Reason=="LINE_OVERFLOW"&&g.Source.Location.Path=="/2/1/22")&&
                 lists.Count(l=>l.Text=="\uf0b7"&&l.TextStart is not null)==219&&lists.Count(l=>l.Text=="\uf077")==6,
-                "Régression des structures Stage 2 ou listes non examinées après le flottant.");
+                "Stage 2 doit conserver ses feuilles, ses renvois, ses aperçus et les dimensions des zones VML placées.");
         if(id==4)
-            LineCases.Check(snapshot.Composition.Pages.Count>13&&placed.Count==33&&firstObstacle is null&&
+            LineCases.Check(snapshot.Coverage==PageCoverage.Complete&&snapshot.Pages.Length==20&&
+                placed.Count==33&&snapshot.Gaps.IsEmpty&&firstObstacle is null&&
                 lists.Count(l=>l.Text=="\uf0b7"&&l.placed)==17&&
                 snapshot.Composition.Pages.All(p=>p.RunningStories.Count==2)&&
-                snapshot.Composition.Issues.Any(i=>i.Code=="PAGE_STYLES_EFFECTS_DIVERGENT"&&i.BlocksRendering),
-                "Le Guide doit placer ses histoires et conserver les divergences actives de styles.");
+                snapshot.StyleDecision?.Selection==PageStyleSelection.OrdinaryWithPlainCopy&&
+                snapshot.Composition.Issues.Any(i=>i.Code=="PAGE_STYLES_EFFECTS_DIVERGENT"&&!i.BlocksRendering),
+                "Le Guide doit placer ses histoires et conserver les divergences de la copie auxiliaire.");
         var listed=new List<object>();
         var images=paragraphs.Values.SelectMany(p=>p.Runs).Where(r=>r.Image is not null).ToDictionary(r=>r.Id,r=>r.Image!);
         var lineProps=new LinePropertiesReader(m);

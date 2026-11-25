@@ -95,34 +95,14 @@ public sealed partial class ReaderWindow
         elementList.ItemsSource=shown;
         if(selected is DocumentElementRow row&&shown.Contains(row))elementList.SelectedItem=row;
         else if(shown.Length>0)elementList.SelectedIndex=0;
-        elementSummary.Foreground=SecondaryInk;
         elementSummary.Text=documentIndex?.Limitation is {} reason?
             T("Inventaire sémantique indisponible · ","Semantic inventory unavailable · ")+reason:
             inspection is null?T("Ouvrez un DOCX pour consulter ses éléments.","Open a DOCX to inspect its elements."):
             shown.Length==0?T("Aucun élément pour ce filtre.","No objects match this filter."):
-            shown.Length==1?T("1 élément","1 element"):
-            T($"{shown.Length:N0} éléments",$"{shown.Length:N0} elements");
+            LocalCount("elements.shown",shown.Length,"{0:N0} élément","{0:N0} éléments","{0:N0} element","{0:N0} elements");
         UpdateElementActions();
 
         static bool Match(string? field,string needle)=>field?.Contains(needle,StringComparison.CurrentCultureIgnoreCase)==true;
-    }
-
-    void PaintElementTheme()
-    {
-        var field=Palette.Field;
-        foreach(var key in new[]{"TextControlBackground","TextControlBackgroundPointerOver","TextControlBackgroundFocused"})
-        {
-            elementQuery.Resources[key]=field;
-            query.Resources[key]=field;
-        }
-        foreach(var key in new[]{"TextControlPlaceholderForeground","TextControlPlaceholderForegroundPointerOver","TextControlPlaceholderForegroundFocused"})
-        {
-            elementQuery.Resources[key]=SecondaryInk;
-            query.Resources[key]=SecondaryInk;
-        }
-        foreach(var key in new[]{"SystemControlHighlightListAccentLowBrush","SystemControlHighlightListAccentMediumBrush",
-            "SystemControlHighlightListAccentHighBrush","SystemControlHighlightAltListAccentLowBrush"})
-            elementList.Resources[key]=AccentFill;
     }
 
     Control ElementCard(DocumentElementRow row)
@@ -136,7 +116,9 @@ public sealed partial class ReaderWindow
         string title=row.Preview is {} p?type+" · "+p:CategoryLabel(row.Category)+" · "+type;
         var content=new StackPanel{Spacing=3,Margin=new Thickness(3,2)};
         content.Children.Add(new TextBlock{Text=title,FontWeight=FontWeight.SemiBold,TextTrimming=TextTrimming.CharacterEllipsis});
-        content.Children.Add(new TextBlock{Text=ElementPosition(row)+" · "+State(row),FontSize=10.5,Foreground=SecondaryInk,TextTrimming=TextTrimming.CharacterEllipsis});
+        var detail=new TextBlock{Text=ElementPosition(row)+" · "+State(row),FontSize=10.5,TextTrimming=TextTrimming.CharacterEllipsis};
+        ReaderAppearance.Use(detail,TextBlock.ForegroundProperty,ReaderAppearance.Secondary);
+        content.Children.Add(detail);
         ToolTip.SetTip(content,title+"\n"+ElementPosition(row)+" · "+State(row));
         return content;
     }

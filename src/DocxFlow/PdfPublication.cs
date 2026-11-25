@@ -69,6 +69,12 @@ internal static class PdfPublication
             features.Add(new(kind.ToString(),PublicationRetention.Unsupported,semantic.Source(omitted.Id).Location,"État de lecture PDF."));
         }
         issues.AddRange(BuildNavigation(source,range,token).Issues);
+        if(request.Policy==PublicationPolicy.Complete)
+        {
+            var reservations=issues.Where(issue=>!issue.BlocksExport).Select(issue=>issue with{BlocksExport=true}).ToImmutableArray();
+            return new(Profile,features.ToImmutable(),[..issues.Where(issue=>issue.BlocksExport),..reservations])
+                {Reservations=reservations};
+        }
         return new(Profile,features.ToImmutable(),issues.ToImmutable());
     }
 

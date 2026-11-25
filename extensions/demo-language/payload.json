@@ -1,0 +1,11 @@
+{
+  "culture": "fr-CA",
+  "name": "Français canadien",
+  "messages": {
+    "document.words.one": "{0:N0} mot",
+    "document.words.other": "{0:N0} mots",
+    "document.characters.one": "{0:N0} caractère",
+    "document.characters.other": "{0:N0} caractères",
+    "diagnostic.export_nova_tabs": "Les tabulations sont préservées. Certains taquets peuvent être adaptés."
+  }
+}

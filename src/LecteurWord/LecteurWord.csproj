@@ -13,6 +13,9 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="[12.1.6]"/>
     <PackageReference Include="Avalonia.Fonts.Inter" Version="[12.1.6]"/>
     <AvaloniaResource Include="Assets/*"/>
+    <EmbeddedResource Include="Languages/*.json"/>
+    <EmbeddedResource Include="../../BRANDING.md" LogicalName="LecteurWord.Branding.txt"/>
+    <EmbeddedResource Include="../../LICENSE" LogicalName="LecteurWord.ProjectLicense.txt"/>
     <None Update="Assets/lecteur-word.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="desktop/lecteur-word.png"/>
   </ItemGroup>
 </Project>

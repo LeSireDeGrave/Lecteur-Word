@@ -10,6 +10,7 @@ internal sealed record PlatformPaths(string Config, string State, string Data)
         Resolve("XDG_CONFIG_HOME", ".config"),
         Resolve("XDG_STATE_HOME", ".local/state"),
         Resolve("XDG_DATA_HOME", ".local/share"));
+    internal static string ExtensionCatalogCache => Path.Combine(Resolve("XDG_CACHE_HOME", ".cache"), "extension-catalog");
 
     static string Resolve(string variable, string fallback)
     {
@@ -41,9 +42,9 @@ internal static class PlatformFiles
         return JsonSerializer.Deserialize<T>(ReadBounded(stream, limit), Json);
     }
 
-    internal static T? ReadOptional<T>(string path)
+    internal static T? ReadOptional<T>(string path, int limit = 512 * 1024)
     {
-        try { return Read<T>(path); }
+        try { return Read<T>(path, limit); }
         catch (FileNotFoundException) { return default; }
         catch (DirectoryNotFoundException) { return default; }
     }

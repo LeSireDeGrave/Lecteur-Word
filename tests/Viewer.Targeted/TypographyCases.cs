@@ -48,9 +48,11 @@ static class TypographyCases
         string body=P(R("Style", "<w:rPr><w:rStyle w:val=\"Inline\"/><w:b w:val=\"0\"/></w:rPr>") + R("Hérité"),
             "<w:pPr><w:pStyle w:val=\"Derived\"/><w:rPr><w:sz w:val=\"44\"/></w:rPr></w:pPr>")+
             "<w:tbl><w:tblPr><w:tblStyle w:val=\"Table\"/></w:tblPr><w:tr><w:tc>"+Fixtures.Paragraph("Cellule")+"</w:tc></w:tr></w:tbl>"+
-            P(R("Invalide","<w:rPr><w:rStyle w:val=\"Absent\"/><w:sz w:val=\"xxx\"/></w:rPr>"));
+            P(R("Invalide","<w:rPr><w:rStyle w:val=\"Absent\"/><w:sz w:val=\"xxx\"/></w:rPr>"))+
+            P(R("Type incompatible","<w:rPr><w:rStyle w:val=\"Base\"/></w:rPr>"));
         var inspected=Inspect(root,body,parts,linked);
-        var model=Model(inspected);
+        var semantic=SemanticReader.Build(inspected);
+        var model=semantic.Document??throw new InvalidOperationException("SEMANTIC-001 indisponible.");
         using var session=new TypographySession(inspected,model);
         var result=session.Measure();
         var first=result.Paragraphs[0].Fragments.First(f=>f.Text=="Style");
@@ -66,8 +68,59 @@ static class TypographyCases
         Check(result.Diagnostics.Any(i=>i.Code=="TEXT_PROPERTY_PARTIAL"&&i.Source?.PartUri=="/word/document.xml"),
             "Valeur contradictoire sans diagnostic.");
         Check(result.Diagnostics.Any(i=>i.Code=="TEXT_STYLE_REFERENCE_PARTIAL"&&i.Source?.PartUri=="/word/document.xml"),
-            "Référence de style incomplète sans diagnostic.");
+            "Un style existant de type incompatible doit rester diagnostiqué.");
+        var missing=model.StyleUses.Single(u=>model.Attribute(u.Id,"val")=="Absent");
+        Check(missing is {Resolved:true,MissingReferenceIgnored:true}&&
+            semantic.Issues.Any(i=>i.Code=="SEMANTIC_STYLE_REFERENCE_IGNORED"&&i.Source==model.Source(missing.Id).Location),
+            "Une référence de caractère absente est ignorée et sa source conservée.");
         Verify(model,result);
+    }
+
+    internal static void Shadows(string root)
+    {
+        const string ns="http://schemas.microsoft.com/office/word/2010/wordml";
+        const string drawing="http://schemas.openxmlformats.org/drawingml/2006/main";
+        string Shadow(string color)=>
+            $"<w14:shadow xmlns:w14=\"{ns}\" w14:sx=\"100000\" w14:sy=\"100%\" w14:dist=\"25400\" "+
+            "w14:dir=\"5400000\" w14:blurRad=\"38100\" w14:algn=\"ctr\">"+color+"</w14:shadow>";
+        string outline=$"<w14:textOutline xmlns:w14=\"{ns}\" w14:w=\"0\"><w14:noFill/>"+
+            "<w14:prstDash w14:val=\"solid\"/><w14:round/></w14:textOutline>";
+        var style=P(R("Encre du texte","<w:rPr><w:sz w:val=\"36\"/>"+outline+"</w:rPr>"));
+        var parts=new Dictionary<string,string>
+        {
+            ["word/styles.xml"]=Fixtures.Xml("styles","<w:docDefaults><w:rPrDefault><w:rPr>"+
+                Shadow("<w14:schemeClr w14:val=\"dk1\"><w14:alpha w14:val=\"60000\"/></w14:schemeClr>")+
+                "</w:rPr></w:rPrDefault></w:docDefaults>"),
+            ["word/theme1.xml"]=$"<a:theme xmlns:a=\"{drawing}\"><a:themeElements><a:clrScheme>"+
+                "<a:dk1><a:srgbClr val=\"FE0010\"/></a:dk1></a:clrScheme></a:themeElements></a:theme>"
+        };
+        string relationships=Fixtures.Relationship("styles","styles","styles.xml")+Fixtures.Relationship("theme","theme","theme1.xml");
+        var inherited=Inspect(root,style,parts,relationships);
+        using var withShadow=PageComposer.Compose(inherited);
+        using var noShadow=PageComposer.Compose(Inspect(root,style));
+        var drawn=withShadow.Snapshot;
+        Check(drawn.Coverage==PageCoverage.Complete&&noShadow.Snapshot.Coverage==PageCoverage.Complete,"Effets valides refusés");
+        var glyphs=drawn.Pages.Single().Geometry.Lines.Single().Native!;
+        var fragment=glyphs.Parts.Single(p=>p.Fragment is not null).Fragment!;
+        Check(fragment.Style.Shadow is {Color:"FE0010",Alpha:153,OffsetY:2,Blur:3}&&
+            fragment.Style.Origins.ContainsKey("shadowThemeValue")&&fragment.Style.Origins.ContainsKey("textOutline"),
+            "L'ombre héritée doit conserver la couleur de thème, les unités et la provenance");
+        var plain=noShadow.Snapshot.Pages.Single().Geometry;
+        Check(glyphs.Advance==plain.Lines.Single().Native!.Advance&&
+            glyphs.Height==plain.Lines.Single().Native!.Height&&
+            !Composer.PagePng(drawn.Pages.Single().Geometry).AsSpan().SequenceEqual(Composer.PagePng(plain)),
+            "L'ombre modifie les pixels en conservant les avances et la hauteur");
+
+        string direct=Shadow("<w14:srgbClr w14:val=\"0055BB\"/>");
+        using var overridden=PageComposer.Compose(Inspect(root,style.Replace(outline,direct+outline,StringComparison.Ordinal),parts,relationships));
+        var replaced=overridden.Snapshot.Typography!.Paragraphs.SelectMany(p=>p.Fragments).Single(f=>f.Text=="Encre du texte");
+        Check(replaced.Style.Shadow is {Color:"0055BB",Alpha:255}&&!replaced.Style.Origins.ContainsKey("shadowThemeValue"),
+            "La couleur directe doit remplacer l'ombre de thème");
+        using var unsupported=PageComposer.Compose(Inspect(root,style.Replace(outline,direct.Replace(
+            "w14:sx=\"100000\"","w14:sx=\"120000\"",StringComparison.Ordinal),StringComparison.Ordinal)));
+        Check(unsupported.Snapshot.Coverage!=PageCoverage.Complete&&unsupported.Snapshot.Composition.Issues
+            .Any(i=>i.BlocksRendering&&i.Code is "LAYOUT_CHARACTER_PROPERTY_UNQUALIFIED" or "TEXT_PROPERTY_PARTIAL"),
+            "Transformation d'ombre non rendue à signaler");
     }
 
     public static void Shaping(string root)
@@ -78,11 +131,17 @@ static class TypographyCases
         string lig="<w:rPr>"+font+"<w14:ligatures xmlns:w14=\""+W14+"\" w14:val=\"standard\"/></w:rPr>";
         string supplementary=char.ConvertFromUtf32(0x1d434);
         string body=P(R("AV",kern))+P(R("AV","<w:rPr>"+font+"</w:rPr>"))+P(R("office",lig))+
+            P(R("office","<w:rPr>"+font+"<w:spacing w:val=\"5\"/></w:rPr>"))+
             P(R(supplementary,"<w:rPr>"+font+"</w:rPr>"))+
             P(R("e")+R("\u0301")+R("no\u00a0break &amp; "+char.ConvertFromUtf32(0x10fffd)))+
             P(R("abc אבג 12 سلام")+"<w:r><w:tab/></w:r>"+R("token"),"<w:pPr><w:bidi/></w:pPr>")+
             P("<w:fldSimple w:instr=\"PAGE\">"+R("12")+"</w:fldSimple>");
-        var inspected=Inspect(root,body);
+        var inspected=Inspect(root,body,new()
+            {
+                ["word/settings.xml"]=Fixtures.Xml("settings","<w:compat>"+"""
+                    <w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="14"/>
+                    """+"</w:compat>")
+            },Fixtures.Relationship("settings","settings","settings.xml"));
         var model=Model(inspected);
         using var session=new TypographySession(inspected,model);
         var first=session.Measure();
@@ -91,9 +150,13 @@ static class TypographyCases
         var av=fragments.Where(f=>f.Text=="AV").ToArray();
         Check(av.Length==2&&av[0].Face?.Sha256==av[1].Face?.Sha256&&
             av[0].Measure!.Metrics.Width<av[1].Measure!.Metrics.Width,"La paire AV ne vérifie pas le crénage sur la même face.");
-        var office=fragments.Single(f=>f.Text=="office");
+        var office=fragments.Single(f=>f.Text=="office"&&f.Style.Ligatures=="standard");
         Check(office.Measure!.Glyphs.Length<office.Text.Length&&office.Measure.Clusters.Any(c=>c.Range.EndExclusive-c.Range.Start>1),
             "Ligature réelle ou étendue du cluster manquante.");
+        var tracked=fragments.Single(f=>f.Text=="office"&&f.Style.Tracking==.25f);
+        Check(tracked.Measure is {} trackedMeasure&&trackedMeasure.Glyphs.Length==tracked.Text.Length&&
+            trackedMeasure.Clusters.All(c=>c.Range.EndExclusive-c.Range.Start==1),
+            "Les ligatures facultatives doivent être désactivées par défaut dans la mesure latine.");
         var nonBmp=fragments.Single(f=>f.Text==supplementary);
         Check(nonBmp.Measure is {Glyphs.Length:1,Metrics.Width:>0} && nonBmp.Measure.Glyphs[0].Id!=0 &&
             nonBmp.Measure.Clusters.Single().Range==new Utf16Span(0,2),"Sculptage ou plage du caractère hors BMP incorrects.");

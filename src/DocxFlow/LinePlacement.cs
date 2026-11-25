@@ -434,7 +434,7 @@ internal sealed partial class LineComposer
     }
 
     /// <summary>Uses the recorded placements; no call to SKFont.MeasureText or second shaping.</summary>
-    internal void Paint(SKCanvas canvas,ComposedLine line,float x,float baseline,SKColor automaticColor)
+    internal void Paint(SKCanvas canvas,ComposedLine line,float x,float baseline,SKColor automaticColor,SKColor? background=null,Func<SKColor,SKColor,SKColor>? ink=null)
     {
         ObjectDisposedException.ThrowIf(disposed,this);
         session.CheckOwner(document,model);
@@ -467,6 +467,7 @@ internal sealed partial class LineComposer
             foreach(var underline in line.Underlines)
             {
                 paint.Color=underline.Color=="auto"?automaticColor:SKColor.Parse(underline.Color);
+                if(ink is not null)paint.Color=ink(paint.Color,background??SKColors.White);
                 var box=underline.Ink;
                 canvas.DrawRect(new SKRect(x+PageComposer.Points(box.Left),baseline+PageComposer.Points(box.Top),
                     x+PageComposer.Points(box.Right),baseline+PageComposer.Points(box.Bottom)),paint);
@@ -494,13 +495,13 @@ internal sealed partial class LineComposer
                         glyphs.Add(g with {X=g.X+p.GlyphOriginX,Y=g.Y+p.GlyphOriginY});
                     }
                 }
-                session.Paint(canvas,fragment with{Measure=measure with{Glyphs=glyphs.ToImmutable()}},x,baseline,automaticColor,shadowOnly);
+                session.Paint(canvas,fragment with{Measure=measure with{Glyphs=glyphs.ToImmutable()}},x,baseline,automaticColor,shadowOnly,background,ink);
             }
             foreach(var d in line.Generated)
             {
                 if(shadowOnly&&d.Fragment.Style.Shadow is not {Alpha:>0})continue;
                 for(int i=0;i<d.Count;i++)
-                    session.Paint(canvas,d.Fragment,x+(float)(d.X+i*d.Step)/TypographySession.EmuPerPoint,baseline,automaticColor,shadowOnly);
+                    session.Paint(canvas,d.Fragment,x+(float)(d.X+i*d.Step)/TypographySession.EmuPerPoint,baseline,automaticColor,shadowOnly,background,ink);
             }
         }
     }

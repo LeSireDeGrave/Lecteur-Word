@@ -10,9 +10,22 @@ Linux · C# / .NET 10 · Avalonia · Lecture seule
 
 </div>
 
-Lecteur Word construit une visionneuse DOCX native pour Linux : une zone de lecture dominante, des commandes par icônes, des thèmes clair/sombre/système et des diagnostics accessibles. Son moteur OOXML indépendant prépare également un contrat d'échange pour un futur import dans OpusNova.
+Lecteur Word est un lecteur DOCX libre pour Linux. Son moteur autonome ouvre les documents en lecture seule et les convertit vers quatre formats interopérables. L’interface propose 20 langues, des thèmes personnalisables et des extensions communautaires.
 
-**Le prototype propose une lecture simplifiée des DOCX structurés et une composition expérimentale d’un profil défini de paragraphes, listes, tableaux et images PNG/JPEG baseline. La fidélité et la pagination de Microsoft Word ne sont pas qualifiées.** Les structures hors couverture restent repérées ; un contenu consultable ne devient pas un export annoncé comme fidèle.
+## Lire et convertir vos documents
+
+**DOCX → PDF / ODT / EPUB 3 / NOVA**
+
+| Format | Pour quoi faire |
+|---|---|
+| PDF | Partager et imprimer |
+| ODT | Modifier librement dans un traitement de texte compatible OpenDocument |
+| EPUB 3 | Lire sur une liseuse et publier |
+| NOVA | Écrire dans OpusNova, avec le schéma natif v27 |
+
+La commande **Couleur du texte de lecture** règle le contraste à chaud dans les vues de lecture. L’adaptation automatique est active par défaut. Les couleurs de conversion restent celles du document.
+
+Le mode compatible décrit les adaptations avant l’export. La composition paginée couvre les profils documentaires qualifiés. [Guide utilisateur](docs/guide-utilisateur.fr.md) · [Présentation bilingue](docs/presentation.md)
 
 ## Une direction visuelle, clairement annoncée
 
@@ -30,7 +43,7 @@ La référence est conservée sans conversion, en **1672 × 941 pixels**. Son [e
 | **Lecture** | Un DOCX dont les pages sont qualifiées ouvre en Page simple, avec Double page accessible dès l’ouverture. Le moteur couvre un profil expérimental de paragraphes latins, listes, tabulations, tableaux et images. Hors profil, le lecteur affiche un diagnostic et propose la lecture continue sur choix explicite si le contenu est lisible. L’import DOC binaire est prévu pour la V2. |
 | **Polices du document** | Familles Linux réellement chargées, thèmes latins, héritage et substitutions tracées ; fontes TTF incorporées dans un périmètre vérifié. Détails dans [la matrice typographique](docs/polices-et-typographie.md). |
 | **Interface Avalonia** | Clair/sombre/système, FR/EN, sommaire et signets dans le flux simplifié, recherche, diagnostics regroupés avec rapport détaillé. Pages/miniatures et zoom pour le profil composé. Aucun menu classique. |
-| **Version / À propos** | Version sémantique, heure UTC et locale, commit réel et état local détectables au build, cible et runtime ; informations embarquées et copiables sans Git à l’exécution. Crédits et notices tierces, licence du projet à définir. |
+| **Version / À propos** | Version sémantique, heure UTC et locale, commit réel et état local détectables au build, cible et runtime ; informations embarquées et copiables sans Git à l’exécution. Conversions et licence MIT visibles. Texte de la licence, détails techniques et notices tierces accessibles dans des sections repliées. |
 | **Protection des sources** | Ouverture en lecture seule, budgets de ressources, annulation, aucune macro/OLE exécutée ni ressource externe chargée. |
 | **PDF** | Export limité au profil simple latin, issu de la composition interne, avec police embarquée. Contrôles par des lecteurs PDF indépendants sur fixtures synthétiques. |
 | **ODT** | Export de paragraphes simples en ODF 1.3 éditable ; schémas et réouverture de référence vérifiés sur le profil testé. |
@@ -57,7 +70,7 @@ La [matrice de couverture](docs/architecture-et-couverture.md) distingue lecture
 
 ## Ouvrir depuis le bureau Linux
 
-Le lanceur **Lecteur Word** utilise l’icône fournie et ouvre la version installée pour votre utilisateur. Le raccourci du bureau et l’entrée Applications gardent un chemin stable lors des mises à jour. Voir [l’installation Linux](docs/installation-linux.md).
+Le lanceur **Lecteur Word** utilise l’icône fournie et ouvre la version installée pour votre utilisateur. Le raccourci du bureau et l’entrée Applications gardent un chemin stable lors des mises à jour. [Guide utilisateur en français](docs/guide-utilisateur.fr.md) · [English user guide](docs/user-guide.en.md) · [Fabrication des distributions Linux](docs/distribution-linux.md)
 
 ## Construire et ouvrir l'application
 
@@ -143,6 +156,6 @@ Chaque commande sélectionne un cas explicite. **Aucune suite complète sans aut
 
 ## Licence et diffusion
 
-**La licence du nouveau code reste à confirmer par le propriétaire avant diffusion.** Les notices des dépendances et de la police DejaVu sont conservées séparément ; aucune licence n'est choisie implicitement pour le projet. Le code et la licence GPL-3.0-only d'OpusNova ne sont pas modifiés.
+**Les développements originaux de Lecteur Word sont sous licence MIT.** Le texte de la licence figure dans [LICENSE](LICENSE). Les dépendances et polices gardent leurs propres notices. Le logo, la maquette et leurs déclinaisons sont exclus de MIT et suivent les [conditions d’utilisation de l’identité graphique](BRANDING.md). [Contribuer](CONTRIBUTING.md) · [Provenance](docs/provenance.md)
 
 Le raccordement au dépôt privé prépare la revue du premier commit. Il n'autorise ni commit, ni push, ni publication de données personnelles, de corpus, de binaires générés ou de résultats de tests.

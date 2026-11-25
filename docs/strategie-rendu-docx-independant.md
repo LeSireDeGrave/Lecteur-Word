@@ -27,13 +27,13 @@ SkiaSharp est déjà utilisé ; son graphe comprend les dépendances de mise en 
 | 3 | Images ancrées, zones de texte, habillage, rotations | Boîtes, collisions, recadrage et transformations inverses ; titre flottant complet et absence de perte textuelle |
 | 4 | Champs et sommaire, sélection sur la page | Valeur enregistrée distincte de la valeur recalculée ; recherche, sélection et surlignage cohérents avec la génération des pages |
 
-Chaque étape doit commencer par une cause démontrée sur le DOCX ou un témoin synthétique propre, puis tests ciblés et voisins, build et comparaison du corpus. La fidélité Word exige des références issues du même fichier, avec polices et version identifiées. Le présent retrait n'autorise pas à annoncer la compatibilité générale des DOCX complexes.
+Chaque étape doit commencer par une cause démontrée sur le DOCX ou un témoin synthétique propre, puis tests ciblés et voisins, build et comparaison du corpus. Les 128 pages de l'ancien candidat restent une preuve historique de ce candidat ; elles ne sont ni un oracle Word ni un objectif obligatoire de pagination. La fidélité Word exige des références issues du même fichier, avec polices et version identifiées. Le présent retrait n'autorise pas à annoncer la compatibilité générale des DOCX complexes.
 
 ## Alternatives à évaluer, sans intégration dans ce lot
 
 | Solution | Licence du composant principal | Intérêt et limites pour ce projet | Proposition |
 |---|---|---|---|
-| Moteur C# actuel, Open XML SDK et SkiaSharp | Code propre : licence à décider ; SDK et wrapper SkiaSharp : MIT, notices tierces distinctes | Chemin déjà exécuté, interface maîtrisée, budget réduit ; composition complexe encore à développer | Base recommandée |
+| Moteur C# actuel, Open XML SDK et SkiaSharp | Code propre : MIT ; SDK et wrapper SkiaSharp : MIT, notices tierces distinctes | Chemin déjà exécuté, interface maîtrisée, budget réduit ; composition complexe encore à développer | Base recommandée |
 | OfficeCLI | Apache-2.0, fichier NOTICE à conserver | Comparateur indépendant déjà audité en RENDER-001. Le rendu HTML observé exige navigateur et ressources/polices ; erreurs de flottants et pagination différente. Le seul binaire n'est pas le coût distribué complet | Premier candidat permissif à évaluer séparément, sans l'adopter ici |
 | docx4j avec export-FO / moteur FO | Apache-2.0 pour docx4j ; graphe exact, moteur FO et polices à examiner | Chaîne locale Java → XSL-FO → pages/PDF ; dépendances JVM, rendu PDF et couche de correspondance vers le modèle du lecteur à prévoir. Aucune mesure ni recette du corpus dans ce lot | Comparateur secondaire, pas un remplacement qualifié |
 | docx-preview / docxjs | Apache-2.0 ; JSZip et graphe à auditer séparément | Conversion HTML ; la documentation indique des limites de pagination automatique et de champs. Nécessite un environnement HTML et ne fournit pas la géométrie unifiée attendue | Priorité faible pour une vraie composition paginée |

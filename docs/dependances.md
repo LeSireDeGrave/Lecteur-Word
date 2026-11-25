@@ -33,6 +33,6 @@ Les bibliothèques système Linux restent nécessaires même avec .NET autonome.
 
 ## Nouveau code et OpusNova
 
-**Licence du nouveau code à confirmer par le propriétaire avant publication.** L'audit ne choisit pas une licence à sa place. Les notices tierces et droits existants sont préservés. OpusNova reste GPL-3.0-only ; aucun de ses fichiers ou historiques n'est copié dans ce produit et son export DOCX reste intact.
+**Le code original de Lecteur Word est distribué sous MIT.** Les notices tierces gardent leur portée propre. L’interopérabilité OpusNova repose sur un format de données documenté. [Licence MIT du projet](../LICENSE)
 
-L'interopérabilité prévue est hors processus via un format de données documenté ; elle ne constitue pas une décision juridique finale de redistribution ou de packaging. La licence propre au nouveau code, les notices natives/Inter et le paquetage du helper devront être revus avant un GO de publication. Aucun conflit de licence démontré n'a été contourné, et aucun commit/push ou publication n'est autorisé ici.
+Le runtime natif statique de l’AppImage est un composant de distribution séparé. Il est accompagné de ses licences, des sources correspondantes et d’une procédure de relien. Les notices SkiaSharp, HarfBuzzSharp, .NET, Inter et DejaVu accompagnent les publications qui les utilisent.

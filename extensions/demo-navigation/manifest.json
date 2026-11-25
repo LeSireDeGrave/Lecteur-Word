@@ -1,0 +1,24 @@
+{
+  "id": "org.lecteurword.demo.navigation",
+  "name": "Navigation de lecture",
+  "description": "Ouvre les titres, sections, signets et pages et ajoute des repères persistants.",
+  "author": "LeSireDeGrave",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "0.1.0",
+    "maximumExclusive": "1.0.0"
+  },
+  "apiVersion": 1,
+  "features": [
+    "reading.navigation"
+  ],
+  "permissions": [
+    "document.navigation"
+  ],
+  "license": "MIT",
+  "provenance": {
+    "publisher": "LeSireDeGrave",
+    "source": "https://github.com/LeSireDeGrave/Lecteur-Word"
+  },
+  "payloadSha256": "b7add2cc90417f78a45883bff033e902209294b4a8c4dc72bf39d27ce8de4617"
+}

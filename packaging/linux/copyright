@@ -1,0 +1,12 @@
+Lecteur Word
+Copyright (c) 2026 LeSireDeGrave
+SPDX-License-Identifier: MIT
+
+See LICENSE for the terms covering Lecteur Word's original code, documentation
+and resources whose rights are held by the author. The official identity assets
+are excluded from MIT. See BRANDING.md for the author’s terms for official releases,
+presentation and promotion, and the scope of the reserved rights.
+
+The notices/ directory contains the copyright, license and attribution
+material for the components distributed with this application.
+DEPENDENCIES.json identifies the packages for this particular build.

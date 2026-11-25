@@ -168,7 +168,13 @@ static class PageCorpusCases
                     Check(w.CurrentPage==composition.Pages.Count,"Navigation de page.");
                     page=w.CurrentPage;
                 }
-                else Check(w.IsSimplifiedReading&&w.CurrentPage==0,"Repli ou nombre de pages fictif.");
+                else
+                {
+                    Check(w.CurrentReadingView==ReadingView.Unavailable&&!w.IsSimplifiedReading&&w.CurrentPage==0,
+                        "Une composition incomplète doit attendre le choix de consultation.");
+                    w.SetReadingView(ReadingView.Continuous);
+                    Check(w.IsSimplifiedReading,"Consultation continue explicite indisponible.");
+                }
                 w.SetZoom(1.5);
                 Check(w.Zoom==1.5,"Zoom 150 %.");
                 w.GetVisualDescendants().OfType<Button>().First(b=>b.Name?.StartsWith("Action_search_",StringComparison.Ordinal)==true)

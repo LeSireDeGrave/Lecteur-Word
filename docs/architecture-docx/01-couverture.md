@@ -1,6 +1,6 @@
 # Couverture actuelle et besoins du corpus
 
-Cette photographie décrit le socle indépendant après LAYOUT-001C et RENDER-001. Les relevés par document et les références de comparaison restent dans la qualification locale.
+Le relevé croise le code, les inventaires DocxCore et diagnostics C# RENDER-001, puis les résultats ENGINE-ABANDON-001. Les onze empreintes concordent. L’inspection et la lecture sont disponibles pour les onze copies. Les dix refus de composition conservent le flux simplifié. La référence Word de ces cas reste à constituer.
 
 | Domaine | Existe dans le lecteur actif | À améliorer | À construire |
 |---|---|---|---|
@@ -21,6 +21,22 @@ Cette photographie décrit le socle indépendant après LAYOUT-001C et RENDER-00
 
 Sources existantes de référence. [Architecture et couverture](../architecture-et-couverture.md) · [Compatibilité LAYOUT-001C](../compatibilite-pagination.md) · [Polices](../polices-et-typographie.md) · [Budgets et contrôles](../securite.md).
 
-## Témoins de maintenance
+## Onze copies réelles
 
-Isoler les cas qui combinent styles conditionnels, dessins, notes, listes et champs avant de qualifier un document complet. Les paramètres DrawingML restent dans l’inventaire. Les déclarations OLE peuvent motiver un diagnostic ou un aperçu passif dans un profil dédié.
+Les chiffres ci-dessous comptent des déclarations XML dans l’inventaire, y compris branches alternatives et parties non choisies. Une occurrence XML peut partager un objet logique ou constituer une variante. Les notes sont comptées par appels. Les nombres d’instructions sont des éléments XML et peuvent fractionner un champ. Les blocages sont les **codes distincts bloquants** des diagnostics C# RENDER-001. Ils peuvent compter plusieurs manifestations d’un même manque. Le relevé privé contient tous les QNames, compteurs et blocages avec leur provenance. Les observations des anciens moteurs servent de témoins de risque.
+
+| ID et repère | Pages C# / codes bloquants | Structures observées et chantier prioritaire |
+|---|---:|---|
+| 00 · annexe de collecte | 0 / 13 | 6 tables, 3 ancres, 7 alternatives, formes et zones de texte, en-tête/pied et instruction de champ. Résoudre la grille, l’habillage et le choix DrawingML/VML |
+| 01 · lettre | 1 / 0 | 1 section, 3 liens externes inertes. Préserver la page calculée et tracer les substitutions. Témoin de non-régression |
+| 02 · recette document | 0 / 6 | 2 sections, 2 appels de pied et 4 de fin, 12 scalaires hors BMP dans les nœuds textuels comptés. Relier et composer les notes avec Unicode |
+| 03 · recette ouvrage | 0 / 6 | 2 sections, 2 appels de pied et 4 de fin, 12 scalaires hors BMP. Couvrir les variantes de placement et la numérotation |
+| 04 · guide utilisateur | 0 / 12 | 33 tables, en-tête/pied, listes, styles de tables conditionnels et conflits de largeurs. Étendre l’AutoFit par preuves |
+| 05 · Stage 2 | 0 / 20 | 10 sections, 16 tables, 21 ancres, 20 alternatives et 14 déclarations OLE. Sommaire avec taquet droit 7 923 twips, TOC et 19 PAGEREF d’après RENDER-001. Conserver l’aperçu passif disponible et diagnostiquer tout contenu actif ou absent |
+| 06 · bilan CE1 | 0 / 6 | 5 tables, 3 dessins inline. Étendre propriétés d’image et de ligne, puis contrôler leur effet sur les coupures |
+| 07 · CDC | 0 / 17 | 4 tables, une ancre, un appel de pied, symboles et 5 caractères privés. Identifier la face et le chemin de glyphe. Le constat historique des cinq .notdef ne justifie pas de remapper U+F0E8 |
+| 08 · fiche tableau/graphique | 0 / 9 | 3 sections, 3 tables, 3 ancres et 3 alternatives, un appel de pied. Vérifier boîte du titre, dimensions d’image et transformation en coordonnées de page |
+| 09 · statuts | 0 / 7 | 2 sections, 5 références d’en-tête et 4 de pied, 2 ancres, 5 contrôles de contenu. Couvrir rotations, champs et empilement des régions |
+| 10 · guide composé | 0 / 6 | 3 sections, 6 appels de pied et 6 de fin, une table, styles manquants signalés, champs et histoires héritées. Témoin des réservations et transitions de notes |
+
+Stage 2 est le témoin final d’intégration des dépendances. L’alignement du sommaire, le calcul des notes et la place des dessins forment des problèmes distincts qu’il faut isoler dans des témoins synthétiques avant le cas complet. Les zéros techniques DrawingML écartés du texte de secours restent dans l’inventaire. La présence de déclarations OLE mesure un besoin de représentation passive et d’information, avec exécution interdite.

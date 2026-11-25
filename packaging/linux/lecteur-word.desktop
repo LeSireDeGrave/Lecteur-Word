@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Lecteur Word
+GenericName=Lecteur de documents Word
+GenericName[en]=Word document reader
+Comment=Lire et exporter des documents DOCX
+Comment[en]=Read and export DOCX documents
+Exec=lecteur-word %f
+Icon=lecteur-word
+Terminal=false
+StartupNotify=false
+StartupWMClass=LecteurWord
+Categories=Office;Viewer;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;
+Keywords=Word;DOCX;Lecture;
+Keywords[en]=Word;DOCX;Reading;

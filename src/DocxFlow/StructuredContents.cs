@@ -7,6 +7,8 @@ internal sealed partial class StructuredPublication
 {
     sealed record OdtContents(string Field,int First,int Last,int Levels,bool Marks,bool Links);
     OdtContents? nativeContents;
+    internal sealed record NovaContents(string Field,int First,int Last);
+    internal NovaContents? ActiveNovaContents {get;private set;}
 
     XElement[] BuildOdtBody()
     {
@@ -82,5 +84,43 @@ internal sealed partial class StructuredPublication
             }
         }
         return outline||marks?new(field.Id,left,right,levels,marks,links):null;
+    }
+
+    internal NovaContents? FindNovaContents(Func<LayoutParagraph,bool> isChapter)
+    {
+        if(snapshot.FieldStability!="Stable"||FindOdtContents() is not {Marks:true,Links:true,Levels:1} contents)
+            return null;
+        if(model.Sections.Skip(1).Any(section=>section.StartBlock>contents.First&&section.StartBlock<=contents.Last))return null;
+        var chapters=model.BodyBlocks.Where(id=>Paragraph(id) is {} paragraph&&isChapter(paragraph)).ToArray();
+        var entries=model.TocEntries.Where(entry=>entry.SelectingTocIds.Contains(contents.Field)).ToArray();
+        if(chapters.Length==0||chapters.Length!=entries.Length||!chapters.SequenceEqual(entries.Select(entry=>entry.ParagraphId)))
+            return null;
+        var rows=model.BodyBlocks.Skip(contents.First).Take(contents.Last-contents.First+1).ToArray();
+        if(rows.Length!=chapters.Length)return null;
+        for(int i=0;i<rows.Length;i++)
+        {
+            token.ThrowIfCancellationRequested();
+            string row=rows[i],chapter=chapters[i];
+            var fields=fieldsByParagraph[row].Where(field=>field.Id!=contents.Field).Take(2).ToArray();
+            if(fields is not [{Command:"PAGEREF",Locked:false,StructureVerified:true,BookmarkId:{} target} folio]||
+                ParagraphOf(model,target)!=chapter||marks[row].Any()||bookmarkEnds[row].Any()||
+                Paragraph(row)?.List is not null||
+                tokens[row].Any(item=>Visible(item)&&item.Role==TextRole.Control&&item.Control!="Tab"))return null;
+            var excluded=folio.StoredResultIds.ToHashSet(StringComparer.Ordinal);
+            var rowTokens=tokens[row].Where(item=>Visible(item)&&!excluded.Contains(item.Source.NodeId)).ToArray();
+            if(rowTokens.Any(item=>LinkFor(item.Source.NodeId) is {} link&&link.TargetId!=target))return null;
+            string label=Label(entries[i].Label), title=Label(TextOf(tokens[chapter].Where(Visible)));
+            string ordinal=(i+1).ToString(CultureInfo.InvariantCulture);
+            bool redundantOrdinal=label==ordinal+" "+title&&
+                (title.StartsWith("Chapitre "+ordinal+" ",StringComparison.OrdinalIgnoreCase)||
+                    title.StartsWith("Chapter "+ordinal+" ",StringComparison.OrdinalIgnoreCase));
+            if(label.Length==0||label!=Label(TextOf(rowTokens))||label!=title&&!redundantOrdinal)
+                return null;
+        }
+        return ActiveNovaContents=new(contents.Field,contents.First,contents.Last);
+
+        static string TextOf(IEnumerable<TextToken> items)=>string.Concat(items.Select(item=>
+            item.Role==TextRole.Control&&item.Control=="Tab"?" ":item.Original));
+        static string Label(string text)=>string.Join(' ',text.Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries));
     }
 }

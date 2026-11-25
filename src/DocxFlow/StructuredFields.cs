@@ -13,8 +13,9 @@ internal sealed partial class StructuredPublication
         .Where(value=>value.Diagnostic is null&&value.Text is not null).GroupBy(value=>value.FieldId,StringComparer.Ordinal)
         .Where(values=>values.Count()==1).ToDictionary(values=>values.Key,values=>values.Single(),StringComparer.Ordinal);
     readonly HashSet<string> knownContents=new(StringComparer.Ordinal);
+    readonly HashSet<string> mainBlocks=source.Semantic!.BodyBlocks.ToHashSet(StringComparer.Ordinal);
     readonly HashSet<string> visibleFieldResults=(source.Pagination?.Typography?.Tokens??[])
-        .Where(item=>item.Role==TextRole.StoredField&&Visible(item)&&!string.IsNullOrEmpty(item.Original))
+        .Where(item=>item.Role==TextRole.StoredField&&Visible(item)&&!string.IsNullOrWhiteSpace(item.Original))
         .Select(item=>item.Source.NodeId).ToHashSet(StringComparer.Ordinal);
     internal SortedDictionary<string,string> OdtDocumentProperties {get;}=new(StringComparer.Ordinal);
     IReadOnlyDictionary<string,string>? documentProperties;
@@ -37,7 +38,7 @@ internal sealed partial class StructuredPublication
                 parts.Add((order,new(origin,null,null,null,Anchor:destination)));
                 Headings.Add((destination,entry.Level,entry.Label));
             }
-            else
+            else if(ActiveNovaContents is not {} toc||!entry.SelectingTocIds.Contains(toc.Field))
                 Reserve("EXPORT_NOVA_TOC_MARK",origin,"Le titre et le résultat du sommaire restent lisibles. La marque Word n’est plus dynamique.");
             return true;
         }
@@ -96,8 +97,22 @@ internal sealed partial class StructuredPublication
         }
         if(field.Command is not ("REF" or "PAGEREF")||syntax is not {Relative:false,DecimalPlaces:0}||field.BookmarkId is not {} target)
             return false;
+        if(format==ExportFormat.Nova&&field.Command=="PAGEREF"&&field.ParentFieldId is null&&
+            syntax.Format is null or "decimal"&&
+            ParagraphOf(model,field.Id) is {} owner&&mainBlocks.Contains(owner)&&
+            ParagraphOf(model,target) is {} bookmarkParagraph&&mainBlocks.Contains(bookmarkParagraph)&&
+            marks[bookmarkParagraph].Any(mark=>mark.Id==target)&&
+            model.Attribute(target,"name") is {} bookmarkName&&bookmarkName!="_GoBack"&&
+            NovaPublication.ValidBookmarkName(bookmarkName))
+        {
+            Add("NOVA_PAGEREF",null,target);
+            Reserve("EXPORT_NOVA_DYNAMIC_PAGE_REFERENCE",origin,
+                "Le renvoi s’actualise dans OpusNova. Son libellé natif et la pagination peuvent changer.");
+            Feature("nova-editorial-fields",PublicationRetention.Native,origin.Location,"Renvoi de page dynamique à un signet NOVA.");
+            return true;
+        }
         string? text=snapshot.FieldStability=="Stable"?calculatedFields.GetValueOrDefault(field.Id)?.Text:null;
-        text??=field.StoredResultIds.IsEmpty?null:model.StoredText(field);
+        text??=format==ExportFormat.Nova&&!HasVisibleFieldResult(field)||field.StoredResultIds.IsEmpty?null:model.StoredText(field);
         if(text is null)return false;
         if(Odt)
         {

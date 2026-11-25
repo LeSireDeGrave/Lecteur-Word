@@ -38,6 +38,30 @@ internal sealed partial class StructuredPublication
         return model.BlocksOf(frame.StoryId).Select(block=>block.Id).ToArray();
     }
 
+    string? RecoverTextBox(string drawing)
+    {
+        string? story=null;
+        var pending=new Stack<SemanticElement>(model.Children(drawing).Reverse());
+        while(pending.TryPop(out var element))
+        {
+            token.ThrowIfCancellationRequested();
+            if(element.Kind==SemanticKind.ResourceReference)return null;
+            if(element.Kind==SemanticKind.Story)
+            {
+                if(story is not null||!model.Name(element.Id).EndsWith("}txbxContent",StringComparison.Ordinal))return null;
+                story=element.Id;
+            }
+            foreach(var child in model.Children(element.Id).Reverse())pending.Push(child);
+        }
+        if(story is null)return null;
+        var blocks=model.BlocksOf(story).ToArray();
+        if(blocks.Length==0||blocks.Any(block=>block.Kind!=SemanticKind.Paragraph)||
+            !blocks.SelectMany(block=>tokens[block.Id]).Any(item=>Visible(item)&&item.Role is TextRole.Source or TextRole.StoredField&&
+                !string.IsNullOrWhiteSpace(item.Original)))return null;
+        LoadStoryLayout(story,snapshot.Sections.FirstOrDefault()?.Format??new());
+        return blocks.All(block=>paragraphs.ContainsKey(block.Id))?story:null;
+    }
+
     Inline[] ReflowDrawing(SemanticSource origin,SemanticReference? link,PlacedObject drawing)
     {
         var result=new List<Inline>();

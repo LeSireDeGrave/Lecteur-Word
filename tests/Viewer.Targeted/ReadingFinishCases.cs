@@ -19,6 +19,7 @@ static class ReadingFinishCases
     {
         AppBuilder.Configure<ReaderApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).UseSkia().WithInterFont().SetupWithoutStarting();
         var window=new ReaderWindow();window.Show();AboutCases.Complete(window.OpenDocumentAsync(ReadingUxCases.Fixture(output)));
+        window.SetReadingView(ReadingView.Continuous);
         var model=window.CurrentReading!;var note=model.Presentation.Notes.Values.First(n=>n.Verified&&n.Kind=="footnote");
         foreach(int theme in new[]{1,2})
         {

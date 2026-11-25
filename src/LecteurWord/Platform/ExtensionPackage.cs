@@ -5,13 +5,30 @@ using System.Text.RegularExpressions;
 
 namespace LecteurWord.Platform;
 
+internal readonly record struct ExtensionHostVersion(Version Number, string? Prerelease = null)
+{
+    public static implicit operator ExtensionHostVersion(Version version) => new(version);
+
+    internal static ExtensionHostVersion Parse(string? value)
+    {
+        string? semver = value?.Split('+',2)[0];
+        string[]? parts = semver?.Split('-',2);
+        return new(ExtensionPackage.StableVersion(parts?[0]),parts is [_,{} prerelease] ? prerelease : null);
+    }
+
+    internal bool Reaches(Version bound) => Number > bound || Number == bound && Prerelease is null;
+    public override string ToString() => Number + (Prerelease is null ? "" : "-" + Prerelease);
+}
+
 internal sealed record ExtensionCompatibility(string Minimum, string MaximumExclusive);
 internal sealed record ExtensionProvenance(string Publisher, string? Source);
+internal sealed record ExtensionDependency(string Id, string Minimum, string MaximumExclusive);
 internal sealed record ExtensionManifest(string Id, string Name, string Description, string Author, string Version,
     ExtensionCompatibility Compatibility, int ApiVersion, string[] Features, string[] Permissions, string License,
     ExtensionProvenance Provenance, string PayloadSha256)
 {
     internal ExtensionIdentity Identity => new(Id, Version);
+    public ExtensionDependency[]? Dependencies { get; init; }
 }
 
 internal sealed record ThemeColors(string Surface, string Accent);
@@ -20,13 +37,22 @@ internal sealed record MetricExpression(string Label, string[] Expression);
 internal sealed record ReadingContribution(MetricExpression[] Metrics);
 internal sealed record ExtensionPackage(ExtensionManifest Manifest, ThemeContribution? Theme, ReadingContribution? Reading, byte[] Archive)
 {
+    internal TranslationContribution? Translation { get; init; }
+    internal NavigationContribution? Navigation { get; init; }
+    internal AccessibilityContribution? Accessibility { get; init; }
     internal const int ArchiveLimit = 128 * 1024;
-    internal const int Api = 1;
+    internal const int ManifestLimit = 32 * 1024;
+    internal const int TranslationPayloadLimit = 256 * 1024;
+    internal const int Api = BuildReference.ExtensionApiVersion;
     internal const string ThemeFeature = "appearance.theme";
     internal const string ReadingFeature = "reading.metrics";
+    internal const string TranslationFeature = "appearance.translation";
+    internal const string NavigationFeature = "reading.navigation";
+    internal const string AccessibilityFeature = "reading.accessibility";
     internal const string MetricsPermission = "document.metrics.read";
+    internal const string NavigationPermission = "document.navigation";
 
-    internal static ExtensionPackage Read(byte[] archive, Version reader, bool checkCompatibility = true)
+    internal static ExtensionPackage Read(byte[] archive, ExtensionHostVersion reader, bool checkCompatibility = true)
     {
         Require(archive.Length <= ArchiveLimit, "Paquet trop volumineux.");
         try
@@ -37,34 +63,42 @@ internal sealed record ExtensionPackage(ExtensionManifest Manifest, ThemeContrib
             ValidateManifest(manifest);
             if (checkCompatibility) Require(IsCompatible(manifest, reader),
                 $"Extension incompatible avec Lecteur Word {reader} ou son API {Api}.");
-            var payload = Entry(zip, "payload.json");
+            var payload = Entry(zip, "payload.json", manifest.Features[0] == TranslationFeature ? TranslationPayloadLimit : ManifestLimit);
             Require(HashMatches(payload, manifest.PayloadSha256), "Intégrité du contenu du paquet invalide.");
             if (!checkCompatibility && manifest.ApiVersion != Api) return new ExtensionPackage(manifest, null, null, archive);
-            if (manifest.Features[0] == ThemeFeature)
+            switch (manifest.Features[0])
             {
-                var theme = Decode<ThemeContribution>(payload);
-                ValidateColors(theme.Default);
-                ValidateColors(theme.Alternate);
-                return new ExtensionPackage(manifest, theme, null, archive);
+                case ThemeFeature:
+                    var theme = Decode<ThemeContribution>(payload);
+                    ValidateColors(theme.Default);
+                    ValidateColors(theme.Alternate);
+                    return new ExtensionPackage(manifest, theme, null, archive);
+                case TranslationFeature:
+                    return new(manifest, null, null, archive) { Translation = TranslationContribution.Read(payload) };
+                case NavigationFeature:
+                    return new(manifest, null, null, archive) { Navigation = NavigationContribution.Read(payload) };
+                case AccessibilityFeature:
+                    return new(manifest, null, null, archive) { Accessibility = AccessibilityContribution.Read(payload) };
+                default:
+                    var reading = Decode<ReadingContribution>(payload);
+                    ReadingProtocol.Validate(reading);
+                    return new(manifest, null, reading, archive);
             }
-            var reading = Decode<ReadingContribution>(payload);
-            ReadingProtocol.Validate(reading);
-            return new ExtensionPackage(manifest, null, reading, archive);
         }
         catch (JsonException error) { throw new InvalidDataException("JSON du paquet invalide.", error); }
     }
 
-    internal static bool IsCompatible(ExtensionManifest manifest, Version reader) =>
-        manifest.ApiVersion == Api && reader >= StableVersion(manifest.Compatibility.Minimum)
-        && reader < StableVersion(manifest.Compatibility.MaximumExclusive);
+    internal static bool IsCompatible(ExtensionManifest manifest, ExtensionHostVersion reader) =>
+        manifest.ApiVersion == Api && reader.Reaches(StableVersion(manifest.Compatibility.Minimum))
+        && !reader.Reaches(StableVersion(manifest.Compatibility.MaximumExclusive));
 
-    static byte[] Entry(ZipArchive zip, string name)
+    static byte[] Entry(ZipArchive zip, string name, int limit = ManifestLimit)
     {
         var entry = zip.Entries.SingleOrDefault(e => e.FullName == name);
-        Require(entry is not null && entry.Length <= 32 * 1024 && ((entry.ExternalAttributes >> 16) & 0xF000) != 0xA000,
+        Require(entry is not null && entry.Length <= limit && ((entry.ExternalAttributes >> 16) & 0xF000) != 0xA000,
             $"Entrée {name} absente ou invalide.");
         using var input = entry!.Open();
-        return PlatformFiles.ReadBounded(input, 32 * 1024);
+        return PlatformFiles.ReadBounded(input, limit);
     }
 
     internal static T Decode<T>(ReadOnlySpan<byte> bytes) where T : class =>
@@ -101,10 +135,16 @@ internal sealed record ExtensionPackage(ExtensionManifest Manifest, ThemeContrib
         Require(manifest.Features is { Length: 1 } && TextField(manifest.Features[0],80) && manifest.Permissions is { Length: <= 8 } &&
             manifest.Permissions.All(p => TextField(p,80)), "Fonctionnalités ou permissions invalides.");
         if (manifest.ApiVersion != Api) return;
+        if (manifest.Dependencies is {} dependencies)
+            Require(dependencies.Length <= 8 && dependencies.All(d => d is not null && IsId(d.Id) &&
+                d.Id != manifest.Id && StableVersion(d.Minimum) < StableVersion(d.MaximumExclusive)) &&
+                dependencies.Select(d => d.Id).Distinct(StringComparer.Ordinal).Count() == dependencies.Length,
+                "Dépendances d’extension invalides.");
         Require(manifest.Features switch
         {
-            [ThemeFeature] => manifest.Permissions.Length == 0,
+            [ThemeFeature] or [TranslationFeature] or [AccessibilityFeature] => manifest.Permissions.Length == 0,
             [ReadingFeature] => manifest.Permissions is [MetricsPermission],
+            [NavigationFeature] => manifest.Permissions is [NavigationPermission],
             _ => false
         }, "Fonctionnalité ou permission inconnue pour cette version d’API.");
     }

@@ -4,6 +4,7 @@
     <Project Path="src/DocxCore.Cli/DocxCore.Cli.csproj" />
     <Project Path="src/DocxFlow/DocxFlow.csproj" />
     <Project Path="src/LecteurWord/LecteurWord.csproj" />
+    <Project Path="src/LecteurWord.Cli/LecteurWord.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DocxCore.Targeted/DocxCore.Targeted.csproj" />

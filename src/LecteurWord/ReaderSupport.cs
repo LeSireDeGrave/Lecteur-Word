@@ -59,9 +59,8 @@ public sealed partial class ReaderWindow
         var inputs = new StackPanel { Spacing = 7 };
         grid.Children.Add(inputs);
         var kinds = Enum.GetValues<SupportKind>();
-        var kind = new ComboBox { Name = "SupportKind", ItemsSource = kinds.Select(k => GitHubSupportService.KindLabel(k, english)).ToArray(),
-            SelectedIndex = Array.IndexOf(kinds, initialKind), MinWidth = 180 };
-        inputs.Children.Add(kind);
+        var kindsPanel = DialogActions(inputs);
+        SupportKind selectedKind = initialKind;
         var steps = new TextBox { Name = "ReproductionSteps", PlaceholderText = T("Étapes de reproduction","Reproduction steps"),
             MaxLength = 8000, Height = 95, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
         var extra = new TextBox { Name = "SupportDetails", PlaceholderText = T("Informations supplémentaires (facultatives)","Additional information (optional)"),
@@ -100,14 +99,21 @@ public sealed partial class ReaderWindow
         ActionButton(actions,T("Fermer","Close"),dialog.Close);
         footerPanel.Children.Add(feedback);
 
-        kind.SelectionChanged += (_, _) => Refresh();
+        foreach (var kind in kinds)
+        {
+            var choice = new RadioButton { Name = "SupportKind_" + kind, GroupName = "SupportKind",
+                Content = T(GitHubSupportService.KindLabel(kind,false),GitHubSupportService.KindLabel(kind,true)),
+                IsChecked = kind == initialKind };
+            choice.IsCheckedChanged += (_, _) => { if (choice.IsChecked == true) { selectedKind = kind; Refresh(); } };
+            kindsPanel.Children.Add(choice);
+        }
         steps.TextChanged += (_, _) => Refresh();
         extra.TextChanged += (_, _) => Refresh();
         include.IsCheckedChanged += (_, _) => Refresh();
         Refresh();
         await dialog.ShowDialog(owner);
 
-        SupportKind CurrentKind() => kind.SelectedIndex >= 0 ? kinds[kind.SelectedIndex] : initialKind;
+        SupportKind CurrentKind() => selectedKind;
         void Refresh()
         {
             preview.Text = GitHubSupportService.Draft(CurrentKind(),steps.Text ?? "",extra.Text ?? "",

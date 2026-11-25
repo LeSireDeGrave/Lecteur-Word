@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "catalog-v1.schema.json",
+  "title": "Lecteur Word extension catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "entries"],
+  "properties": {
+    "schema": {"const": 1},
+    "entries": {
+      "type": "array", "maxItems": 256,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["manifest", "packageUrl", "packageSha256"],
+        "properties": {
+          "manifest": {"$ref": "manifest-v1.schema.json"},
+          "packageUrl": {"$ref": "manifest-v1.schema.json#/$defs/https"},
+          "packageSha256": {"$ref": "manifest-v1.schema.json#/$defs/sha256"}
+        }
+      }
+    }
+  }
+}

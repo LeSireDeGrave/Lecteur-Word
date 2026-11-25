@@ -525,7 +525,7 @@ internal sealed partial class TypographySession
         return builder.Build();
     }
 
-    internal void Paint(SKCanvas canvas,TextFragment fragment,float x,float baseline,SKColor automaticColor,bool shadowOnly=false)
+    internal void Paint(SKCanvas canvas,TextFragment fragment,float x,float baseline,SKColor automaticColor,bool shadowOnly=false,SKColor? background=null,Func<SKColor,SKColor,SKColor>? ink=null)
     {
         using var blob=TextBlob(fragment);
         if(blob is null)return;
@@ -542,6 +542,7 @@ internal sealed partial class TypographySession
             IsAntialias=true,
             Color=fragment.Style.Color=="auto"?automaticColor:SKColor.Parse(fragment.Style.Color)
         };
+        if(ink is not null)paint.Color=ink(paint.Color,fragment.Style.Background is {} fill ? SKColor.Parse(fill) : background??SKColors.White);
         canvas.DrawText(blob,x,baseline,paint);
     }
 

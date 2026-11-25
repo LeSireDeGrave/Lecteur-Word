@@ -48,10 +48,35 @@ static class AboutCases
             reader.SetTheme(theme);reader.SetLanguage(english);
             reader.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="AboutLecteurWord").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
             var about=reader.OwnedWindows.OfType<AboutWindow>().Single();
-            Check(about.ActualThemeVariant==(theme==1?ThemeVariant.Light:ReaderPalette.BlueVariant),"About theme mismatch");
+            Check(about.ActualThemeVariant==(theme==1?ReaderPalette.ChocolateVariant:ReaderPalette.BlueVariant),"About theme mismatch");
+            var license=about.GetVisualDescendants().OfType<TextBlock>().Single(t=>t.Name=="AboutProjectLicense");
+            Check(license.Text==(english?"MIT license":"Licence MIT"),"About must show the project licence in both reference languages");
+            var nova=about.GetVisualDescendants().OfType<TextBlock>().Single(t=>t.Name=="AboutNovaFormat");
+            Check(nova.Text==(english?"OpusNova export format: NOVA (schema v27)":"Format d'export OpusNova : NOVA (schéma v27)"),
+                "About must describe the NOVA export schema explicitly");
+            var sections=about.GetVisualDescendants().OfType<Expander>().ToDictionary(section=>section.Name!);
+            foreach(string name in new[]{"AboutMitLicense","AboutNotices","AboutTechnical"})
+                Check(!sections[name].IsExpanded,"About sections must start collapsed");
+            Check(sections["AboutTechnical"].Content is SelectableTextBlock details && details.Text==about.InformationText,
+                "The complete build reference must remain available in its section");
+            Check(about.GetVisualDescendants().OfType<Border>().Count(border=>border.Name is
+                "AboutFormatPdf" or "AboutFormatOdt" or "AboutFormatEpub3" or "AboutFormatNova")==4,
+                "About must show exactly the four export formats");
+            Check(about.GetVisualDescendants().OfType<Image>().Single(img=>img.Name=="AboutLogo").Source is not null,
+                "About must display the official image");
             Check(about.InformationText==BuildReference.Current.FullReference(english),"About metadata differs");
             Complete(about.CopyInformationAsync());Check(Complete(about.Clipboard!.TryGetTextAsync())==about.InformationText,"About clipboard differs");
             Check(about.CopyStatusText==(english?"Information copied":"Informations copiées")||about.CopyStatusText==(english?"Reference copied":"Référence copiée"),"About copy confirmation missing");
+            sections["AboutMitLicense"].IsExpanded=true;
+            Dispatcher.UIThread.RunJobs();
+            Check(sections["AboutMitLicense"].Content is TextBox mit && mit.Text==File.ReadAllText("LICENSE"),
+                "The expanded MIT text must match the repository licence byte for byte");
+            sections["AboutMitLicense"].IsExpanded=false;
+            sections["AboutNotices"].IsExpanded=true;
+            Dispatcher.UIThread.RunJobs();
+            Check(sections["AboutNotices"].Content is TextBox notices && notices.Text==File.ReadAllText("BRANDING.md")+"\n\n"+AboutWindow.ThirdPartyNotices,
+                "The expanded third-party notices must remain complete");
+            sections["AboutNotices"].IsExpanded=false;
             about.Width=320;about.Height=350;Dispatcher.UIThread.RunJobs();
             Check(about.CopyButton.Focus()&&about.CopyButton.IsFocused,"Copy inaccessible by keyboard focus");
             foreach(var button in about.GetVisualDescendants().OfType<Button>().Where(b=>b.Name is "AboutCopy" or "AboutClose"))

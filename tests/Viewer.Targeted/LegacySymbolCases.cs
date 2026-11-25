@@ -23,6 +23,11 @@ static partial class FontCases
             SymbolCmap.Lookup(cmap,0xb7,typeface.GlyphCount,()=>{})==(SymbolCmap.Status.Present,glyph)&&
             SymbolCmap.Lookup(cmap,0xf077,typeface.GlyphCount,()=>{})==(SymbolCmap.Status.Present,(ushort)0),
             "Table 3/0 format 4, index direct et alias de l’octet.");
+        Check(SymbolCmap.Lookup(cmap,0x97,typeface.GlyphCount,()=>{},firstSymbol:0xf040)==(SymbolCmap.Status.Present,glyph)&&
+            SymbolCmap.Lookup(cmap,0xf097,typeface.GlyphCount,()=>{},firstSymbol:0xf040,packedWordSymbol:true)==(SymbolCmap.Status.Present,glyph)&&
+            SymbolCmap.Lookup(cmap,0xf0b7,typeface.GlyphCount,()=>{},firstSymbol:0xf040,packedWordSymbol:true)==(SymbolCmap.Status.Present,glyph)&&
+            SymbolCmap.Lookup(cmap,0xf097,typeface.GlyphCount,()=>{},firstSymbol:0xf040)==(SymbolCmap.Status.Present,(ushort)0),
+            "Un w:sym résout le code exact ou son octet empaqueté. Un caractère privé garde son code.");
         var malformed=cmap.ToArray();
         BinaryPrimitives.WriteUInt16BigEndian(malformed.AsSpan(40),0xfffe);
         Check(SymbolCmap.Lookup(malformed,0xf0b7,typeface.GlyphCount,()=>{}).Status==SymbolCmap.Status.Invalid&&
@@ -93,13 +98,28 @@ static partial class FontCases
         File.WriteAllBytes(Path.Combine(root,"glyphes-symboliques.png"),raster);
         Check(Sha(witness)==hash&&original.SequenceEqual(ManifestJson.Serialize(input.Manifest)),"Le DOCX ou le JSON v1 a été modifié.");
 
+        using var alternate=PageComposer.Compose(DocumentInspector.InspectDocument(Fixture("legacy-alternate",
+            "<w:p>"+Run("LW Alias","")+"""<w:r><w:sym w:font="LW Alias" w:char="F0B7"/></w:r></w:p>""",TestFont(4,cmap))));
+        var aliasParagraph=alternate.Snapshot.Typography!.Paragraphs.First(p=>p.Controls.Any(c=>c.Kind=="Symbol"));
+        var aliasControl=aliasParagraph.Controls.Single(c=>c.Kind=="Symbol").Symbol!;
+        var aliasText=aliasParagraph.Fragments.Single(f=>f.Text=="");
+        Check(alternate.Snapshot.Coverage==PageCoverage.Complete&&
+            aliasText.LegacySymbol is {Family:"LW Alias",Method:"declared-alternate",DrawingCode:null}&&
+            aliasControl.LegacySymbol==aliasText.LegacySymbol&&aliasText.Measure?.Glyphs.Single().Id==glyph&&
+            aliasControl.Measure?.Metrics.Width==aliasText.Measure?.Metrics.Width&&
+            PageCoordinates.Clusters(alternate.Snapshot.Pages.Single().Geometry.Lines.Single()).Count()==2,
+            "Le nom alternatif déclaré conserve le glyphe, les avances et les deux sources.");
+
         using var missing=PageComposer.Compose(DocumentInspector.InspectDocument(Fixture("legacy-rights",
             Fixtures.Paragraph("Avant")+"<w:p>"+symbols+Run("Arial","\uf0b7")+"</w:p>",TestFont(2,cmap))));
         Check(missing.Snapshot.RulerModel!.Fonts.Embedded.Single().Status=="refused"&&
             missing.Snapshot.Typography!.Paragraphs.SelectMany(p=>p.Controls)
-                .Any(c=>c.Symbol is {LegacySymbol.Family:"LW TestFace",Measure:null})&&
+                .Any(c=>c.Symbol is {LegacySymbol:{Family:"LW TestFace",Method:"missing-marker",DrawingCode:null},
+                    Face.Status:"missing-glyph-marker"})&&
             missing.Snapshot.Typography.Paragraphs.SelectMany(p=>p.Fragments)
-                .Any(f=>f is {Text:"\uf0b7",LegacySymbol.Family:"Arial",Measure:null}),"Face refusée ou code privé hors famille remplacé.");
+                .Any(f=>f is {Text:"\uf0b7",LegacySymbol:{Family:"Arial",Method:"missing-marker",DrawingCode:null},
+                    Face.Status:"missing-glyph-marker"})&&missing.Snapshot.Coverage==PageCoverage.Partial,
+            "Les sources non résolues portent le repère explicite et la face restreinte reste refusée.");
         using var corrupted=PageComposer.Compose(DocumentInspector.InspectDocument(Fixture("legacy-corrupt",
             Fixtures.Paragraph("Avant")+"<w:p>"+symbols+"</w:p>",TestFont(0,malformed))));
         Check(corrupted.Snapshot.Coverage==PageCoverage.Partial&&
@@ -138,7 +158,10 @@ static partial class FontCases
                 """;
             var parts=Fixtures.Parts(content+Section,new()
             {
-                ["word/fontTable.xml"]=Fixtures.Xml("fonts","""<w:font w:name="LW TestFace"><w:embedRegular r:id="font"/></w:font>"""),
+                ["word/fontTable.xml"]=Fixtures.Xml("fonts","""
+                    <w:font w:name="LW TestFace"><w:embedRegular r:id="font"/></w:font>
+                    <w:font w:name="LW Alias"><w:altName w:val="LW TestFace"/><w:charset w:val="02"/></w:font>
+                    """),
                 ["word/numbering.xml"]=Fixtures.Xml("numbering",defs)
             },Fixtures.Relationship("ft","fontTable","fontTable.xml")+Fixtures.Relationship("num","numbering","numbering.xml"),
                 new(){["word/fonts/test.ttf"]=data});

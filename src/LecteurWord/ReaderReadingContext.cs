@@ -11,7 +11,8 @@ using LecteurWord.Flow;
 namespace LecteurWord;
 public sealed partial class ReaderWindow
 {
-    IBrush ReadingAccent=>Palette.Accent;
+    IBrush ReadingAccent=>DisplayMode=="dark"?ReaderPalette.ReadingNightAccent:DisplayMode=="document"?
+        appearance.Brush(ReaderAppearance.Accent):Brushes.Black;
     public string? CurrentNoteReferenceId {get;private set;}
     public int CurrentSection {get;private set;}=1;
     public Control? ActiveReadingContext {get;private set;}
@@ -19,15 +20,16 @@ public sealed partial class ReaderWindow
     void CloseReadingContext(){readingFlyout?.Hide();readingFlyout=null;notePane.IsVisible=false;notePane.Child=null;ActiveReadingContext=null;UpdateNotePlacement();MarkNoteOrigin();}
     Control ContextCard(Control content)
     {
-        var card=new Border{Child=content,Padding=new Thickness(18),CornerRadius=new CornerRadius(10),Background=Palette.Field};
-        card.SetValue(TextElement.ForegroundProperty,ActualThemeVariant==ReaderPalette.BlueVariant?Palette.Ink:ReaderPalette.ReadingInk);return card;
+        var card=new Border{Child=content,Padding=new Thickness(18),CornerRadius=new CornerRadius(10),Background=ReadingSurface};
+        ReaderAppearance.Use(card,TextElement.ForegroundProperty,ReaderAppearance.Ink);
+        return card;
     }
     void RefreshReadingAppearance()
     {
         var activeNote=notePane.IsVisible&&CurrentNoteReferenceId is {} id?readable?.Presentation.Notes.GetValueOrDefault(id):null;
         CloseReadingContext();
-        readingList.Background=ReaderPalette.ReadingPaper;
-        readingList.Foreground=ReaderPalette.ReadingInk;
+        readingList.Background=ReadingSurface;
+        readingList.Foreground=TextDisplayInk;
         // Recreate only the realized templates when theme/language changes.
         SetReadingTemplate();
         if(activeNote is not null)ShowNotePane(activeNote);

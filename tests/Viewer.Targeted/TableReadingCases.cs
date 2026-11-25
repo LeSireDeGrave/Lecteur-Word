@@ -100,6 +100,7 @@ static class TableReadingCases
         long start=Stopwatch.GetTimestamp();
         await window.OpenDocumentAsync(input);
         double openMs=Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        window.SetReadingView(ReadingView.Continuous);
         NativeCases.Check(window.IsSimplifiedReading,"L’Annexe doit rester consultable en lecture continue.");
         var tables=window.CurrentReading!.Presentation.BodyBlocks.Where(b=>b.Kind=="table").ToArray();
         NativeCases.Check(tables.Length==6,"Les six tableaux sont attendus dans l’Annexe.");

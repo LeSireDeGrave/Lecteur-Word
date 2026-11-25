@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using LecteurWord.Flow;
 
 namespace LecteurWord;
 
@@ -9,6 +10,17 @@ namespace LecteurWord;
 public sealed class BuildReference
 {
     const string Prefix="LecteurWord.Build.";
+    internal const int CliContractVersion=1;
+    internal const int ExtensionApiVersion=1;
+    internal static string EngineVersion { get; }=EngineIdentity();
+    internal static int[] NovaVersions=>[NovaPublication.Version];
+
+    static string EngineIdentity()
+    {
+        var engine=typeof(Publications).Assembly;
+        return engine.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+',2)[0]
+            ?? engine.GetName().Version!.ToString(3);
+    }
     public static BuildReference Current { get; }=FromMetadata(typeof(BuildReference).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>().Where(a=>a.Value is not null)
         .GroupBy(a=>a.Key).ToDictionary(g=>g.Key,g=>g.Last().Value!));
@@ -20,6 +32,13 @@ public sealed class BuildReference
     public string? BuildTarget { get; }
     public string RuntimePlatform=>RuntimeInformation.OSDescription+" / "+RuntimeInformation.ProcessArchitecture;
     public string RuntimeFramework=>RuntimeInformation.FrameworkDescription;
+
+    internal object TechnicalIdentity()=>new
+    {
+        applicationVersion=Version, engineVersion=EngineVersion, commit=Commit, hasLocalChanges=HasLocalChanges,
+        compilationUtc=CompilationUtc, target=BuildTarget, framework=RuntimeFramework,
+        cliContractVersion=CliContractVersion, extensionApiVersion=ExtensionApiVersion, novaVersions=NovaVersions
+    };
 
     BuildReference(string? version,DateTimeOffset? utc,string? commit,bool? dirty,string? target)
         =>(Version,CompilationUtc,Commit,HasLocalChanges,BuildTarget)=(version,utc,commit,dirty,target);
@@ -63,6 +82,11 @@ public sealed class BuildReference
             (english?"Uncommitted local changes: ":"Modifications locales non committées : ")+dirty,
             (english?"Build target: ":"Cible de compilation : ")+(BuildTarget??Missing()),
             (english?"Runtime platform: ":"Plateforme d’exécution : ")+RuntimePlatform,
-            (english?".NET runtime: ":"Runtime .NET : ")+RuntimeFramework);
+            (english?".NET runtime: ":"Runtime .NET : ")+RuntimeFramework,
+            (english?"Document engine: ":"Moteur documentaire : ")+EngineVersion,
+            (english?"CLI contract: ":"Contrat CLI : ")+CliContractVersion,
+            (english?"Extension API: ":"API des extensions : ")+ExtensionApiVersion,
+            english ? $"OpusNova export format: NOVA (schema v{NovaPublication.Version})"
+                : $"Format d'export OpusNova : NOVA (schéma v{NovaPublication.Version})");
     }
 }

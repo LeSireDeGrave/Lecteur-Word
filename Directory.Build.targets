@@ -2,9 +2,9 @@
   <ItemGroup Condition="'$(MSBuildProjectName)' == 'LecteurWord'">
     <EmbeddedResource Include="$(MSBuildThisFileDirectory)src/LecteurWord/Notices/*.txt" LogicalName="LecteurWord.Notices.%(Filename)%(Extension)"/>
   </ItemGroup>
-  <!-- Only the viewer embeds a fresh build reference. Git is optional and never used at runtime. -->
+  <!-- Both applications embed build provenance. Git is optional and never used at runtime. -->
   <Target Name="EmbedLecteurWordBuildReference" BeforeTargets="GetAssemblyAttributes"
-          Condition="'$(MSBuildProjectName)' == 'LecteurWord' and '$(DesignTimeBuild)' != 'true'">
+          Condition="('$(MSBuildProjectName)' == 'LecteurWord' or '$(MSBuildProjectName)' == 'LecteurWord.Cli') and '$(DesignTimeBuild)' != 'true'">
     <PropertyGroup>
       <EnableBuildGitMetadata Condition="'$(EnableBuildGitMetadata)' == ''">true</EnableBuildGitMetadata>
       <BuildGitExecutable Condition="'$(BuildGitExecutable)' == ''">git</BuildGitExecutable>
@@ -43,5 +43,13 @@
       <AssemblyMetadata Include="LecteurWord.Build.Dirty" Value="$(_LecteurWordDirty)"/>
       <AssemblyMetadata Include="LecteurWord.Build.Target" Value="$(_LecteurWordTarget)"/>
     </ItemGroup>
+  </Target>
+  <Target Name="StageLecteurWordDesktopUpdate" AfterTargets="Publish"
+          Condition="'$(MSBuildProjectName)' == 'LecteurWord' and '$(Configuration)' == 'Release'
+                     and '$(DesignTimeBuild)' != 'true' and '$(RuntimeIdentifier)' == 'linux-x64'
+                     and '$(SelfContained)' == 'true' and '$(LecteurWordDesktopUpdates)' != 'false'
+                     and Exists('$(MSBuildThisFileDirectory).local/desktop-updates/enabled')">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
+          Command="python3 &quot;$(MSBuildThisFileDirectory)tools/install-linux.py&quot; --from &quot;$(PublishDir)&quot; --stage-update &quot;$(MSBuildThisFileDirectory).local/desktop-updates&quot;"/>
   </Target>
 </Project>

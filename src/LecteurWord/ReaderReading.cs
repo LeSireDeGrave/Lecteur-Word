@@ -101,6 +101,7 @@ public sealed partial class ReaderWindow
         var source=readable.Presentation.BodyBlocks;
         int index=documentIndex?.BodyIndices.TryGetValue(id,out int i)==true?i:-1;
         if(index<0)return false;
+        var before=restoringPosition?null:CapturePosition();
         if(!simplified&&FindPageBlock(id) is {} location)
         {
             GoToPage(location.Index);CurrentBlockId=id;SelectPageParagraph(id);
@@ -114,6 +115,7 @@ public sealed partial class ReaderWindow
         readingList.SelectedIndex=-1;
         MoveReadingBlock(index,alignReadingStart);
         UpdateNavigationPosition();
+        RememberNavigation(before);
         if(source[index].Kind=="table"&&id!=source[index].Id&&documentIndex is {} doc)
             for(string? ancestor=id;ancestor is not null&&ancestor!=source[index].Id;ancestor=doc.Semantic?.ParentId(ancestor))
                 if(doc.ReadableCells.TryGetValue(ancestor,out var cell))
@@ -157,7 +159,6 @@ public sealed partial class ReaderWindow
 
     void UpdateNavigationPosition()
     {
-        navPosition.Foreground=SecondaryInk;
         string? activeId=CurrentBlockId;
         int currentSection=CurrentSection;
         if(IsSimplifiedReading&&ContinuousAnchor() is {} visible&&documentIndex?.BodyIndices.TryGetValue(visible,out int index)==true)
@@ -166,12 +167,12 @@ public sealed partial class ReaderWindow
             activeId=readable?.Outline.LastOrDefault(o=>documentIndex.BodyIndices.TryGetValue(o.BlockId,out int at)&&at<=index)?.BlockId??activeId;
         }
         string? heading=readable?.Outline.FirstOrDefault(o=>o.BlockId==activeId)?.Label;
-        navPosition.Text=CurrentPage>0?T($"Page {CurrentPage} · section {CurrentSection}",$"Page {CurrentPage} · section {CurrentSection}"):
-            IsSimplifiedReading?T($"Section {currentSection}",$"Section {currentSection}"):"";
+        navPosition.Text=CurrentPage>0?LocalFormat("navigation.page-and-section","Page {0} · section {1}","Page {0} · section {1}",CurrentPage,CurrentSection):
+            IsSimplifiedReading?LocalFormat("document.section","Section {0}","Section {0}",currentSection):"";
         if(heading is not null)navPosition.Text+=" · "+heading;
         navPosition.IsVisible=navPosition.Text.Length>0;
         string? selected=navMode=="bookmarks"?CurrentBlockId:activeId;
-        foreach(var b in outlineActions)b.Background=b.Tag as string==selected?AccentFill:Brushes.Transparent;
+        foreach(var b in outlineActions)UpdateToggle(b,b.Tag as string==selected);
     }
 
     readonly List<Button> outlineActions=[];
@@ -203,13 +204,13 @@ public sealed partial class ReaderWindow
         {
             var button=new Button{Content=new TextBlock{Text=node.Label,TextWrapping=TextWrapping.Wrap},
                 HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Left,
-                Background=Brushes.Transparent,Padding=new Thickness(5,4),Tag=node.Link.BlockId};
+                Classes={"reader-flat"},Padding=new Thickness(5,4),Tag=node.Link.BlockId};
             AutomationProperties.SetName(button,node.Label);ToolTip.SetTip(button,node.Label);
             button.Click+=(_,_)=>NavigateToBlock(node.Link.BlockId);outlineActions.Add(button);
             if(node.Children.Count==0){parent.Children.Add(button);return;}
             var group=new StackPanel{Spacing=1};
             var row=new Grid{ColumnDefinitions=new("Auto,*")};
-            var toggle=new Button{Name="OutlineBranch",Width=23,Height=25,Padding=new Thickness(2),Background=Brushes.Transparent};
+            var toggle=new Button{Name="OutlineBranch",Width=23,Height=25,Padding=new Thickness(2),Classes={"reader-flat"}};
             row.Children.Add(toggle);Grid.SetColumn(button,1);row.Children.Add(button);group.Children.Add(row);
             var children=new StackPanel{Spacing=1,Margin=new Thickness(10,0,0,0)};
             bool built=false;
@@ -235,7 +236,7 @@ public sealed partial class ReaderWindow
         var paragraphs=readable.Blocks.SelectMany(Descendants).Where(b=>b.Kind is "paragraph" or "heading").DistinctBy(b=>b.Id).Where(b=>readable.Presentation.TextFor(b).Contains(query.Text,StringComparison.CurrentCultureIgnoreCase)).Take(100).ToArray();
         foreach(var block in paragraphs)
         {
-            string text=readable.Presentation.TextFor(block);var button=new Button{Content=SearchExcerpt(text),HorizontalAlignment=HorizontalAlignment.Stretch};ToolTip.SetTip(button,text.Length>300?text[..300]+"…":text);
+            string text=readable.Presentation.TextFor(block);var button=ReadingSearchResult(SearchExcerpt(text));ToolTip.SetTip(button,text.Length>300?text[..300]+"…":text);
             button.Click+=(_,_)=>
             {
                 var note=readable.Presentation.Notes.Values.FirstOrDefault(n=>n.Verified&&ReadablePresentation.Walk(n.Content).Any(b=>b.Id==block.Id));
@@ -247,18 +248,20 @@ public sealed partial class ReaderWindow
         }
         navItems.Children.Add(new TextBlock{Text=T("Résultats affichés (max. 100) : ","Shown results (max. 100): ")+paragraphs.Length,TextWrapping=TextWrapping.Wrap});
     }
-    Control RenderReadingBlock(ReadableBlock block,bool inCell=false)
+    Control RenderReadingBlock(ReadableBlock block,bool inCell=false,IBrush? surface=null)
     {
         if(block.Kind is "paragraph" or "heading")
         {
             var layout=readingParagraphs.GetValueOrDefault(block.Id);
             var runs=layout?.Runs.GroupBy(r=>r.Id).ToDictionary(g=>g.Key,g=>g.First().Style,StringComparer.Ordinal);
+            IBrush background=layout?.Properties.Shading is {} shade?Brush("#"+shade.Color):surface??ReadingSurface;
             var text=new TextBlock{Name=block.Kind=="heading"?"ReadingHeading":"ReadingParagraph",Tag=block.Id,
-                TextWrapping=TextWrapping.Wrap,Foreground=ReaderPalette.ReadingInk};
+                TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(ReadingInk(Colors.Black,Solid(background)))};
+            if(layout?.Properties.Shading is not null)text.Background=background;
             ConfigureReadingParagraph(text,block,layout,inCell);
             if(block.ListLabel is {} label)text.Inlines!.Add(new Run(label+" "));
             var budget=new NonprintingBudget();
-            AppendReadingInline(text.Inlines!,block,budget,styles:runs);
+            AppendReadingInline(text.Inlines!,block,budget,styles:runs,background:Solid(background));
             if(documentIndex?.Paragraphs.TryGetValue(block.Id,out var paragraph)==true)
                 AddReadingMark(text.Inlines!,"¶",budget,paragraph);
             if(documentIndex?.SectionClosers.TryGetValue(block.Id,out var section)==true)
@@ -273,7 +276,7 @@ public sealed partial class ReaderWindow
         {
             var result=new StackPanel();
             if(readable?.Presentation.Fields.GetValueOrDefault(block.Id) is {Matched:true})
-                foreach(var child in block.Children)result.Children.Add(RenderReadingBlock(child,inCell));
+                foreach(var child in block.Children)result.Children.Add(RenderReadingBlock(child,inCell,surface));
             return result;
         }
         if(block.Kind=="table")
@@ -291,7 +294,7 @@ public sealed partial class ReaderWindow
         block.Kind=="field"&&block.FieldRole=="instruction"&&block.Label?.StartsWith("Code de champ",StringComparison.Ordinal)==true;
 
     void AppendReadingInline(InlineCollection destination,ReadableBlock block,NonprintingBudget budget,bool nested=false,
-        IReadOnlyDictionary<string,LayoutStyle>? styles=null)
+        IReadOnlyDictionary<string,LayoutStyle>? styles=null,Color? background=null,bool link=false)
     {
         if(block.Hidden||IsFieldDetail(block))return;
         bool nestedParagraph=nested&&block.Kind is "paragraph" or "heading";
@@ -310,7 +313,7 @@ public sealed partial class ReaderWindow
         if(block.Kind=="field")
         {
             if(readable?.Presentation.Fields.GetValueOrDefault(block.Id) is {Matched:true})
-                foreach(var child in block.Children)AppendReadingInline(destination,child,budget,true,styles);
+                foreach(var child in block.Children)AppendReadingInline(destination,child,budget,true,styles,background,link||block.Kind=="link");
             return;
         }
         if(block.Kind is "placeholder" or "break" or "revision" or "note" or "section")destination.Add(new InlineUIContainer(LocalMarker(block)));
@@ -322,11 +325,13 @@ public sealed partial class ReaderWindow
         {
             if(block.FontSize is {} || style is not null)span.FontSize=(style?.Size??block.FontSize!.Value)*PointsToDip*readingZoom;
             if(style?.Font is {} face)span.FontFamily=new FontFamily(face.UsedFamily);
-            if(style?.Color is {Length:6} color)span.Foreground=Brush("#"+color);
+            Color source=style?.Color is {Length:6} color?Color.Parse("#"+color):Colors.Black;
+            if(link && source==Colors.Black && readingColor.Mode!="original")source=Solid(ReadingAccent);
+            if(block.Revision!="unchanged" && readingColor.Mode!="original")source=Solid(ReadingAccent);
+            span.Foreground=new SolidColorBrush(ReadingInk(source,background??Solid(ReadingSurface)));
         }
-        if(block.Revision!="unchanged")span.Foreground=ReaderPalette.RevisionInk;
         if(block.Revision=="deleted")span.TextDecorations=TextDecorations.Strikethrough;
-        if(block.Kind!="break"&&block.Text.Length>0&&(block.Children.Count==0||block.Kind is not ("paragraph" or "heading" or "run" or "link")))AppendSourceText(span.Inlines,block,budget);foreach(var child in block.Children)AppendReadingInline(span.Inlines,child,budget,true,styles);destination.Add(span);
+        if(block.Kind!="break"&&block.Text.Length>0&&(block.Children.Count==0||block.Kind is not ("paragraph" or "heading" or "run" or "link")))AppendSourceText(span.Inlines,block,budget);foreach(var child in block.Children)AppendReadingInline(span.Inlines,child,budget,true,styles,background,link||block.Kind=="link");destination.Add(span);
         if(nestedParagraph)destination.Add(new LineBreak());
     }
     void ConfigureReadingParagraph(TextBlock text,ReadableBlock block,LayoutParagraph? layout,bool inCell)

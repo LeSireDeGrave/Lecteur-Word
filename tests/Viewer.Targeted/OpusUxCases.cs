@@ -91,18 +91,17 @@ static class OpusUxCases
             string firstHash=Hash(paginated),secondHash=Hash(specialized);
             Open(window,paginated);
             var language=Control<Button>(window,"LanguageToggle");
-            Assert(language.Content is Viewbox&&Equals(ToolTip.GetTip(language),"Passer en anglais"),"L’icône planète ou son infobulle manque.");
-            Click(language);
-            Assert(window.Language=="en"&&Equals(ToolTip.GetTip(language),"Switch to French"),"Le changement de langue ne met pas à jour l’infobulle.");
-            Click(language);
-            var image=Control<Image>(window,"CalculatedPage");
+            Assert(language.Content is Viewbox&&Equals(ToolTip.GetTip(language),"Langue de l’interface"),"L’icône planète ou son infobulle manque.");
+            ThemeCases.ChooseLanguage(window,"en");
+            Assert(window.Language=="en"&&Equals(ToolTip.GetTip(language),"Interface language"),"Le changement de langue ne met pas à jour l’infobulle.");
+            ThemeCases.ChooseLanguage(window,"fr");
             Assert(window.CurrentComposition is {Available:true,Pages.Count:3},"Fixture pages hors profil.");
             Assert(window.CurrentComposition!.Pages[1].Lines.Any(l=>l.HasExplicitPageBreak),"Provenance du saut de page absente.");
             Assert(!Control<Border>(window,"DocumentElementsPanel").IsVisible,"Le panneau droit doit être fermé à l’ouverture.");
             Key(PhysicalKey.F7);
             var label=Control<TextBlock>(window,"RulerGeometry");
-            Assert(window.RulerVisible&&label.Text!.Contains("Section 1")&&label.Text.Contains("1 tabulations"),"Retraits, tabulation ou section non affichés.");
-            Control<ComboBox>(window,"RulerUnits").SelectedIndex=1;Layout();
+            Assert(window.RulerVisible&&label.Text!.Contains("Section 1")&&label.Text.Contains("1 tabulation"),"Retraits, tabulation ou section non affichés.");
+            Control<RadioButton>(window,"RulerMillimeters").IsChecked=true;Layout();
             Assert(label.Text!.Contains("mm"),"Unité mm non actualisée.");
             window.GoToPage(1);Layout();
             Assert(label.Text!.Contains("Section 2")&&window.CurrentComposition.Pages[0].Geometry.Width!=window.CurrentComposition.Pages[1].Geometry.Width,
@@ -122,9 +121,10 @@ static class OpusUxCases
             Assert(window.CurrentPage==3&&window.CurrentBlockId==placedCell.Source.NodeId,"Localisation de la cellule paginée incorrecte.");
             Click(Control<Button>(window,"ToggleElements"));
             window.GoToPage(0);Layout();
+            var image=window.GetVisualDescendants().OfType<Image>().Single(x=>x.Name=="CalculatedPage"&&x.Tag is 1);
             var raster=image.Source;
             Click(Control<Button>(window,"ToggleNonprinting"));
-            Assert(Control<Control>(window,"PageNonprintingMarks").IsVisible&&ReferenceEquals(raster,image.Source),"Les marques doivent être superposées au raster.");
+            Assert(window.GetVisualDescendants().Any(x=>x is Control{Name:"PageNonprintingMarks",IsVisible:true})&&ReferenceEquals(raster,image.Source),"Les marques doivent être superposées au raster.");
             Assert(window.PageMarkSources.Count()>=6&&window.PageMarkSources.Any(s=>s.Span is not null)&&
                 window.PageMarkSources.Any(s=>window.CurrentDocumentIndex!.Breaks.ContainsKey(s.NodeId)),
                 "Le raster superposé a perdu les identités de caractères ou de saut.");
@@ -132,8 +132,9 @@ static class OpusUxCases
             Capture(window,Path.Combine(root,"pages-clair-100.png"),1);
 
             Open(window,specialized);
+            Click(Control<Button>(window,"ViewContinuous"));
             Assert(window.IsSimplifiedReading&&window.CurrentPage==0&&!window.RulerVisible,"Mesure physique ou pagination indue en flux simplifié.");
-            Assert(Control<TextBlock>(window,"ReadingBanner").Text!.Contains("règle indisponible")&&
+            Assert(Control<TextBlock>(window,"ReadingBanner").Text!.Contains("Pagination complète indisponible")&&
                 Control<TextBlock>(window,"FooterDocument").Text==Path.GetFileName(specialized),"L’état de la règle ou le document courant manque.");
             var index=window.CurrentDocumentIndex!;
             var categories=index.Rows.Select(r=>r.Category).ToHashSet();
@@ -375,7 +376,12 @@ static class OpusUxCases
                     .Any(b=>b.Name=="ReadingCell"&&b.Tag as string==cell.Source.NodeId&&b.IsFocused),
                     "La cellule native sélectionnée n’a pas reçu le focus.");
                 await CaptureNative("stage2-cellules-bleu");
-                await ClickOn("LanguageToggle");
+                var languageAnchor=Control<Button>(win,"LanguageToggle");
+                var languageFlyout=(Flyout)languageAnchor.Flyout!;
+                languageFlyout.ShowAt(languageAnchor);await Task.Delay(150);
+                ((Control)languageFlyout.Content!).GetVisualDescendants().OfType<Button>()
+                    .Single(button=>button.Name=="Language_en").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Task.Delay(150);
                 Assert(Equals(ToolTip.GetTip(Control<Button>(win,"ThemeMicrosoftBlue")),"Microsoft Blue"),"Libellé anglais natif incorrect.");
                 win.Width=720;win.Height=570;await Task.Delay(280);
                 Assert(Control<Border>(win,"DocumentElementsPanel").IsVisible&&Control<ListBox>(win,"SimplifiedReading").Bounds.Width>=400,

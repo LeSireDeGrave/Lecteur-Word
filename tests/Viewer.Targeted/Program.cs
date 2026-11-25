@@ -26,30 +26,83 @@ try
         case "export-odt": Exports(ExportFormat.Odt);break;
         case "export-epub": Exports(ExportFormat.Epub3);break;
         case "export-gates": ExportGates();break;
+        case "publication-core": PublicationCases.Run(root);break;
+        case "final-audit-corpus-gui": AuditCorpusCase.Run(root);break;
         case "exchange-quality": ExchangeQuality();break;
         case "gui": Gui();break;
+        case "platform-extensions": await PlatformCases.ExtensionsAsync(root);break;
+        case "platform-worker-confinement": ReadingWorkerIsolationCase.Run(root);break;
+        case "platform-contributions": PlatformCases.Contributions(root);break;
+        case "platform-community": await PlatformCases.CommunityAsync(root);break;
+        case "platform-community-gui": PlatformCases.CommunityGui(root);break;
+        case "platform-community-https": PlatformCases.CommunityHttpsGui(root);break;
+        case "platform-kde": Assert(PlatformCases.Kde(root)==0,"Qualification KDE de la plateforme");break;
+        case "platform-support": PlatformCases.Support();break;
+        case "platform-recovery": PlatformCases.Recovery(root);break;
         case "theme-preferences": ThemeCases.Preferences(root);break;
         case "theme-gui": ThemeCases.Gui(root);break;
+        case "theme-kde": Assert(PlatformCases.Kde(root,themesOnly:true)==0,"Recette des thèmes sous KDE");break;
+        case "language-gui": LanguageCases.Gui(root);break;
+        case "language-layout": LanguageCases.CompactLayout(root);break;
         case "opus-ux-gui": OpusUxCases.Gui(root);break;
         case "opus-ux-corpus": OpusUxCases.Corpus(root);break;
         case "native-opus-ux": Assert(NativeCases.Run(root,opus:true)==0,"Native UX-OPUS-001 failed");break;
         case "text-styles": TypographyCases.Styles(root);break;
+        case "word-text-effects": TypographyCases.Shadows(root);break;
         case "text-shaping": TypographyCases.Shaping(root);break;
         case "text-bounds": TypographyCases.Bounds(root);break;
         case "text-corpus": TypographyCorpusCases.Corpus(root);break;
         case "line-composer": LineCases.Run(root);break;
+        case "docx-flow-engine": FlowEngineCases.Run(root);break;
+        case "table-footnote-placement": FlowEngineCases.TableFootnote(root);break;
+        case "page-endnotes": PageCases.EndnotePlacement(root);break;
+        case "pagination-real-hyphenation": PaginationRealCases.Hyphenation(root);break;
+        case "pagination-real-fields": PageCases.CalculatedFields(root);break;
+        case "pagination-note-and-table-keep": PageCases.NoteAndTableKeep(root);break;
+        case "story-document-properties": PageCases.StoryDocumentProperties(root);break;
+        case "pagination-toc-convergence": PageCases.BodyFieldConvergence(root);break;
+        case "pagination-toc-regeneration": PageCases.RegeneratedToc(root);break;
+        case "pagination-toc-refusals": PageCases.BodyFieldRefusals(root);break;
+        case "pagination-toc-oscillation": PageCases.BodyFieldOscillation(root);break;
+        case "pagination-toc-navigation": PageCases.BodyFieldNavigation(root);break;
+        case "hidden-tc-visibility": PageCases.HiddenVisibility(root);break;
+        case "hidden-tc-fields": PageCases.HiddenTcFields(root);break;
+        case "hidden-tc-reading-gui": PageCases.HiddenReadingGui(root);break;
+        case "story-exact-lines": PageCases.ExactLineBoxes(root);break;
+        case "story-table-page-fields": PageCases.TablePageFields004(root);break;
+        case "story-diagnostic-budget": PageCases.StoryDiagnosticBudget(root);break;
+        case "stage2-floating-pictures": PageCases.FloatingPictures(root);break;
+        case "stage2-floating-textframes": PageCases.FloatingTextFrames(root);break;
+        case "stage2-cell-typography": PageCases.CellTypography(root);break;
         case "line-corpus": LineCorpusCases.Run(root);break;
         case "page-geometry": PageCases.Geometry(root);break;
         case "page-constraints": PageCases.Constraints(root);break;
+        case "page-paragraph-conformance": PageCases.ParagraphConformance(root);break;
         case "page-numbering": PageCases.Numbering(root);break;
         case "page-keep-next": PageCases.KeepNext(root);break;
         case "page-structures": PageCases.Structures(root);break;
         case "page-story-styles": PageCases.StoryStyles(root);break;
         case "page-style-selection": PageCases.StyleSelection(root);break;
+        case "page-style-effective": PageCases.EffectiveStyles(root);break;
+        case "word-style-compatibility": PageCases.WordStyleCompatibility(root);break;
+        case "word-style-observed-collections": PageCases.ObservedCollections(root);break;
+        case "word-style-attribute-order": PageCases.WordStyleAttributeOrder(root);break;
+        case "word-style-mce-lists": PageCases.WordStyleMceLists(root);break;
+        case "word-underline-inheritance": PageCases.WordUnderlineInheritance(root);break;
+        case "word-theme-luminance": PageCases.WordThemeLuminance(root);break;
+        case "word-underline-color": PageCases.WordUnderlineColor(root);break;
+        case "word-run-shading": PageCases.WordRunShading(root);break;
+        case "microsoft-strict": PageCases.MicrosoftStrict(root);break;
+        case "microsoft-compatibility": PageCases.MicrosoftCompatibility(root);break;
         case "page-custom-xml": PageCases.CustomXml(root);break;
+        case "story-page-mergeformat": PageCases.StoryPageMergeFormat(root);break;
         case "page-running-stories": PageCases.RunningStories(root);break;
+        case "running-drawing-groups": PageCases.RunningDrawingGroups(root);break;
+        case "pages-view": PageViewCases.Gui(root);break;
+        case "pages-view-native": Assert(NativeCases.Run(root,pagesView:true)==0,"Recette X11 de la présentation des pages.");break;
         case "page-gui": PageCases.Gui(root);break;
         case "page-corpus": PageCorpusCases.Run(root);break;
+        case "docx-v1-corpus": DocxV1CorpusCases.Run(root);break;
         case "page-corpus-gui": PageCorpusCases.Gui(root);break;
         case "table-page-audit": TableAuditCases.Run(root);break;
         case "render-quality": RenderQualityCases.Model(root);break;
@@ -74,6 +127,7 @@ try
         case "reading-png": ReadingCases.PngGate();break;
         case "reading-real": ReadingCases.RealDocument();break;
         case "reading-gui": ReadingGuiCase.Run(root);break;
+        case "open-reliability": OpenReliabilityCases.Run(root);break;
         case "reading-ux-model": ReadingUxCases.Model(root);break;
         case "reading-ux-gui": ReadingUxCases.Gui(root);break;
         case "reading-ux-real": ReadingUxCases.Real();break;
@@ -85,6 +139,9 @@ try
         case "fonts-pagination": FontCases.Pagination(root);break;
         case "fonts-embedded": FontCases.Embedded(root);break;
         case "fonts-legacy-symbols": FontCases.LegacySymbolsCase(root);break;
+        case "fonts-historical-choices": HistoricalFontCases.Run(root);break;
+        case "fonts-historical-gui": HistoricalFontCases.Gui(root);break;
+        case "smartart-data": SmartArtDataCases.Run(root);break;
         case "fonts-gui": FontCases.Gui(root);break;
         case "fonts-real": FontCases.Real(root);break;
         case "native-fonts": Assert(NativeCases.Run(root,fonts:true)==0,"Native fonts failed");break;
@@ -104,6 +161,7 @@ try
         case "compat-autofit": CompatibilityCases.AutoFit(root);break;
         case "compat-jpeg": CompatibilityCases.Images(root);break;
         case "compat-jpeg-safety": CompatibilityCases.JpegSafety(root);break;
+        case "docx-raster-admission": RasterAdmissionCases.Run(root);break;
         case "compat-table-styles": CompatibilityCases.TableStyles(root);break;
         case "compat-boundaries": CompatibilityCases.Boundaries(root);break;
         case "native-compat": Assert(NativeCases.Run(root,compatibility:true)==0,"Native compatibility qualification failed");break;
@@ -226,7 +284,7 @@ void ExchangeQuality()
     var input=DocumentInspector.InspectDocument(source);
     Assert(input.Manifest.InspectionComplete&&FlowReader.Read(input).Paragraphs.Select(p=>p.Text).SequenceEqual(expected),
         "Le DOCX témoin ne restitue pas les paragraphes attendus.");
-    foreach(var format in Enum.GetValues<ExportFormat>())
+    foreach(var format in new[]{ExportFormat.Pdf,ExportFormat.Odt,ExportFormat.Epub3})
     {
         string output=DocumentExports.Export(input,format,Path.Combine(root,format.ToString()));
         string stamp=Sha(output);
@@ -278,13 +336,18 @@ void GuiSearchUnicode()
     var window=new ReaderWindow();window.Show();Dispatcher.UIThread.RunJobs();
     string prefix=new('A',31);
     string emoji=prefix+"😀tail",combining=prefix+"e\u0301tail";
-    string path=Fixtures.Write(root,"unicode-search.docx",Fixtures.Parts(Fixtures.Paragraph(emoji)+Fixtures.Paragraph(combining)));
+    string body=Fixtures.Paragraph(emoji)+Fixtures.Paragraph(combining)+
+        """<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>""";
+    string path=Fixtures.Write(root,"unicode-search.docx",Fixtures.Parts(body,
+        new(){["word/footnotes.xml"]=Fixtures.Xml("footnotes","""<w:footnote w:id="2"><w:p><w:r><w:t>Note témoin</w:t></w:r></w:p></w:footnote>""")},
+        Fixtures.Relationship("note","footnotes","footnotes.xml")));
     string before=Sha(path);var task=window.OpenDocumentAsync(path);
     var deadline=DateTime.UtcNow.AddSeconds(20);
     while(!task.IsCompleted&&DateTime.UtcNow<deadline){Dispatcher.UIThread.RunJobs();Thread.Sleep(5);}
     Assert(task.IsCompleted,"Unicode fixture load timed out");task.GetAwaiter().GetResult();Dispatcher.UIThread.RunJobs();
     Assert(window.Inspection?.Manifest.InspectionComplete==true,"Unicode inventory refused");
-    Assert(window.CurrentComposition?.Available==false,"Search fix must not qualify unsupported script rendering");
+    window.SetReadingView(ReadingView.Continuous);Dispatcher.UIThread.RunJobs();
+    Assert(window.IsSimplifiedReading&&window.CurrentPage==0,"Search fixture must support explicit continuous reading");
     window.KeyPressQwerty(Avalonia.Input.PhysicalKey.F,Avalonia.Input.RawInputModifiers.Control);window.KeyReleaseQwerty(Avalonia.Input.PhysicalKey.F,Avalonia.Input.RawInputModifiers.Control);Dispatcher.UIThread.RunJobs();
     var query=window.GetVisualDescendants().OfType<TextBox>().Single(b=>b.Name=="SearchBox");query.Text=prefix;Dispatcher.UIThread.RunJobs();
     var excerpts=window.GetVisualDescendants().OfType<Button>().Select(b=>b.Content as string).Where(t=>t?.StartsWith(prefix,StringComparison.Ordinal)==true).ToArray();

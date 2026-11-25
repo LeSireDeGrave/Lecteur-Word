@@ -2,7 +2,7 @@
   "id": "org.lecteurword.demo.reading",
   "name": "Repères de lecture",
   "description": "Compte les blocs, les titres et les tableaux du document ouvert.",
-  "author": "Projet Lecteur Word",
+  "author": "LeSireDeGrave",
   "version": "1.0.0",
   "compatibility": {
     "minimum": "0.1.0",
@@ -17,8 +17,8 @@
   ],
   "license": "MIT",
   "provenance": {
-    "publisher": "Projet Lecteur Word",
-    "source": null
+    "publisher": "LeSireDeGrave",
+    "source": "https://github.com/LeSireDeGrave/Lecteur-Word"
   },
   "payloadSha256": "c98c7b1a495312628fcc72112a0d597f3e0588c3f069e8bae665dc79cd8c9f37"
 }

@@ -40,9 +40,9 @@ static class ThemeCases
         Check(store.Load()==ReaderTheme.System&&!store.Save(ReaderTheme.MicrosoftBlue)&&File.ReadAllText(file)=="{incomplet",
             "Le fichier illisible doit être conservé.");
         Check(ThemePreference.Resolve(ReaderTheme.System,PlatformThemeVariant.Light)==ThemeVariant.Light&&
-              ThemePreference.Resolve(ReaderTheme.System,PlatformThemeVariant.Dark)==ReaderPalette.BlueVariant&&
+              ThemePreference.Resolve(ReaderTheme.System,PlatformThemeVariant.Dark)==ThemeVariant.Dark&&
               ThemePreference.Resolve(ReaderTheme.MicrosoftBlue,PlatformThemeVariant.Light)==ReaderPalette.BlueVariant&&
-              ThemePreference.Resolve(ReaderTheme.Chocolate,PlatformThemeVariant.Dark)==ThemeVariant.Light,"Modes explicites ou Système incorrects.");
+              ThemePreference.Resolve(ReaderTheme.Chocolate,PlatformThemeVariant.Dark)==ReaderPalette.ChocolateVariant,"Modes explicites ou Système incorrects.");
         Console.WriteLine("Migration de cinq valeurs héritées, persistance, préférence voisine et modes système vérifiés.");
     }
 
@@ -70,16 +70,20 @@ static class ThemeCases
                 "La couleur source n’a pas été composée.");
             var raster=Composer.PagePng(composition!.Pages[0]);
             var displayed=Control<Image>(window,"CalculatedPage").Source;
+            Check(ReaderWindow.AdaptReadingInk(Colors.Black,Color.Parse("#242B38")) is var adapted &&
+                ReaderPalette.ContrastRatio(adapted,Color.Parse("#242B38"))>=4.5,"Contraste du texte noir sur le fond sombre.");
+            Check(ReaderWindow.AdaptReadingInk(Color.Parse("#B00020"),Colors.White)==Color.Parse("#B00020"),
+                "Une couleur suffisamment contrastée doit être conservée.");
             var document=window.CurrentReading;
             var index=window.CurrentDocumentIndex;
 
-            Click(light);Check(window.ActualThemeVariant==ThemeVariant.Light,"Thème Chocolat & Crème inaccessible.");
+            Click(light);Check(window.ActualThemeVariant==ReaderPalette.ChocolateVariant,"Thème Chocolat & Crème inaccessible.");
             Click(blue);Check(window.ActualThemeVariant==ReaderPalette.BlueVariant&&blue.Classes.Contains("active"),"Bascule bleu inactive.");
-            Check(ReferenceEquals(composition,window.CurrentComposition)&&ReferenceEquals(displayed,Control<Image>(window,"CalculatedPage").Source)&&
-                raster.AsSpan().SequenceEqual(Composer.PagePng(composition.Pages[0])),"Changer de palette modifie la page DOCX.");
+            Check(ReferenceEquals(composition,window.CurrentComposition)&&!ReferenceEquals(displayed,Control<Image>(window,"CalculatedPage").Source)&&
+                raster.AsSpan().SequenceEqual(Composer.PagePng(composition.Pages[0])),"La palette doit rafraîchir le raster de lecture et préserver le rendu source.");
             Check(ReferenceEquals(document,window.CurrentReading)&&ReferenceEquals(index,window.CurrentDocumentIndex),"La palette reconstruit le document.");
 
-            Click(Control<Button>(window,"LanguageToggle"));
+            ChooseLanguage(window,"en");
             Check(AutomationProperties.GetName(blue)=="Microsoft Blue"&&Equals(ToolTip.GetTip(blue),"Microsoft Blue"),
                 "Libellé anglais du thème incorrect.");
             Check(window.GetVisualDescendants().OfType<Button>().Select(AutomationProperties.GetName)
@@ -92,17 +96,15 @@ static class ThemeCases
                     "Ressource non résolue pour la palette bleue : "+key);
                 return ((ISolidColorBrush)value!).Color;
             }
-            Color ColorOf(IBrush brush)=>((ISolidColorBrush)brush).Color;
-            Contrast("entête",ColorOf(ReaderPalette.Blue.HeaderInk),ColorOf(ReaderPalette.Blue.Header),4.5);
-            Contrast("barres",ColorOf(ReaderPalette.Blue.Ink),ColorOf(ReaderPalette.Blue.Toolbar),4.5);
-            Contrast("texte secondaire",ColorOf(ReaderPalette.Blue.Secondary),ColorOf(ReaderPalette.Blue.Panel),4.5);
+            Contrast("entête",ReaderPalette.Blue.HeaderInk,ReaderPalette.Blue.Header,4.5);
+            Contrast("barres",ReaderPalette.Blue.Ink,ReaderPalette.Blue.Toolbar,4.5);
+            Contrast("texte secondaire",ReaderPalette.Blue.Secondary,ReaderPalette.Blue.Panel,4.5);
             Contrast("survol",Resource("ButtonForegroundPointerOver"),Resource("ButtonBackgroundPointerOver"),4.5);
             Contrast("sélection",Resource("ComboBoxItemForegroundSelected"),Resource("ComboBoxItemBackgroundSelected"),4.5);
             Contrast("désactivation",Resource("ButtonForegroundDisabled"),Resource("ButtonBackgroundDisabled"),4.5);
-            Contrast("focus",Resource("SystemControlFocusVisualPrimaryBrush"),ColorOf(ReaderPalette.Blue.Toolbar),3);
-            Contrast("focus entête",ColorOf(ReaderPalette.BlueLight),ColorOf(ReaderPalette.Blue.Header),3);
+            Contrast("focus",Resource("SystemControlFocusVisualPrimaryBrush"),ReaderPalette.Blue.Toolbar,3);
             Contrast("info-bulle",Resource("ToolTipForeground"),Resource("ToolTipBackground"),4.5);
-            Contrast("marques",ColorOf(ReaderPalette.Blue.Accent),ColorOf(ReaderPalette.ReadingPaper),4.5);
+            Contrast("marques",Resource(ReaderAppearance.Accent),Resource(ReaderAppearance.Surface),4.5);
             Check(Resource("ButtonBackground")!=Resource("ButtonBackgroundPointerOver")&&
                 Resource("ButtonBackgroundPointerOver")!=Resource("ButtonBackgroundPressed")&&
                 Resource("ButtonBackgroundDisabled")!=Resource("ButtonBackground"),"États des boutons confondus.");
@@ -116,10 +118,10 @@ static class ThemeCases
             category.IsDropDownOpen=false;
             Click(Control<Button>(window,"AboutLecteurWord"));
             var about=window.OwnedWindows.OfType<AboutWindow>().Single();
-            Check(about.ActualThemeVariant==ReaderPalette.BlueVariant&&about.Background==ReaderPalette.Blue.AboutSurface,
+            Check(about.ActualThemeVariant==ReaderPalette.BlueVariant&&about.Background is ISolidColorBrush brush&&brush.Color==ReaderPalette.Blue.Panel,
                 "La fenêtre secondaire ne reçoit pas le thème.");
             window.SetTheme(1);Layout();
-            Check(about.ActualThemeVariant==ThemeVariant.Light,"La fenêtre secondaire ne suit pas la bascule à chaud.");
+            Check(about.ActualThemeVariant==ReaderPalette.ChocolateVariant,"La fenêtre secondaire ne suit pas la bascule à chaud.");
             about.Close();Layout();
 
             Click(system);
@@ -135,6 +137,15 @@ static class ThemeCases
         var restarted=new ReaderWindow(new ThemePreference(Path.Combine(root,"settings.json")));restarted.Show();Layout();
         Check(restarted.ActualThemeVariant==ReaderPalette.BlueVariant,"Le thème n’est pas appliqué au démarrage de la fenêtre suivante.");
         restarted.Close();
+    }
+
+    internal static void ChooseLanguage(ReaderWindow window,string id)
+    {
+        var anchor=Control<Button>(window,"LanguageToggle");
+        var flyout=(Flyout)anchor.Flyout!;
+        flyout.ShowAt(anchor);Layout();
+        var option=((Control)flyout.Content!).GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="Language_"+id);
+        Click(option);
     }
 
     static T Control<T>(ReaderWindow w,string name) where T:Control=>w.GetVisualDescendants().OfType<T>().Single(c=>c.Name==name);

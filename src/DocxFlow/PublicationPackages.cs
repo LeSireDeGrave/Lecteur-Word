@@ -117,15 +117,24 @@ internal static class PublicationPackages
             new XAttribute(XNamespace.Xmlns+"epub",Epub),new XAttribute(XNamespace.Xml+"lang",language),new XAttribute("lang",language),
             new XElement(Html+"head",new XElement(Html+"title",title),new XElement(Html+"link",
                 new XAttribute("rel","stylesheet"),new XAttribute("href","style.css"))),new XElement(Html+"body",contents));
-        var noteLinks=body.SelectMany(b=>b.DescendantsAndSelf(Html+"a")).Where(a=>(string?)a.Attribute(Epub+"type")=="noteref")
-            .ToDictionary(a=>(string)a.Attribute("href")!,a=>(string)a.Attribute("id")!,StringComparer.Ordinal);
-        foreach(var n in book.Notes)
-            foreach(var a in n.Blocks.SelectMany(b=>b.DescendantsAndSelf(Html+"a")).Where(a=>(string?)a.Attribute(Epub+"type")=="noteref"))
-                noteLinks.Add((string)a.Attribute("href")!,(string)a.Attribute("id")!);
+        var noteLinks=body.Concat(book.Notes.SelectMany(note=>note.Blocks)).SelectMany(b=>b.DescendantsAndSelf(Html+"a"))
+            .Where(a=>(string?)a.Attribute(Epub+"type")=="noteref")
+            .ToLookup(a=>(string)a.Attribute("href")!,a=>(string)a.Attribute("id")!,StringComparer.Ordinal);
         var notes=book.Notes.Select(n=>new XElement(Html+"aside",new XAttribute(Epub+"type",n.End?"endnote":"footnote"),
             new XAttribute("role",n.End?"note":"doc-footnote"),new XAttribute("id",n.Id),n.Blocks,
-            new XElement(Html+"p",new XElement(Html+"a",new XAttribute("href","#"+noteLinks["#"+n.Id]),
-                new XAttribute("aria-label",language.StartsWith("fr",StringComparison.Ordinal)?"Retour à l’appel":"Back to note reference"),"↩")))).ToArray();
+            new XElement(Html+"p",Backlinks(n.Id)))).ToArray();
+        IEnumerable<XNode> Backlinks(string note)
+        {
+            var callers=noteLinks["#"+note].ToArray();
+            var label=language.StartsWith("fr",StringComparison.Ordinal)?"Retour à l’appel":"Back to note reference";
+            for(int index=0;index<callers.Length;index++)
+            {
+                if(index>0)yield return new XText(" ");
+                string suffix=callers.Length==1?"":" "+(index+1).ToString(CultureInfo.InvariantCulture);
+                yield return new XElement(Html+"a",new XAttribute("href","#"+callers[index]),
+                    new XAttribute("aria-label",label+suffix),"↩"+suffix);
+            }
+        }
         var chapters=new List<(string Path,string Title,XElement Contents)>();
         if(book.Cover is {} cover)
         {

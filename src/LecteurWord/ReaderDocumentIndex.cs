@@ -319,6 +319,7 @@ internal sealed class ReaderDocumentIndex
                     _ => null,
                 },
                 SemanticKind.ResourceReference when name is "{" + A + "}blip" or "{" + V + "}imagedata" => DocumentCategory.Image,
+                SemanticKind.Drawing when name==Q(W,"object") => DocumentCategory.Other,
                 SemanticKind.Drawing when !HasSpecificDrawing(e.Id) => DocumentCategory.Drawing,
                 SemanticKind.ContentControl when name==Q(W,"sdt") => DocumentCategory.Other,
                 SemanticKind.Opaque => name switch

@@ -1,0 +1,85 @@
+{
+  "commands": [
+    {
+      "action": "headings",
+      "french": "Titres",
+      "english": "Headings",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 1
+    },
+    {
+      "action": "sections",
+      "french": "Sections",
+      "english": "Sections",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 2
+    },
+    {
+      "action": "bookmarks",
+      "french": "Signets du document",
+      "english": "Document bookmarks",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 3
+    },
+    {
+      "action": "pages",
+      "french": "Aller à une page",
+      "english": "Go to a page",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 4
+    },
+    {
+      "action": "marks",
+      "french": "Repères de lecture",
+      "english": "Reading marks",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 5
+    },
+    {
+      "action": "mark-position",
+      "french": "Marquer la position",
+      "english": "Mark position",
+      "places": [
+        "toolbar"
+      ],
+      "shortcut": 6
+    },
+    {
+      "action": "history",
+      "french": "Historique",
+      "english": "History",
+      "places": [
+        "sidebar"
+      ],
+      "shortcut": 7
+    },
+    {
+      "action": "back",
+      "french": "Position précédente",
+      "english": "Previous position",
+      "places": [
+        "toolbar"
+      ],
+      "shortcut": 8
+    },
+    {
+      "action": "forward",
+      "french": "Position suivante",
+      "english": "Next position",
+      "places": [
+        "toolbar"
+      ],
+      "shortcut": 9
+    }
+  ]
+}

@@ -73,6 +73,12 @@ static class RenderQualityCases
             await window.OpenDocumentAsync(Path.Combine(root,"copies",document+".docx"));
             long opening=time.ElapsedMilliseconds;
             var reading=window.CurrentReading??throw new InvalidOperationException("Lecture absente.");
+            if(document=="maths"&&!observe)
+                Check(window.CurrentReadingView==ReadingView.SinglePage&&window.CurrentComposition is
+                    {Profile:PageComposer.Profile,Available:true,Pages.Count:3},"Les trois feuilles du bilan CE1 doivent s’ouvrir en Page simple.");
+            else
+                Check(window.CurrentReadingView==ReadingView.Unavailable,"Une pagination complète non qualifiée est annoncée.");
+            window.SetReadingView(ReadingView.Continuous);
             Check(window.IsSimplifiedReading&&window.CurrentPage==0,"Une pagination complète non qualifiée est annoncée.");
             if(!observe)
                 foreach(var format in Enum.GetValues<ExportFormat>())

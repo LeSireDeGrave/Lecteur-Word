@@ -1,8 +1,19 @@
 # Qualification Word, performances et ressources
 
+## Corpus permanent de régression DOCX V1
+
+Le cas ciblé `docx-v1-corpus` lit le manifeste local sélectionné par `LECTEUR_WORD_DOCX_V1_CORPUS`. Le manifeste privé de recette est conservé dans `.local/qualification/docx-v1-corpus/manifest.json`. Il référence les quatorze copies historiques et la copie contrôlée d’`ExportManuscritV1.docx`. Chaque entrée fige l’empreinte de la copie, la couverture, les lignes et la géométrie du corps. Les invariants de champs, notes et sections s’ajoutent par document. Utiliser le SDK local et le lanceur ciblé après build Release.
+
+```sh
+LECTEUR_WORD_DOCX_V1_CORPUS="$PWD/.local/qualification/docx-v1-corpus/manifest.json" \
+  python3 tools/check-target.py --component viewer --case docx-v1-corpus
+```
+
+Ce corpus fixe l’état fonctionnel des calculs du lecteur. La qualification de fidélité Word appartient aux couples DOCX/PDF ci-dessous.
+
 ## Référence Word par couple
 
-Constituer chaque couple hors exécution normale du produit. Le propriétaire fournit ou fait produire localement un PDF issu de Microsoft Word à partir de la copie DOCX exacte. Les PDF historiques d’autres moteurs et les pages du candidat abandonné servent de constats comparatifs, avec leur provenance. Les sorties du propre export PDF de Lecteur Word servent uniquement à ses tests d’export. [Export PDF dans Word](https://support.microsoft.com/en-us/office/collab-files/save-or-convert-to-pdf-or-xps-in-office-desktop-apps).
+Le statut initial est **NT pour les onze**. Constituer chaque couple hors exécution normale du produit. Le propriétaire fournit ou fait produire localement un PDF issu de Microsoft Word à partir de la copie DOCX exacte. Les PDF historiques d’autres moteurs et les pages du candidat abandonné servent de constats comparatifs, avec leur provenance. Les sorties du propre export PDF de Lecteur Word servent uniquement à ses tests d’export. [Export PDF dans Word](https://support.microsoft.com/en-us/office/collab-files/save-or-convert-to-pdf-or-xps-in-office-desktop-apps).
 
 1. Créer un manifeste privé par couple, avec SHA-256 du DOCX inspecté par les deux outils, SHA-256 du PDF, version et build Word, OS, mode de compatibilité, langue, paramètres d’impression/export, état des champs et des révisions, options d’inclusion des annotations, paramètres de papier et pilote s’ils influencent le cas, polices effectives et substitutions constatées. Noter ce qui est inconnu. Conserver les références, aucune extraction de police destinée au produit.
 2. Ouvrir dans Word en lecture seule à partir d’une copie dont l’empreinte est vérifiée. Documenter les mises à jour qui modifient l’affichage en mémoire. Si le DOCX est enregistré et change d’empreinte, traiter l’autre version comme un nouveau couple. Fixer les variables de date, d’impression et de champs. Exporter deux fois pour les cas sensibles et expliquer les différences dans le contenu des pages. Une variation de métadonnées PDF seule ne change pas le rendu.
@@ -17,9 +28,9 @@ Constituer chaque couple hors exécution normale du produit. Le propriétaire fo
 | Géométrie | Taille de page, marges, baselines sur ancres, sommets de tables et dessins, boîtes de notes et z-order | Proposition de 0,25 pt pour dimensions, 1 pt pour ancres et lignes, 2 pt pour boîtes d’objets. Calibrer sur la répétabilité de la référence puis figer avant les runs de qualification |
 | Contenu et navigation | Cibles et champs, corps et appels de notes, répétitions, média visible, symboles, recherches, sélection, rectangles/clips | Valeurs attendues vérifiées par source. Aucun résultat généré présenté comme texte original. Sélections confirmées sur bidi, ligatures et rotations |
 | Comparaison visuelle | Raster des deux sorties au même DPI et profil couleur, overlays, zones à forte différence, contrôle à 100 % et 150 % | Comparer à deux DPI fixés au protocole. Seuil pixel calibré sur variations d’anticrénelage reproductibles. Un score global ne compense ni un titre rogné ni une image absente |
-| Interaction Avalonia | Cas natifs de texte courant, de notes et de structure mixte | Ouverture, navigation, zoom, miniatures, recherche, fermeture/annulation et index cohérent avec la génération. Distinguer X11, Wayland et headless dans le résultat |
+| Interaction Avalonia | Cas natifs lettre, notes et Stage 2, plus corpus de comparaison | Ouverture, navigation, zoom, miniatures, recherche, fermeture/annulation et index cohérent avec la génération. Distinguer X11, Wayland et headless dans le résultat |
 
-La référence doit faire apparaître les difficultés ciblées, dont les notes, reprises de section, largeurs de table, sommaires, objets inline, glyphes et rotations. Ajouter un témoin synthétique pour chaque variante insuffisamment isolée.
+La référence doit faire apparaître les difficultés ciblées. 02/03/10 pour notes et reprises de section, 04 pour largeur des tables, 05 pour sommaire et composition mixte, 06 pour placement inline, 07 pour glyphes et note, 08/09 pour rotations et clip. Ajouter des témoins synthétiques unitaires pour chaque variante insuffisamment isolée dans le corpus, dont équations, graphiques, notes longues, tableaux imbriqués, révisions concurrentes, choix MC et sections en colonnes. Les tolérances proposées sont des décisions de conception, à confirmer sur des couples contrôlés.
 
 ## Progressivité et caches
 
@@ -37,11 +48,11 @@ Commencer par une composition stabilisée avec raster à la demande. Publier pro
 
 ## Protocole de mesure
 
-Figer les copies, les témoins synthétiques, le profil, le matériel, l’OS, le DPI, le build Release et les faces. Commencer par un témoin de texte courant et un témoin de structure mixte, puis contrôler les séquences de renouvellement de vingt ouvertures et annulations. Mesurer séparément process frais avec cache disque système documenté, puis 10 ouvertures séquentielles à chaud. Collecter au moins 10 échantillons par cas et état puis 30 pour un seuil p95 décisionnel. Documenter les conditions de cache et d’I/O. Ne pas vider globalement les caches du poste de l’utilisateur. Conserver résultats unitaires, médiane, p95, maximum et erreurs.
+Utiliser les mêmes onze copies et deux témoins synthétiques bornés, profil, matériel, OS, DPI, build Release et faces figés. Lettre et Stage 2 forment le premier jeu de mesures, puis contrôler le corpus et les séquences de renouvellement de vingt ouvertures et annulations. Mesurer séparément process frais avec cache disque système documenté, puis 10 ouvertures séquentielles à chaud. Collecter au moins 10 échantillons par cas et état puis 30 pour un seuil p95 décisionnel. Documenter les conditions de cache et d’I/O. Ne pas vider globalement les caches du poste de l’utilisateur. Conserver résultats unitaires, médiane, p95, maximum et erreurs.
 
 Chronométrer ouverture→premier contenu consultable, puis première page provisoire et stable quand applicable, validation/inspection, modèle, choix des faces, shaping, mesure et placement, reprises/itérations, index, frame UI et temps jusqu’au verdict final. Mesurer raster indépendant, zoom/miniatures, navigation sur page chaude puis froide, recherche première et répétée, fermeture et latence d’annulation. Échantillonner RSS, PSS et pages privées par processus et en somme d’arbre, allocations et GC .NET, handles natifs, volumes d’images et caches. Rapporter taille du paquet, version, premier accès et l’état lecture/pagination associé à chaque mesure.
 
-Les mesures de référence restent locales. Comparer des profils effectuant un travail équivalent et fixer les seuils après la mesure du socle. Vérifier le retour du PSS vers un plateau après fermeture sur la séquence d’ouvertures.
+Les valeurs mesurées de référence locale sont le paquet C# d’environ 120,2 Mo, ainsi que les temps historiques du C# par défaut d’environ 0,93 s pour la lettre paginée et 1,89 s pour Stage 2 en secours. Elles proviennent de recettes distinctes. Mesurer le nouveau socle avec le protocole ci-dessus avant de fixer les seuils. Une composition de Stage 2 ne se compare pas à la durée de son secours comme un travail équivalent. Propositions de départ à confirmer après mesure. Garder la page de la lettre dans une enveloppe de +15 % sur médiane et p95 par rapport au socle et mesurer un budget de 150 ms au p95 pour navigation chaude. Vérifier que le PSS après fermeture revient vers un plateau, sans pente de croissance reproductible sur les vingt ouvertures. Les seuils absolus mémoire et démarrage du profil complexe attendent les mesures de ce profil.
 
 ## Budgets et sécurité
 

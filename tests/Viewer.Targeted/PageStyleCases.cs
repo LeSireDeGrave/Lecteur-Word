@@ -114,7 +114,10 @@ static partial class PageCases
             Composer.PagePng(divergent.Snapshot.Composition.Pages.Single(),2).AsSpan().SequenceEqual(raster),
             "Le mode 15 n’établit aucune priorité et la géométrie candidate garde le style ordinaire.");
         using var missing = PageComposer.Compose(Fixture("styles-toggle-absent",ordinary,Change(auxiliary,"<w:b w:val=\"true\"/>","")));
-        Check(missing.Snapshot.Coverage==PageCoverage.Partial,"Une déclaration absente ne prouve pas un booléen équivalent.");
+        Complete(missing.Snapshot,1);
+        Check(missing.Snapshot.StyleDecision?.Selection==PageStyleSelection.OrdinaryWithPlainCopy&&
+            missing.Snapshot.Composition.Issues.Any(i=>i.Code=="PAGE_STYLES_EFFECTS_DIVERGENT"&&!i.BlocksRendering),
+            "L’absence reste une différence et la copie simple ne change pas la graisse ordinaire.");
         const string ligatures="""
             <w14:ligatures xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:val="standard"/>
             """;
@@ -137,6 +140,61 @@ static partial class PageCases
         Check(cycle.Snapshot.Coverage==PageCoverage.Partial&&cycle.Snapshot.Composition.Issues.Any(i=>
             i.Code=="PAGE_STYLES_EFFECTS_USE_UNRESOLVED"&&i.Source?.PartUri=="/word/archive.xml"),
             "Chaîne auxiliaire cyclique rattachée à sa partie.");
+        const string linked="""
+            <w:style w:type="character" w:styleId="BaseChar"><w:link w:val="Base"/>
+              <w:rPr><w:sz w:val="46"/></w:rPr></w:style>
+            """;
+        string linkedOrdinary=Change(ordinary,"<w:next","<w:basedOn w:val=\"Absent\"/><w:next")+
+            linked;
+        string linkedAuxiliary=Change(auxiliary,"<w:next","<w:basedOn w:val=\"BaseChar\"/><w:next")+
+            linked;
+        using var metadata=PageComposer.Compose(Fixture("styles-link-and-missing-parent",linkedOrdinary,linkedAuxiliary));
+        var linkedSnapshot=metadata.Snapshot;
+        Complete(linkedSnapshot,1);
+        var linkedModel=linkedSnapshot.Semantic!;
+        var character=linkedModel.OrdinaryStyles.Definitions.Single(d=>d.DeclaredId=="BaseChar");
+        var baseStyle=linkedModel.OrdinaryStyles.Definitions.Single(d=>d.DeclaredId=="Base");
+        Check(character.LinkedStyle?.TargetId==baseStyle.Id&&baseStyle.NextStyle?.TargetId==
+            linkedModel.OrdinaryStyles.Definitions.Single(d=>d.DeclaredId=="Derived").Id&&baseStyle.ParentId is null&&
+            linkedSnapshot.Composition.Issues.Any(i=>i.Code=="SEMANTIC_STYLE_PARENT_IGNORED")&&
+            Composer.PagePng(linkedSnapshot.Composition.Pages[0],2).AsSpan().SequenceEqual(raster),
+            "Liens et style suivant conservés avec leur source. Un parent absent ou de type incompatible ne contribue pas au rendu.");
+        const string latent="""
+            <w:latentStyles><w:lsdException w:name="Absent" w:qFormat="1"/></w:latentStyles>
+            """;
+        string extra=Paragraph(Run("Absent")+"""
+            <w:r><w:rPr><w:rStyle w:val="Absent"/></w:rPr><w:t xml:space="preserve"> ordinaire</w:t></w:r>
+            ""","""<w:pStyle w:val="Absent"/>""")+
+            Paragraph("""<w:r><w:rPr><w:rStyle w:val="BaseChar"/></w:rPr><w:t>Associé</w:t></w:r>""");
+        using var declared=PageComposer.Compose(Fixture("styles-latent-et-caractere",
+            latent+linkedOrdinary,linkedAuxiliary,extra:extra));
+        Complete(declared.Snapshot,1);
+        Check(declared.Snapshot.Semantic!.StyleUses.Count(u=>u.MissingReferenceIgnored)==2&&
+            Line(declared.Snapshot,"Absent ordinaire").Native!.Parts.First(p=>p.Fragment is not null).Fragment!.Style.Size==12&&
+            Line(declared.Snapshot,"Associé").Native!.Parts.First(p=>p.Fragment is not null).Fragment!.Style.Size==23,
+            "Le style de caractère est appliqué par sa référence directe. La déclaration latente conserve ses métadonnées.");
+        const string onlyEffects="""<w:style w:type="paragraph" w:styleId="Absent"><w:rPr><w:sz w:val="34"/></w:rPr></w:style>""";
+        using var conflict=PageComposer.Compose(Fixture("styles-utilise-uniquement-auxiliaire",
+            latent+linkedOrdinary,linkedAuxiliary+onlyEffects,extra:extra));
+        Check(conflict.Snapshot.Coverage==PageCoverage.Partial&&conflict.Snapshot.Composition.Issues.Any(i=>
+            i.Code=="PAGE_STYLES_EFFECTS_ONLY_STYLE"&&i.Source?.PartUri=="/word/archive.xml"),
+            "Une définition auxiliaire active empêche de conclure à l’équivalence des cascades.");
+        const string defaultsTrue="""
+            <w:docDefaults><w:rPrDefault><w:rPr><w:b/></w:rPr></w:rPrDefault></w:docDefaults>
+            """;
+        const string parityStyle="""
+            <w:style w:type="paragraph" w:default="1" w:styleId="Base">
+            <w:rPr><w:b/></w:rPr></w:style>
+            <w:style w:type="paragraph" w:styleId="Derived"><w:basedOn w:val="Base"/><w:rPr><w:b/></w:rPr></w:style>
+            """;
+        using var parity=PageComposer.Compose(Fixture("styles-toggle-deux-niveaux",defaultsTrue+parityStyle,
+            defaultsTrue+parityStyle,extra:Paragraph("""
+                <w:r><w:rPr><w:b w:val="0"/></w:rPr><w:t>Direct</w:t></w:r>
+                """,select)));
+        Complete(parity.Snapshot,1);
+        Check(!Bold("Premier")&&Bold("Second")&&!Bold("Direct"),
+            "La valeur par défaut vraie subit l’inversion des niveaux de style. La déclaration directe est absolue.");
+        bool Bold(string value)=>Line(parity.Snapshot,value).Native!.Parts.First(p=>p.Fragment is not null).Fragment!.Style.Bold;
         foreach (var format in Enum.GetValues<ExportFormat>())
         {
             string output = Path.Combine(root,"refus-style-"+format);
@@ -155,7 +213,7 @@ static partial class PageCases
 
         static string Change(string value,string before,string after)=>value.Replace(before,after,StringComparison.Ordinal);
 
-        InspectionResult Fixture(string name,string first,string second,string compatibility=mode14)
+        InspectionResult Fixture(string name,string first,string second,string compatibility=mode14,string extra="")
         {
             const string headerRef="""<w:headerReference w:type="default" r:id="head"/>""";
             const string theme="""
@@ -165,7 +223,7 @@ static partial class PageCases
                 </a:themeElements></a:theme>
                 """;
             string section=Section(width:5000,height:5400,margins:900).Replace("<w:sectPr>","<w:sectPr>"+headerRef,StringComparison.Ordinal);
-            var parts=Fixtures.Parts(P("Premier")+P("Second",select)+section,
+            var parts=Fixtures.Parts(P("Premier")+P("Second",select)+extra+section,
                 new()
                 {
                     ["word/canonical.xml"]=Fixtures.Xml("styles",first),

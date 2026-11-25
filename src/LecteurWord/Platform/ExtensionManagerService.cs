@@ -17,11 +17,11 @@ internal sealed class ExtensionManagerService
         ExtensionSettings Settings, string? DownloadSource);
 
     readonly string directory;
-    readonly Version readerVersion;
-    internal Version ReaderVersion => readerVersion;
+    readonly ExtensionHostVersion readerVersion;
+    internal ExtensionHostVersion ReaderVersion => readerVersion;
     internal const string FileExtension = ".lwext";
 
-    internal ExtensionManagerService(PlatformPaths paths, Version readerVersion)
+    internal ExtensionManagerService(PlatformPaths paths, ExtensionHostVersion readerVersion)
         => (directory, this.readerVersion) = (Path.Combine(paths.Data, "extensions"), readerVersion);
 
     internal (IReadOnlyList<InstalledExtension> Items, int Unreadable) List()
@@ -43,6 +43,7 @@ internal sealed class ExtensionManagerService
 
     internal ExtensionPackage InspectLocal(string path)
     {
+        ExtensionPackage.Require(new FileInfo(path).Length is > 0 and <= ExtensionPackage.ArchiveLimit, "Taille du paquet invalide.");
         using var input = File.OpenRead(path);
         return ExtensionPackage.Read(PlatformFiles.ReadBounded(input,ExtensionPackage.ArchiveLimit),readerVersion);
     }
@@ -69,10 +70,23 @@ internal sealed class ExtensionManagerService
     internal InstalledExtension SetEnabled(string id, bool enabled) => Change(id, item =>
     {
         ExtensionPackage.Require(!enabled || ExtensionPackage.IsCompatible(item.Manifest,readerVersion), "Extension incompatible.");
+        if (!enabled) return item with { Enabled = false };
+        var installed = List().Items;
+        ExtensionPackage.Require(DependenciesAvailable(item, installed), "Dépendances absentes, incompatibles ou désactivées.");
         if (enabled && item.Package.Theme is not null)
-            ExtensionPackage.Require(!List().Items.Any(other => other.Manifest.Id != id && other.Package.Theme is not null && CanRun(other)),
+            ExtensionPackage.Require(!installed.Any(other => other.Manifest.Id != id && other.Package.Theme is not null && other.Enabled),
                 "Désactivez d’abord le thème d’extension déjà actif.");
-        return item with { Enabled = enabled, Quarantined = enabled ? false : item.Quarantined };
+        if (item.Package.Accessibility is not null)
+            ExtensionPackage.Require(!installed.Any(other => other.Manifest.Id != id && other.Package.Accessibility is not null && other.Enabled),
+                "Désactivez d’abord le profil d’accessibilité déjà actif.");
+        if (item.Package.Navigation is {} navigation)
+        {
+            var shortcuts = navigation.Commands.Select(c => c.Shortcut).OfType<int>().ToHashSet();
+            ExtensionPackage.Require(!installed.Where(other => other.Manifest.Id != id && other.Enabled)
+                .SelectMany(other => other.Package.Navigation?.Commands ?? [])
+                .Any(command => command.Shortcut is {} slot && shortcuts.Contains(slot)), "Raccourci d’extension déjà attribué.");
+        }
+        return item with { Enabled = true, Quarantined = false };
     });
 
     internal InstalledExtension Configure(string id, ExtensionSettings settings)
@@ -96,7 +110,38 @@ internal sealed class ExtensionManagerService
         File.Delete(EntryPath(id));
     }
 
-    internal bool CanRun(InstalledExtension item) => item.Enabled && !item.Quarantined && ExtensionPackage.IsCompatible(item.Manifest, readerVersion);
+    internal bool CanRun(InstalledExtension item, IReadOnlyList<InstalledExtension>? installed = null) =>
+        IsActive(item) && (item.Manifest.Dependencies is not { Length: > 0 } ||
+            DependenciesAvailable(item, installed ?? List().Items));
+
+    internal bool DependenciesAvailable(InstalledExtension item, IReadOnlyList<InstalledExtension> installed)
+    {
+        if (item.Manifest.Dependencies is not { Length: > 0 }) return true;
+        var byId = installed.ToDictionary(candidate => candidate.Manifest.Id, StringComparer.Ordinal);
+        var activePath = new HashSet<string>(StringComparer.Ordinal);
+        var checkedIds = new HashSet<string>(StringComparer.Ordinal);
+        return Check(item);
+
+        bool Check(InstalledExtension current)
+        {
+            string id = current.Manifest.Id;
+            if (checkedIds.Contains(id)) return true;
+            if (!activePath.Add(id)) return false;
+            foreach (var dependency in current.Manifest.Dependencies ?? [])
+            {
+                if (!byId.TryGetValue(dependency.Id, out var required) || !IsActive(required)) return false;
+                var version = ExtensionPackage.StableVersion(required.Manifest.Version);
+                if (version < ExtensionPackage.StableVersion(dependency.Minimum) ||
+                    version >= ExtensionPackage.StableVersion(dependency.MaximumExclusive) || !Check(required)) return false;
+            }
+            activePath.Remove(id);
+            checkedIds.Add(id);
+            return true;
+        }
+    }
+
+    bool IsActive(InstalledExtension item) =>
+        item.Enabled && !item.Quarantined && ExtensionPackage.IsCompatible(item.Manifest, readerVersion);
 
     InstalledExtension Change(string id, Func<InstalledExtension, InstalledExtension> change)
     {

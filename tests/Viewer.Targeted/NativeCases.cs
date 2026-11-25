@@ -22,9 +22,10 @@ static class NativeCases
     public static bool Opus;
     public static bool Tables;
     public static bool RenderQuality;
-    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false,bool compatibility=false,bool opus=false,bool tables=false,bool renderQuality=false)
+    public static bool PagesView;
+    public static int Run(string output,bool ux=false,bool finish=false,bool layout=false,bool fonts=false,bool structures=false,bool compatibility=false,bool opus=false,bool tables=false,bool renderQuality=false,bool pagesView=false)
     {
-        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;Compatibility=compatibility;Opus=opus;Tables=tables;RenderQuality=renderQuality;
+        Output=output;Ux=ux;Finish=finish;Layout=layout;Fonts=fonts;Structures=structures;Compatibility=compatibility;Opus=opus;Tables=tables;RenderQuality=renderQuality;PagesView=pagesView;
         return AppBuilder.Configure<NativeQaApp>().UsePlatformDetect().UseSkia().WithInterFont().StartWithClassicDesktopLifetime([]);
     }
     public static void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
@@ -50,6 +51,7 @@ sealed class NativeQaApp:Application
     }
     static async Task Qualify(ReaderWindow window)
     {
+        if(NativeCases.PagesView){await PageViewCases.Native(window,NativeCases.Output);return;}
         if(NativeCases.RenderQuality){await RenderQualityCases.Native(window);return;}
         if(NativeCases.Tables){await TableReadingCases.Native(window);return;}
         if(NativeCases.Opus){await OpusUxCases.Native(window,NativeCases.Output);return;}
@@ -59,7 +61,8 @@ sealed class NativeQaApp:Application
         if(NativeCases.Layout){await LayoutCases.Native(window,NativeCases.Output);return;}
         string input=Environment.GetEnvironmentVariable("LECTEUR_WORD_QA_INPUT")??throw new InvalidOperationException("Explicit QA copy path required");
         string hash=Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(input)));
-        var timer=Stopwatch.StartNew();await window.OpenDocumentAsync(input);long loadMs=timer.ElapsedMilliseconds;await Task.Delay(400);
+        var timer=Stopwatch.StartNew();await window.OpenDocumentAsync(input);long loadMs=timer.ElapsedMilliseconds;
+        window.SetReadingView(ReadingView.Continuous);await Task.Delay(400);
         var keyboardChecks=new List<object>();
         NativeCases.Check(window.IsSimplifiedReading&&window.CurrentReading?.Available==true&&window.CurrentPage==0,"Real document remains blank or fake paginated");
         NativeCases.Check(window.GetVisualDescendants().OfType<ListBox>().Single(b=>b.Name=="SimplifiedReading").GetRealizedContainers().Any(),"No visible native reading container");

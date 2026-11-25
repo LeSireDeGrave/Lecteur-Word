@@ -24,13 +24,7 @@ public sealed partial class ReaderWindow
     {
         var help = IconButton("help", "Aide et récupération", "Help and recovery", ShowPlatformHelpAsync);
         help.Name = "PlatformHelp";
-        if (extensions is null) AddGroup(help);
-        else
-        {
-            var puzzle = IconButton("puzzle", "Gérer les extensions", "Manage extensions", ShowExtensionsAsync);
-            puzzle.Name = "PlatformExtensions";
-            AddGroup(puzzle,help);
-        }
+        AddGroup(help);
     }
 
     void InitializeRecovery()
@@ -72,13 +66,13 @@ public sealed partial class ReaderWindow
     internal async Task StartReaderAsync(string? commandLineDocument)
     {
         if (startupWarning is not null || recovery?.StorageWarning is not null)
-            status.Text = startupWarning ?? recovery?.StorageWarning;
+            status.Text = ExtensionError((startupWarning ?? recovery?.StorageWarning)!);
         if (startupRecoveryPending)
         {
             var start = recovery!.Start;
             if (start.InterruptedExtension is {} identity) QuarantineExtension(identity);
             var choice = await AskRecoveryAsync(start);
-            ReloadExtensionTheme();
+            ReloadPlatformExtensions();
             startupRecoveryPending = false;
             if (choice && start.Reading?.Document is {} path)
                 await RestoreReadingAsync(start.Reading, path);
@@ -87,7 +81,7 @@ public sealed partial class ReaderWindow
         }
         else
         {
-            ReloadExtensionTheme();
+            ReloadPlatformExtensions();
             if (!string.IsNullOrWhiteSpace(commandLineDocument)) await OpenDocumentAsync(commandLineDocument);
         }
         SaveReading(completed: true);
@@ -142,7 +136,11 @@ public sealed partial class ReaderWindow
         zoom = Math.Clamp(snapshot.PagedZoom, .3, 2);
         readingZoom = Math.Clamp(snapshot.ContinuousZoom, .8, 1.7);
         UpdatePanels();
-        SetLanguage(snapshot.English);
+        if (!hasLanguagePreference && LanguagePath is null)
+        {
+            languageChoice = snapshot.English ? "en" : "fr";
+            ApplyLanguage(refresh: true);
+        }
     }
 
     void ApplyReadingSnapshot(ReadingSnapshot snapshot)
@@ -240,7 +238,22 @@ public sealed partial class ReaderWindow
     }
 
     Task ShowIncidentAsync(Incident incident, Window owner) =>
-        ShowTextReportAsync(T("Rapport d’incident","Incident report"), incident.LocalText(), owner, incident);
+        ShowTextReportAsync(T("Rapport d’incident","Incident report"), LocalIncident(incident), owner, incident);
+
+    string LocalIncident(Incident incident)
+    {
+        string line = Environment.NewLine;
+        return string.Join(line, $"Lecteur Word {incident.Version}",
+            T("Incident : ", "Incident: ") + incident.Id.ToString("N") + " · " + incident.Utc.ToLocalTime().ToString("F", uiCulture),
+            T("Build : ", "Build: ") + incident.Build, T("Système : ", "System: ") + incident.System,
+            T("Étape : ", "Stage: ") + incident.Stage,
+            T("Arrêt non propre : ", "Unclean shutdown: ") + (incident.Unclean ? T("oui", "yes") : T("non", "no")),
+            T("Extension : ", "Extension: ") + (incident.Extension is {} extension ? $"{extension.Id} {extension.Version}" : "—"),
+            T("Erreur : ", "Error: ") + (incident.ErrorType ?? T("non observée", "not observed")),
+            incident.FrameNames.Length == 0 ? T("Pile : indisponible", "Stack: unavailable")
+                : T("Pile : ", "Stack: ") + line + string.Join(line,incident.FrameNames))
+            + (incident.LocalStack is null ? "" : line + line + incident.LocalStack);
+    }
 
     async Task ShowTextReportAsync(string title, string report, Window owner, Incident? incident = null)
     {
@@ -270,9 +283,9 @@ public sealed partial class ReaderWindow
 
     Window PlatformDialog(string title, double width, double height)
     {
-        var dialog = new Window { Title = title, Width = width, Height = height, MinWidth = 390, MinHeight = 190,
+        var dialog = TrackDialog(new Window { Title = title, Width = width, Height = height, MinWidth = 390, MinHeight = 190,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, Icon = BrandAssets.WindowIcon,
-            RequestedThemeVariant = RequestedThemeVariant, FontFamily = FontFamily };
+            FontFamily = FontFamily });
         dialog.KeyDown += (_, args) => { if (args.Key == Key.Escape) dialog.Close(); };
         return dialog;
     }
@@ -296,6 +309,7 @@ public sealed partial class ReaderWindow
     static Button ActionButton(Panel parent, string label, Action action, string? name = null)
     {
         var button = new Button { Name = name, Content = label };
+        Avalonia.Automation.AutomationProperties.SetName(button,label);
         parent.Children.Add(button);
         button.Click += (_, _) => action();
         return button;
@@ -304,6 +318,7 @@ public sealed partial class ReaderWindow
     Button AsyncButton(Panel parent, string label, Func<Task> action, TextBlock? feedback = null, string? name = null)
     {
         var button = new Button { Name = name, Content = label };
+        Avalonia.Automation.AutomationProperties.SetName(button,label);
         parent.Children.Add(button);
         button.Click += async (_, _) =>
         {
@@ -312,7 +327,7 @@ public sealed partial class ReaderWindow
             catch (OperationCanceledException) { }
             catch (Exception error) when (error is InvalidDataException or TimeoutException)
             {
-                (feedback ?? status).Text = error.Message;
+                (feedback ?? status).Text = ExtensionError(error.Message);
             }
             catch (Exception error)
             {

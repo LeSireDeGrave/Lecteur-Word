@@ -64,10 +64,10 @@ static partial class PageCases
         using var bad=Compose(Write(root,"page-bad-region",P("Source conservée")+Section(3200,3600,margins:2000)));
         Check(bad.Snapshot.Coverage==PageCoverage.Fallback&&bad.Snapshot.Composition.Pages.Count==0&&
             bad.Snapshot.Gaps.Length>0&&bad.Snapshot.Lines!.Typography.Tokens.Any(t=>t.Original=="Source conservée"),"Région impossible.");
-        using var even=Compose(Write(root,"page-parity",P("Première",Section())+P("Deuxième")+Section(start:"oddPage")));
-        Check(even.Snapshot.Coverage==PageCoverage.Partial&&even.Snapshot.Composition.Pages.Count==1&&
-            even.Snapshot.Composition.Issues.Any(i=>i.Code=="PAGE_SECTION_TRANSITION_PENDING")&&
-            even.Snapshot.Gaps.Any(g=>g.Reason=="PAGE_SECTION_TRANSITION_PENDING"),"Saut impair présenté comme continu.");
+        using var odd=Compose(Write(root,"page-parity",P("Première",Section())+P("Deuxième")+Section(start:"oddPage")));
+        Complete(odd.Snapshot,3);
+        Check(odd.Snapshot.Pages[1].Geometry.IntercalarySectionBreak==odd.Snapshot.Sections[1].Source&&
+            odd.Snapshot.Pages[2].Geometry.Lines.Single().Text=="Deuxième","Le saut impair crée un intercalaire sourcé.");
         using var different=Compose(Write(root,"page-incompatible",P("Première",Section())+P("Deuxième")+Section(4800,3200,"continuous","landscape")));
         Check(different.Snapshot.Coverage==PageCoverage.Partial&&different.Snapshot.Composition.Pages.Count==1&&
             different.Snapshot.Sections[1].Diagnostics.Any(i=>i.Code=="PAGE_CONTINUOUS_INCOMPATIBLE"),"Section continue incompatible.");
@@ -218,7 +218,7 @@ static partial class PageCases
             }
             var unknown=Write(root,"page-native-gui-fallback",P("Lecture "+char.ConvertFromUtf32(0x10fffd))+Section());
             AboutCases.Complete(w.OpenDocumentAsync(unknown));
-            Check(w.IsSimplifiedReading&&w.CurrentPage==0&&w.NativePageStatus=="Fallback","Repli du document hors profil.");
+            Check(w.CurrentReadingView==ReadingView.Unavailable&&w.CurrentPage==0&&w.NativePageStatus=="Fallback","Signalement du document hors profil.");
         }
         finally{w.Close();}
     }

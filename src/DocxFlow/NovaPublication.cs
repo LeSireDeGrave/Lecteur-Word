@@ -10,7 +10,7 @@ namespace LecteurWord.Flow;
 /// <summary>Native OpusNova v27 contract from 8633f8fb457396c9015304228694afc72ee7ded6.</summary>
 internal static class NovaPublication
 {
-    const int Version=27;
+    internal const int Version=27;
     const string Marker="\ufffc";
     static readonly JsonSerializerOptions Json=new(){DefaultIgnoreCondition=JsonIgnoreCondition.WhenWritingNull};
     static readonly UTF8Encoding StrictUtf8=new(false,true);
@@ -26,9 +26,12 @@ internal static class NovaPublication
     sealed record Bookmark(string id,string name,Range range);
     sealed record Link(string id,Range range,object target);
     sealed record InternalTarget(string project,string target,string kind="internal");
+    sealed record PageTarget(string project,string target,string kind="editorial",string target_kind="bookmark",string display="page");
+    sealed record ContentsTarget(string project,object options,string kind="contents");
     sealed record Resource(string id,string path,string media_type,string sha256,bool document_image=true);
 
     internal static IReadOnlyList<Entry> Build(StructuredPublication book,CancellationToken token)=>new Builder(book,token).Build();
+    internal static bool ValidBookmarkName(string name)=>ValidLabel(name,4096);
 
     sealed class Builder
     {
@@ -52,6 +55,8 @@ internal static class NovaPublication
         readonly HashSet<string> listSequences=new(StringComparer.Ordinal);
         readonly Dictionary<string,string> namedStyles=new(StringComparer.Ordinal);
         readonly HashSet<string> referencedBookmarks;
+        readonly Uri? hyperlinkBase;
+        StructuredPublication.NovaContents? nativeContents;
         string? part,chapter;
         int footnoteCount,endnoteCount;
         int usableWidth=160_000,usableHeight=247_000;
@@ -69,6 +74,8 @@ internal static class NovaPublication
             referencedBookmarks=model.References.Where(r=>r.Kind!="bookmarkEnd").Select(r=>r.TargetId)
                 .Concat(model.Fields.Select(f=>f.BookmarkId))
                 .OfType<string>().ToHashSet(StringComparer.Ordinal);
+            if(NativeAddress(model.ExternalHyperlinkBase()) is {} address&&
+                new Uri(address) is {Scheme:"http" or "https"} basis)hyperlinkBase=basis;
         }
 
         internal IReadOnlyList<Entry> Build()
@@ -76,13 +83,7 @@ internal static class NovaPublication
             if(!ValidLabel(book.Metadata.Title,4096)||Encoding.UTF8.GetByteCount(book.Metadata.Author??"")>4096||
                 book.Metadata.Author?.Contains('\0')==true)
                 throw new InvalidDataException("Titre ou auteur incompatible avec le profil NOVA.");
-            long created=Epoch(book.Metadata.Created),modified=Epoch(book.Metadata.Modified??book.Metadata.Created);
-            if(created<0||modified<created)
-            {
-                book.Issue("EXPORT_NOVA_METADATA_DATES",book.Metadata.Origin??root.Location,
-                    "Les dates DOCX sont incompatibles avec NOVA 27. Elles doivent être postérieures à l’époque Unix et la modification ne peut précéder la création.");
-                return [];
-            }
+            if(!MetadataDates(out long created,out long modified))return [];
             if(new[]{book.Metadata.Subject,book.Metadata.Keywords,book.Metadata.Description}.Any(s=>!string.IsNullOrWhiteSpace(s)))
                 book.Issue("EXPORT_NOVA_METADATA_CONVERSION",root,
                     "Les propriétés sujet, mots-clés et description restent dans le DOCX. Le projet conserve le titre, l’auteur et les dates.",false);
@@ -92,6 +93,7 @@ internal static class NovaPublication
 
             var extensions=new Dictionary<string,object>();
             AddPageStyles(extensions);
+            nativeContents=book.FindNovaContents(paragraph=>EditorialStyle(paragraph).Kind=="chapter");
             var manuscriptBlocks=model.BodyBlocks.ToList();
             foreach(var (title,auxiliary) in book.NovaAuxiliary())
             {
@@ -110,8 +112,11 @@ internal static class NovaPublication
             int unresolved=links.RemoveAll(link=>link.target is InternalTarget target&&!destinations.Contains(target.target));
             if(unresolved>0)
                 book.Reserve("EXPORT_NOVA_LINK_DESTINATION",root,"Les libellés sont conservés pour les liens dont la destination ne peut être reproduite.");
+            if(links.Any(link=>link.target is PageTarget target&&!destinations.Contains(target.target)))
+                book.Issue("EXPORT_NOVA_FIELD_DESTINATION",root,"Le signet du renvoi de page ne peut pas être représenté.");
             if(links.Count!=0||bookmarks.Count!=0)
-                extensions.Add("org.opusnova.references",new{version=1,documents=new Dictionary<string,object>
+                extensions.Add("org.opusnova.references",new{version=nativeContents is not null?3:links.Any(link=>link.target is PageTarget)?2:1,
+                    documents=new Dictionary<string,object>
                     {{document,new{links,bookmarks}}}});
             if(body.styles.Count>100_000||body.paragraphs.Count>100_000||units.Count>100_000||
                 forest.Count>2048||resources.Count>128||blocks.Count>384||notes.Count>1024||
@@ -214,9 +219,15 @@ internal static class NovaPublication
             foreach(string id in sequence)
             {
                 token.ThrowIfCancellationRequested();
-                if(index>0)Append("\n");
-                bool pageBefore=main&&!textFrame&&newPages.Contains(index);
-                index++;
+                int blockIndex=index++;
+                bool primary=main&&!textFrame;
+                if(primary&&nativeContents is {} selected&&blockIndex>selected.First&&blockIndex<=selected.Last)
+                {
+                    book.Represent(id,PublicationRepresentation.Compatible);
+                    continue;
+                }
+                if(blockIndex>0)Append("\n");
+                bool pageBefore=primary&&newPages.Contains(blockIndex);
                 var source=model.Source(id);
                 if(main&&!textFrame&&auxiliaryTitles.TryGetValue(id,out var auxiliaryTitle))
                 {
@@ -247,6 +258,20 @@ internal static class NovaPublication
                     continue;
                 }
                 var p=paragraph.Properties;
+                if(primary&&nativeContents is {} contents&&blockIndex==contents.First)
+                {
+                    paragraphs.Add(new(start,Attributes(paragraph,null,pageBefore,includeList:false)));
+                    var options=new{title="",parts=false,chapters=true,scenes=false,headings=Array.Empty<int>(),
+                        pages=true,leaders=true,presentation="classic",include_synopsis=false};
+                    links.Add(new(Id("contents:"+contents.Field),new(offset,offset+1),new ContentsTarget(project,options)));
+                    Append(Marker);
+                    book.Represent(id,PublicationRepresentation.Compatible);
+                    book.Reserve("EXPORT_NOVA_DYNAMIC_CONTENTS",model.Source(contents.Field),
+                        "Le sommaire devient actualisable dans OpusNova. Les folios suivent le projet et les numéros répétés dans un même titre sont regroupés.");
+                    book.Feature("nova-contents",PublicationRetention.Native,model.Source(contents.Field).Location,
+                        "Sommaire natif actualisable et lié aux chapitres du projet.");
+                    continue;
+                }
                 var inlines=book.ReadInlines(id);
                 var (style,kind)=StyleOf(paragraph);
                 var paragraphAttributes=Attributes(paragraph,style,pageBefore,
@@ -258,23 +283,26 @@ internal static class NovaPublication
                 bool separateImage=false;
                 bool afterFrame=false;
                 bool pendingPage=false;
-                int lastReal=Array.FindLastIndex(inlines,i=>i.Image is not null||i.Note is not null||
-                    i.TextFrame is not null||
+                int lastReal=Array.FindLastIndex(inlines,i=>i.Image is not null||i.Note is not null||i.Field=="NOVA_PAGEREF"||
+                    i.TextFrame is not null||i.RecoveredStory is not null||
                     i.Value is {} value&&value.Any(c=>!char.IsWhiteSpace(c)));
                 for(int inlineIndex=0;inlineIndex<inlines.Length;inlineIndex++)
                 {
                     var inline=inlines[inlineIndex];
-                    if(inline.TextFrame is {} frame)
+                    if(inline.TextFrame is not null||inline.RecoveredStory is not null)
                     {
+                        var frame=inline.TextFrame;
+                        string frameStory=inline.RecoveredStory??frame!.StoryId;
                         if(headingEnd<0)headingEnd=offset;
                         if(offset>lineStart||separateImage||afterFrame)Append("\n");
-                        var frameBody=BuildBody(book.TextFrameBlocks(frame),main,offset,textFrame:true);
+                        var frameBody=BuildBody(frame is null?model.BlocksOf(frameStory).Select(block=>block.Id):
+                            book.TextFrameBlocks(frame),main,offset,textFrame:true);
                         if(frameBody.paragraphs.Count>0&&paragraphs.Count>0&&paragraphs[^1].start==offset)
                             paragraphs.RemoveAt(paragraphs.Count-1);
                         Append(frameBody.text);
                         spans.AddRange(frameBody.styles);
                         paragraphs.AddRange(frameBody.paragraphs);
-                        book.Represent(frame.StoryId,PublicationRepresentation.Presentation);
+                        book.Represent(frameStory,PublicationRepresentation.Presentation);
                         book.Represent(inline.Source.NodeId,PublicationRepresentation.Presentation);
                         lineStart=offset;
                         separateImage=false;
@@ -382,6 +410,13 @@ internal static class NovaPublication
                         }
                         continue;
                     }
+                    if(inline.Field=="NOVA_PAGEREF"&&inline.Target is {} pageBookmark)
+                    {
+                        links.Add(new(Id("field:"+inline.Source.NodeId),new(offset,offset+1),
+                            new PageTarget(project,Id("bookmark:"+book.Id(pageBookmark)))));
+                        Append(Marker);
+                        continue;
+                    }
                     if(inline.Value is not {} value)continue;
                     if(inlineIndex>lastReal&&value.Contains('\t'))
                     {
@@ -469,17 +504,11 @@ internal static class NovaPublication
 
         (string? Style,string? Kind) StyleOf(LayoutParagraph paragraph)
         {
+            var editorial=EditorialStyle(paragraph);
+            if(editorial.Kind is not null)return editorial;
             if(styles.TryGetValue(paragraph.StyleId,out var definition)&&model.ChildId(definition.Id,"name") is {} nameId)
             {
                 string name=model.Attribute(nameId,"val")??"";
-                var semantic=name.ToLowerInvariant() switch
-                {
-                    "partie" or "part" => (Builtin(1),"part"),
-                    "chapitre" or "chapter" => (Builtin(2),"chapter"),
-                    "scène" or "scene" => (Builtin(5),"scene"),
-                    _ => (null,null)
-                };
-                if(semantic.Item1 is not null)return semantic;
                 if(paragraph.Properties.Heading==0&&ValidLabel(name,256))
                 {
                     if(!namedStyles.TryGetValue(definition.Id,out var id))
@@ -493,6 +522,19 @@ internal static class NovaPublication
                 }
             }
             return (paragraph.Properties.Heading is >=1 and <=10?Builtin(paragraph.Properties.Heading+2):null,null);
+        }
+
+        (string? Style,string? Kind) EditorialStyle(LayoutParagraph paragraph)
+        {
+            if(!styles.TryGetValue(paragraph.StyleId,out var style)||model.ChildId(style.Id,"name") is not {} name)
+                return (null,null);
+            return model.Attribute(name,"val")?.ToLowerInvariant() switch
+            {
+                "partie" or "part"=>(Builtin(1),"part"),
+                "chapitre" or "chapter"=>(Builtin(2),"chapter"),
+                "scène" or "scene"=>(Builtin(5),"scene"),
+                _=>(null,null)
+            };
         }
 
         object Attributes(LayoutParagraph paragraph,string? style,bool pageBefore,LayoutParagraph? previous=null,LayoutParagraph? next=null,bool includeList=true)
@@ -614,6 +656,35 @@ internal static class NovaPublication
             else if(kind=="chapter")chapter=node;
         }
 
+        bool MetadataDates(out long created,out long modified)
+        {
+            created=modified=0;
+            var creation=book.Metadata.DeclaredCreation;
+            var modification=book.Metadata.DeclaredModification;
+            if(creation is {} first&&!Timestamp(first.Value,out created))
+            {
+                book.Issue("EXPORT_NOVA_METADATA_DATES",first.Origin,
+                    "La date de création DOCX doit être un horodatage avec fuseau, à partir de l’époque Unix.");
+                return false;
+            }
+            if(modification is {} last&&!Timestamp(last.Value,out modified))
+            {
+                book.Issue("EXPORT_NOVA_METADATA_DATES",last.Origin,
+                    "La date de modification DOCX doit être un horodatage avec fuseau, à partir de l’époque Unix.");
+                return false;
+            }
+            if(creation is not null&&modification is null&&created>0)
+            {
+                book.Issue("EXPORT_NOVA_METADATA_DATES",creation.Value.Origin,
+                    "La date de modification requise par NOVA est absente du DOCX.");
+                return false;
+            }
+            if(modified>=created)return true;
+            book.Issue("EXPORT_NOVA_METADATA_DATES",modification?.Origin??root.Location,
+                "La date de modification DOCX précède la date de création.");
+            return false;
+        }
+
         void AddLink(StructuredPublication.Inline inline,SemanticReference link,int start,int end)
         {
             if(start==end)return;
@@ -623,7 +694,7 @@ internal static class NovaPublication
                 string bookmark=Id("bookmark:"+book.Id(node));
                 target=new InternalTarget(project,bookmark);
             }
-            else if(NativeAddress(link.Relation?.Target) is {} address)
+            else if(LinkAddress(link.Relation?.Target) is {} address)
                 target=new{kind="external",address};
             else
             {
@@ -633,6 +704,16 @@ internal static class NovaPublication
             if(links.Count>0&&links[^1].range.end==start&&Equals(links[^1].target,target))
                 links[^1]=links[^1] with{range=links[^1].range with{end=end}};
             else links.Add(new(Id("link:"+link.SourceId+":"+start.ToString(CultureInfo.InvariantCulture)),new(start,end),target));
+        }
+
+        string? LinkAddress(string? target)
+        {
+            if(NativeAddress(target) is {} absolute)return absolute;
+            if(hyperlinkBase is null||target is not {Length:>0 and <=4096}||
+                target.Any(c=>char.IsControl(c)||c=='\\'))return null;
+            int scheme=target.IndexOf(':');
+            if(scheme>0&&Uri.CheckSchemeName(target[..scheme]))return null;
+            return Uri.TryCreate(hyperlinkBase,target,out var resolved)?NativeAddress(resolved.AbsoluteUri):null;
         }
 
         bool AddNote(StructuredPublication.Inline inline,SemanticReference note,int offset)
@@ -739,18 +820,13 @@ internal static class NovaPublication
 
             int maxWidth=Math.Min(usableWidth-32,2_000_000);
             if(maxWidth<columnCount*4000)return false;
-            int[] widths=table.Columns.Select(w=>Math.Clamp(Microns(w),4000,maxWidth)).ToArray();
-            long total=widths.Sum(w=>(long)w);
-            if(total>maxWidth)
-            {
-                double scale=(maxWidth-columnCount*4000d)/(total-columnCount*4000);
-                widths=widths.Select(w=>(int)((w-4000)*scale)+4000).ToArray();
-            }
+            int[] desired=table.Columns.Select(Microns).ToArray();
+            int[] widths=FitTableColumns(desired,maxWidth);
             int headers=table.Rows.TakeWhile(r=>r.Header).Count();
             int retainedHeaders=origins.Where(c=>c.Row<headers&&c.Row+c.RowSpan>headers)
                 .Select(c=>c.Row).DefaultIfEmpty(headers).Min();
-            if(!widths.SequenceEqual(table.Columns.Select(Microns))||retainedHeaders!=headers||
-                table.Rows.Skip(headers).Any(r=>r.Header)||table.Rows.Any(r=>r.HeightRule=="exact")||
+            if(!widths.SequenceEqual(desired)||retainedHeaders!=headers||
+                table.Rows.Skip(headers).Any(r=>r.Header)||table.Rows.Any(r=>r.HeightRule=="exact"||Microns(r.Height)>2_000_000)||
                 table.Alignment!="left"||Math.Abs(table.Indent)>.01f)
                 book.Reserve("EXPORT_NOVA_TABLE_LAYOUT",source,"La grille et les fusions restent éditables. Largeurs, en-têtes ou alignement adaptés.");
             if(table.Rows.Any(r=>!r.CantSplit))
@@ -835,7 +911,43 @@ internal static class NovaPublication
         !value.Any(char.IsControl);
     static int Pixels(float pt)=>(int)MathF.Round(pt*4/3);
     static int Microns(float pt)=>(int)MathF.Round(pt*(25400f/72));
-    static long Epoch(DateTimeOffset? date)=>(date??DateTimeOffset.UnixEpoch).ToUnixTimeSeconds();
+    static bool Timestamp(string? raw,out long seconds)
+    {
+        seconds=0;
+        if(raw?.Trim() is not {Length:>=20} value||value[10]!='T'||
+            !(value.EndsWith('Z')||value[^6] is '+' or '-'&&value[^3]==':')||
+            !DateTimeOffset.TryParseExact(value,"yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",CultureInfo.InvariantCulture,
+                DateTimeStyles.None,out var date))return false;
+        seconds=date.ToUnixTimeSeconds();
+        return seconds>=0;
+    }
+
+    static int[] FitTableColumns(int[] desired,int maximum)
+    {
+        const int minimum=4000;
+        int[] widths=desired.Select(width=>Math.Max(width,minimum)).ToArray();
+        if(widths.Sum(width=>(long)width)<=maximum)return widths;
+        int[] order=Enumerable.Range(0,widths.Length).OrderBy(index=>widths[index]).ToArray();
+        long weight=widths.Sum(width=>(long)width);
+        int available=maximum,first=0;
+        while(first<order.Length-1&&(long)available*widths[order[first]]<minimum*weight)
+        {
+            int index=order[first++];
+            weight-=widths[index];
+            widths[index]=minimum;
+            available-=minimum;
+        }
+        long previous=0,cumulative=0;
+        for(int position=first;position<order.Length;position++)
+        {
+            int index=order[position];
+            cumulative+=widths[index];
+            long edge=(available*cumulative+weight/2)/weight;
+            widths[index]=(int)(edge-previous);
+            previous=edge;
+        }
+        return widths;
+    }
 
     static string? NativeAddress(string? target)
     {

@@ -187,10 +187,10 @@ public static partial class Composer
         }
     }
 
-    internal static SKPicture RecordContinuousTable(ComposedPage table)
+    internal static SKPicture RecordContinuousTable(ComposedPage table,SKColor? paper=null,Func<SKColor,SKColor,SKColor>? ink=null)
     {
         using var recorder=new SKPictureRecorder();
-        DrawStyledPage(recorder.BeginRecording(SKRect.Create(table.Geometry.Width,table.Geometry.Height)),table);
+        DrawStyledPage(recorder.BeginRecording(SKRect.Create(table.Geometry.Width,table.Geometry.Height)),table,paper,ink);
         return recorder.EndRecording();
     }
 

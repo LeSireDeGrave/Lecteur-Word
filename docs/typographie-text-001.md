@@ -63,3 +63,9 @@ Les budgets initiaux sont de 100 000 tokens, 500 000 unités UTF‑16, 32 768 pa
 3. Propager les identifiants et les boîtes des clusters aux sélections, à la recherche et aux liens. Couvrir chaque source active par un placement ou un état de diagnostic explicite.
 4. Qualifier les styles conditionnels de table et les profils encore partiels avec des fixtures distinctes, des faces identifiées et des références Word appariées au même DOCX.
 5. Qualifier ensuite le flux des pages, des notes et des flottants. La première page, les budgets de pagination et le mode de secours exigent leurs propres preuves.
+
+## Visibilité des caractères
+
+La lecture continue et le moteur de lignes appliquent la même cascade pour `w:vanish`. Une valeur vraie dans un style inverse la valeur héritée et une valeur fausse la conserve. Une propriété directe fixe la valeur. L’inventaire et les tokens gardent les caractères UTF-16, leur rôle et la provenance de visibilité. La projection visible omet l’avance et les glyphes du texte masqué. Une marque de paragraphe ordinaire conserve ses métriques et espacements, même quand tous les runs textuels sont masqués.
+
+`w:webHidden` reste une propriété de vue Web. Le lecteur utilise une vue documentaire normale. `w:specVanish` décrit la visibilité spéciale d’une marque de paragraphe. Ce cas, une marque effectivement masquée et les contrôles masqués à géométrie indéterminée conservent un diagnostic paginé. La recherche et la copie en lecture normale utilisent la projection visible. Les options Word d’affichage du masqué ou d’impression restent hors de cette projection. [Vanish](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.vanish) · [WebHidden](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/9008244b-5c6a-4219-943e-9431cf3372bc)

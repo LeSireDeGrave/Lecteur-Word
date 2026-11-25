@@ -141,21 +141,27 @@ public static partial class Composer
         return new(pages,issues);
     }
     public static void DrawPage(SKCanvas canvas,ComposedPage page)
+        => DrawPage(canvas,page,SKColors.White,null);
+
+    static void DrawPage(SKCanvas canvas,ComposedPage page,SKColor paper,Func<SKColor,SKColor,SKColor>? ink)
     {
-        canvas.Clear(SKColors.White);
+        canvas.Clear(paper);
         if(page.FloatingPictures.Count>0||page.FloatingTextFrames.Count>0||page.RunningStories.Count>0||page.Cells.Count>0||
             page.Footnotes.Count>0||
-            page.Lines.Any(l=>l.Native is not null||l.Fragments.Count>0||l.Images.Count>0)){DrawStyledPage(canvas,page);return;}
+            page.Lines.Any(l=>l.Native is not null||l.Fragments.Count>0||l.Images.Count>0)){DrawStyledPage(canvas,page,paper,ink);return;}
         using var typeface=CreateTypeface();using var font=new SKFont(typeface,Composition.FontSize);
-        using var paint=new SKPaint{Color=SKColors.Black,IsAntialias=true};
+        using var paint=new SKPaint{Color=ink?.Invoke(SKColors.Black,paper)??SKColors.Black,IsAntialias=true};
         foreach(var line in page.Lines)canvas.DrawText(line.Text,line.X,line.Baseline,font,paint);
     }
     public static byte[] PagePng(ComposedPage page,float scale=1)
+        => PagePng(page,scale,SKColors.White,null);
+
+    internal static byte[] PagePng(ComposedPage page,float scale,SKColor paper,Func<SKColor,SKColor,SKColor>? ink)
     {
         if(scale is <.1f or >3||!float.IsFinite(scale))throw new ArgumentOutOfRangeException(nameof(scale));
         if((double)page.Geometry.Width*page.Geometry.Height*scale*scale>16_000_000)throw new InvalidDataException("PAGE_RASTER_LIMIT");
         using var surface=SKSurface.Create(new SKImageInfo((int)Math.Ceiling(page.Geometry.Width*scale),(int)Math.Ceiling(page.Geometry.Height*scale)));
-        surface.Canvas.Scale(scale);DrawPage(surface.Canvas,page);
+        surface.Canvas.Scale(scale);DrawPage(surface.Canvas,page,paper,ink);
         using var image=surface.Snapshot();using var encoded=image.Encode(SKEncodedImageFormat.Png,100);return encoded.ToArray();
     }
 }
