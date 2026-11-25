@@ -1,16 +1,30 @@
 <div align="center">
 
+<img src="src/LecteurWord/Assets/lecteur-word-logo.png" width="120" alt="Logo officiel de Lecteur Word">
+
 # Lecteur Word
 
-**Vos documents Word. Une interface claire. Vos originaux préservés.**
+**Un Word à lire ? Un mot : Linux !**
 
-Linux · C# / .NET 10 · Avalonia · Lecture seule
+**LECTEUR WORD — Lisez et convertissez vos DOCX, sans suite bureautique.**
 
-**Prototype expérimental — couverture documentaire limitée**
+[Français](#français) · [English](#english) · [Lecteur Word 1.0.0-rc.1](https://github.com/LeSireDeGrave/Lecteur-Word/releases/tag/v1.0.0-rc.1)
 
 </div>
 
-Lecteur Word est un lecteur DOCX libre pour Linux. Son moteur autonome ouvre les documents en lecture seule et les convertit vers quatre formats interopérables. L’interface propose 20 langues, des thèmes personnalisables et des extensions communautaires.
+## Français
+
+Lecteur Word ouvre les DOCX en lecture seule avec son moteur documentaire natif sous Linux. Il exporte en PDF, ODT, EPUB 3 et NOVA v27, et propose vingt langues, des thèmes personnalisables, l’adaptation des couleurs de lecture et des extensions communautaires. Le convertisseur CLI autonome expose le contrat JSON v1.
+
+[Installation Linux](docs/distribution-linux.md) · [Guide utilisateur](docs/guide-utilisateur.fr.md) · [CLI](docs/lecteur-word-cli.md) · [Catalogue des extensions](https://github.com/LeSireDeGrave/Lecteur-Word-Extensions) · [Sécurité et confidentialité](SECURITY.md)
+
+## English
+
+Lecteur Word is a native Linux DOCX reader. It opens documents in read-only mode and exports PDF for sharing and printing, ODT for editing, EPUB 3 for reading and publishing, and NOVA v27 for editing in OpusNova. It includes twenty languages, customizable themes, adaptive reading colors and community extensions. The standalone CLI implements JSON contract v1.
+
+Version 1.0.0-rc.1 is a prerelease for Linux x86-64. Pagination and conversion cover tested document profiles. Layout may differ from Microsoft Word and conversion reports adaptations. DOCX is an input format. Original code and documentation use [MIT](LICENSE). Official graphics follow [BRANDING.md](BRANDING.md). Third-party notices are shipped with each distribution.
+
+[Download](https://github.com/LeSireDeGrave/Lecteur-Word/releases/tag/v1.0.0-rc.1) · [User guide](docs/user-guide.en.md) · [Extensions](https://github.com/LeSireDeGrave/Lecteur-Word-Extensions) · [Security and privacy](SECURITY.md)
 
 ## Lire et convertir vos documents
 
@@ -31,7 +45,7 @@ Le mode compatible décrit les adaptations avant l’export. La composition pagi
 
 ![Maquette de référence de Lecteur Word : thèmes clair et sombre, navigation latérale et commandes par icônes](docs/maquettes/lecteur-word-maquette-clair-sombre.png)
 
-*Maquette approuvée le 20 novembre 2026 : objectif UX du produit, et non capture de l'application, preuve de rendu Word ou démonstration d'exports complets. Le prototype conserve un papier blanc dans le thème sombre.*
+*Maquette approuvée le 20 novembre 2026 : objectif UX du produit, et non capture de l'application, preuve de rendu Word ou démonstration d'exports complets. La candidate applique l’adaptation automatique des couleurs selon le thème et le fond documentaire.*
 
 La référence est conservée sans conversion, en **1672 × 941 pixels**. Son [empreinte et sa provenance](docs/maquettes/README.md) permettent d'en vérifier l'intégrité.
 
@@ -42,7 +56,7 @@ La référence est conservée sans conversion, en **1672 × 941 pixels**. Son [e
 | **Inspection DOCX** | Contrôles ZIP/OPC/XML, inventaire structuré avec provenance, diagnostics, manifeste JSON v1 et SHA-256 des médias. |
 | **Lecture** | Un DOCX dont les pages sont qualifiées ouvre en Page simple, avec Double page accessible dès l’ouverture. Le moteur couvre un profil expérimental de paragraphes latins, listes, tabulations, tableaux et images. Hors profil, le lecteur affiche un diagnostic et propose la lecture continue sur choix explicite si le contenu est lisible. L’import DOC binaire est prévu pour la V2. |
 | **Polices du document** | Familles Linux réellement chargées, thèmes latins, héritage et substitutions tracées ; fontes TTF incorporées dans un périmètre vérifié. Détails dans [la matrice typographique](docs/polices-et-typographie.md). |
-| **Interface Avalonia** | Clair/sombre/système, FR/EN, sommaire et signets dans le flux simplifié, recherche, diagnostics regroupés avec rapport détaillé. Pages/miniatures et zoom pour le profil composé. Aucun menu classique. |
+| **Interface Avalonia** | Cinq choix intégrés et thèmes communautaires, vingt langues, sommaire et signets dans le flux simplifié, recherche, diagnostics regroupés avec rapport détaillé. Pages/miniatures et zoom pour le profil composé. Aucun menu classique. |
 | **Version / À propos** | Version sémantique, heure UTC et locale, commit réel et état local détectables au build, cible et runtime ; informations embarquées et copiables sans Git à l’exécution. Conversions et licence MIT visibles. Texte de la licence, détails techniques et notices tierces accessibles dans des sections repliées. |
 | **Protection des sources** | Ouverture en lecture seule, budgets de ressources, annulation, aucune macro/OLE exécutée ni ressource externe chargée. |
 | **PDF** | Export limité au profil simple latin, issu de la composition interne, avec police embarquée. Contrôles par des lecteurs PDF indépendants sur fixtures synthétiques. |
